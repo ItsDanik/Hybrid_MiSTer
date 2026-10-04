@@ -15,7 +15,8 @@
 //   analog <x> <y> [rx ry]  left (and right) stick of joystick 1, -128..127
 //   mouse <dx> <dy> <btn>   move the mouse (y up) and set its buttons
 //   osd <hex>               OSD status bits
-//   shot <file.ppm>         save the picture the core would show
+//   shot <file.ppm>         save the picture the core would show, in the
+//                           size of the video mode (not stretched to 4:3)
 //   quit                    stop ticking, as if another core was loaded
 // Without a script (or after it ends) it runs until killed.
 
@@ -39,14 +40,14 @@ static volatile uint32_t* status;
 static uint32_t field;
 static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
-static int fb_index, fb_format, ctrl_valid;
+static int fb_index, fb_format, fb_mode, ctrl_valid;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
 
 static void tick(void) {
     static struct timespec next;
-    uint32_t c0 = ctrl[0], c1 = ctrl[1], c2 = ctrl[2];
+    uint32_t c0, c1, c2;
     int audio_en;
 
     if (next.tv_sec == 0) {
@@ -60,11 +61,15 @@ static void tick(void) {
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
 
     // vblank: latch the control block like the core does
+    c0 = ctrl[0];
+    c1 = ctrl[1];
+    c2 = ctrl[2];
     ctrl_valid = c0 == CTRL_MAGIC;
     audio_en = ctrl_valid && ((c1 >> 24) & 1);
     if (ctrl_valid) {
         fb_index = (c1 & 0xff) > 2 ? 0 : (c1 & 3);
         fb_format = (c1 >> 8) & 1;
+        fb_mode = ((c1 >> 12) & 3) == 1;
         if (c2 != palette_seq) {
             palette_seq = c2;
             memcpy(palette, (void*)(shm + 0x1000 + ((c1 >> 16) & 1) * 0x400), sizeof(palette));
@@ -87,8 +92,8 @@ static void tick(void) {
         }
     }
     field++;
-    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10);
-    status[3] = 2;
+    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12);
+    status[3] = 4;
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }
@@ -96,18 +101,20 @@ static void tick(void) {
 static void screenshot(const char* path) {
     const volatile uint8_t* fb = shm + 0x100000 + fb_index * 0x100000;
     FILE* f = fopen(path, "wb");
+    int width = fb_mode == 0 ? 320 : 640;
+    int height = 200;
     int i;
 
     if (f == NULL) {
         perror(path);
         return;
     }
-    fprintf(f, "P6\n320 200\n255\n");
-    for (i = 0; i < 320 * 200; i++) {
+    fprintf(f, "P6\n%d %d\n255\n", width, height);
+    for (i = 0; i < width * height; i++) {
         uint8_t rgb[3] = { 0, 0, 0 };
         if (!ctrl_valid) {
             // the core's colour bars
-            int bar = (i % 320) >> 6;
+            int bar = (i % width) / (width / 5);
             rgb[0] = (bar & 2) ? 0xC0 : 0;
             rgb[1] = (bar & 4) ? 0xC0 : 0;
             rgb[2] = (bar & 1) ? 0xC0 : 0;
@@ -160,6 +167,7 @@ int main(int argc, char** argv) {
     while (script != NULL && fgets(line, sizeof(line), script) != NULL) {
         char arg[200];
         int a, b, c = 0, d = 0;
+        unsigned long long osd;
 
         if (sscanf(line, "wait %d", &a) == 1) {
             while (a-- > 0) {
@@ -179,8 +187,9 @@ int main(int argc, char** argv) {
             status[10] += a;
             status[11] += b;
             status[12] = (status[12] & ~7u) | (c & 7);
-        } else if (sscanf(line, "osd %x", &a) == 1) {
-            status[8] = a;
+        } else if (sscanf(line, "osd %llx", &osd) == 1) {
+            status[8] = (uint32_t)osd;
+            status[9] = (uint32_t)(osd >> 32);
         } else if (sscanf(line, "shot %199s", arg) == 1) {
             screenshot(arg);
         } else if (strncmp(line, "quit", 4) == 0) {

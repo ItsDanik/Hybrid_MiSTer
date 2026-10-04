@@ -1,6 +1,6 @@
 // Screens every hybrid core shares: a list to pick from (which game to start)
 // and a message (what is missing). They are drawn straight to the FPGA core,
-// 40x25 characters, and work before the game has set up anything.
+// 40x25 characters at 320x200, and work before the game has set up anything.
 
 #include "mister_hybrid.h"
 #include "mister_font.h"
@@ -76,6 +76,7 @@ static void draw_frame(const char* title, int title_back, const char* hint) {
 }
 
 static void show(void) {
+    MH_SetMode(MH_MODE_320x200);
     MH_SetFormat(MH_FORMAT_INDEX8);
     // the picture appears with the palette, so the frame goes first
     MH_Present(screen, MH_WIDTH);

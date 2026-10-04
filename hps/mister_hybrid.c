@@ -46,6 +46,7 @@ static char core_name[64];
 static int shm_is_file;
 
 static int fb_format;
+static int fb_mode;
 static int fb_current;
 static int palette_slot;
 static uint32_t palette_seq;
@@ -81,7 +82,7 @@ static void write_ctrl(void) {
     __sync_synchronize();
     ctrl[2] = palette_seq;
     ctrl[3] = 0;
-    ctrl[1] = fb_current | (fb_format << 8) | (palette_slot << 16) | (audio_enabled << 24);
+    ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
     __sync_synchronize();
     pthread_mutex_unlock(&ctrl_lock);
@@ -92,8 +93,24 @@ static void sleep_ms(int ms) {
     nanosleep(&ts, NULL);
 }
 
+int MH_Mode(void) {
+    return fb_mode;
+}
+
+int MH_Width(void) {
+    return fb_mode == MH_MODE_320x200 ? 320 : 640;
+}
+
+int MH_Height(void) {
+    return 200;
+}
+
 static int frame_bytes(void) {
-    return MH_WIDTH * MH_HEIGHT * (fb_format == MH_FORMAT_RGB565 ? 2 : 1);
+    return MH_Width() * MH_Height() * (fb_format == MH_FORMAT_RGB565 ? 2 : 1);
+}
+
+static void clear_framebuffer(int index) {
+    memset((void*)(shm + FB_OFFSET + index * FB_SIZE), 0, MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
 }
 
 // 1 if /tmp/CORENAME names our core (or there is nothing to compare)
@@ -163,9 +180,10 @@ int MH_Open(void) {
     detached = 0;
     ctrl_enabled = 0;
     audio_enabled = 0;
+    fb_mode = MH_MODE_320x200;
     alive_time.tv_sec = 0;
     for (i = 0; i < FB_COUNT; i++) {
-        memset((void*)(shm + FB_OFFSET + i * FB_SIZE), 0, MH_WIDTH * MH_HEIGHT * 2);
+        clear_framebuffer(i);
     }
     write_ctrl();
 
@@ -238,7 +256,8 @@ const char* MH_CoreName(void) {
 // Copy a frame into the next framebuffer and flip to it
 static void present_to_fpga(const uint8_t* pixels, int pitch) {
     volatile uint8_t* dst;
-    int row = frame_bytes() / MH_HEIGHT;
+    int height = MH_Height();
+    int row = frame_bytes() / height;
     int next;
     int y;
     int i;
@@ -252,9 +271,9 @@ static void present_to_fpga(const uint8_t* pixels, int pitch) {
 
     dst = shm + FB_OFFSET + next * FB_SIZE;
     if (pitch == row) {
-        memcpy((void*)dst, pixels, row * MH_HEIGHT);
+        memcpy((void*)dst, pixels, row * height);
     } else {
-        for (y = 0; y < MH_HEIGHT; y++) {
+        for (y = 0; y < height; y++) {
             memcpy((void*)(dst + y * row), pixels + y * pitch, row);
         }
     }
@@ -282,7 +301,7 @@ static void* present_thread_main(void* arg) {
         pthread_mutex_unlock(&present_lock);
 
         if (MH_IsOpen()) {
-            present_to_fpga(staging[slot], frame_bytes() / MH_HEIGHT);
+            present_to_fpga(staging[slot], frame_bytes() / MH_Height());
         }
 
         pthread_mutex_lock(&present_lock);
@@ -300,8 +319,8 @@ static void start_present_thread(void) {
         return;
     }
     if (staging[0] == NULL) {
-        staging[0] = malloc(MH_WIDTH * MH_HEIGHT * 2);
-        staging[1] = malloc(MH_WIDTH * MH_HEIGHT * 2);
+        staging[0] = malloc(MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
+        staging[1] = malloc(MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
     }
     present_running = 1;
     if (pthread_create(&present_thread, NULL, present_thread_main, NULL) == 0) {
@@ -334,10 +353,43 @@ void MH_SetFormat(int format) {
     write_ctrl();
 }
 
+int MH_SetMode(int mode) {
+    int i, n;
+
+    if (!MH_IsOpen() || mode < 0 || mode >= MH_MODE_COUNT) {
+        return 0;
+    }
+    if (mode == fb_mode) {
+        return 1;
+    }
+    // host version 4 has the modes
+    if (status[3] < 4) {
+        return 0;
+    }
+    present_flush();
+    // The rows of the framebuffers are of another length in the new mode: go
+    // through black (pixel 0) instead of showing the old frames torn apart.
+    // The buffer on screen is cleared once the core shows a cleared one.
+    for (n = 1; n < FB_COUNT; n++) {
+        clear_framebuffer((fb_current + n) % FB_COUNT);
+    }
+    i = fb_current;
+    fb_current = (fb_current + 1) % FB_COUNT;
+    write_ctrl();
+    for (n = 0; n < 50 && ctrl_enabled && (status[2] & 0xff) == (uint32_t)i; n++) {
+        sleep_ms(1);
+    }
+    clear_framebuffer(i);
+    fb_mode = mode;
+    write_ctrl();
+    return 1;
+}
+
 void MH_Present(const void* pixels, int pitch) {
     const uint8_t* src = pixels;
     uint8_t* dst;
-    int row = frame_bytes() / MH_HEIGHT;
+    int height = MH_Height();
+    int row = frame_bytes() / height;
     int slot;
     int y;
 
@@ -360,9 +412,9 @@ void MH_Present(const void* pixels, int pitch) {
 
     dst = staging[slot];
     if (pitch == row) {
-        memcpy(dst, src, row * MH_HEIGHT);
+        memcpy(dst, src, row * height);
     } else {
-        for (y = 0; y < MH_HEIGHT; y++) {
+        for (y = 0; y < height; y++) {
             memcpy(dst + y * row, src + y * pitch, row);
         }
     }

@@ -3,9 +3,9 @@
 
 // HPS side of a MiSTer hybrid core: the game runs on the ARM and talks to the
 // FPGA core (hybrid/rtl/hybrid_host.sv, which documents the memory layout)
-// through shared DDR3 memory. The core scans out 320x200 frames at 15kHz,
-// plays a 44.1kHz audio ring and publishes keyboard, mouse, joystick and OSD
-// state.
+// through shared DDR3 memory. The core scans out the game's frames at 15kHz
+// (320x200 or 640x200), plays a 44.1kHz audio
+// ring and publishes keyboard, mouse, joystick and OSD state.
 //
 // Environment variables:
 //   MISTER_HYBRID_CORE  name of the core as in /tmp/CORENAME (the name in its
@@ -24,8 +24,19 @@
 extern "C" {
 #endif
 
+// The video mode after MH_Open(), and the size of the shared screens
 #define MH_WIDTH 320
 #define MH_HEIGHT 200
+// The largest video mode
+#define MH_MAX_WIDTH 640
+#define MH_MAX_HEIGHT 200
+
+// Video modes, both with 200 lines at 15.6kHz and 59.6Hz. The picture is the
+// same size on the screen (4:3) in both: 640x200 has two pixels in the place
+// of each pixel of 320x200.
+#define MH_MODE_320x200 0
+#define MH_MODE_640x200 1
+#define MH_MODE_COUNT 2
 
 #define MH_FORMAT_INDEX8 0 // 8bpp, palette from MH_SetPalette()
 #define MH_FORMAT_RGB565 1
@@ -76,7 +87,14 @@ const char* MH_CoreName(void);
 
 // Video. The picture stays on the core's test pattern until the first frame.
 void MH_SetFormat(int format);
-// Show a 320x200 frame. `pitch` is the source's row size in bytes
+// Switch to another video mode; the screen is blank until the next frame.
+// Returns 0 if the core does not have the mode (an older core)
+int MH_SetMode(int mode);
+int MH_Mode(void);
+int MH_Width(void);
+int MH_Height(void);
+// Show a frame of MH_Width() x MH_Height(). `pitch` is the source's row size
+// in bytes
 void MH_Present(const void* pixels, int pitch);
 // 256 entries of 0x00RRGGBB
 void MH_SetPalette(const uint32_t* rgb);

@@ -1,6 +1,7 @@
 // Testbench for hybrid_host: DDR model with random waitrequest and read
 // latency, checks scanout pixels against framebuffer+palette (8bpp) and the
-// RGB565 framebuffer, sync timings, the status block and the audio ring.
+// RGB565 framebuffer in all video modes, sync timings, the status block and
+// the audio ring.
 `timescale 1ns/1ps
 
 module tb_host;
@@ -73,7 +74,7 @@ always @(posedge clk) begin
 			rq_len[rq_tail % 16]  = ddr_burstcnt;
 			rq_tail = rq_tail + 1;
 			reads_issued = reads_issued + 1;
-			if (ddr_burstcnt == 0 || ddr_burstcnt > 128) begin
+			if (ddr_burstcnt == 0 || ddr_burstcnt > 160) begin
 				$display("FAIL: bad burst count %0d", ddr_burstcnt); $finish;
 			end
 		end
@@ -129,9 +130,21 @@ function [23:0] pal_rgb(input integer slot, input integer i);
 	pal_rgb = {i[7:0], ~i[7:0], i[7:0] ^ (slot ? 8'h55 : 8'hAA)};
 endfunction
 
+// mode: pixel format, vmode: video mode
+integer cur_vmode = 0;
 task set_ctrl(input integer fb, input integer mode, input integer slot, input integer seq);
-	mem[0] = {7'd0, 1'b1, 7'd0, slot[0], 7'd0, mode[0], fb[7:0], 32'h4259484D};
+	mem[0] = {7'd0, 1'b1, 7'd0, slot[0], 2'd0, cur_vmode[1:0], 3'd0, mode[0], fb[7:0], 32'h4259484D};
 	mem[1] = {32'd0, seq[31:0]};
+endtask
+
+// 640 pixel wide framebuffers: fb0 8bpp, fb2 RGB565
+task fill_wide(input integer rows);
+	integer wx, wy;
+	for (wy = 0; wy < rows; wy = wy + 1)
+		for (wx = 0; wx < 640; wx = wx + 1) begin
+			mem[29'h20000 + (wy * 640 + wx) / 8][((wx % 8) * 8) +: 8] = fb_pixel(0, wx, wy);
+			mem[29'h20000 * 3 + (wy * 640 + wx) / 4][((wx % 4) * 16) +: 16] = fb_pixel16(wx, wy);
+		end
 endtask
 
 integer i, x, y, f, s;
@@ -144,7 +157,7 @@ initial begin
 	for (i = 0; i < 16384; i = i + 1)
 		mem[29'h2000 + i / 2][(i % 2) * 32 +: 32] = {~i[15:0], i[15:0] * 16'd3};
 	for (f = 0; f < 3; f = f + 1)
-		for (y = 0; y < 480; y = y + 1)
+		for (y = 0; y < 200; y = y + 1)
 			for (x = 0; x < 640; x = x + 1) begin
 				// fb0/fb1 8bpp, fb2 RGB565
 				if (f < 2 && x < 320 && y < 200)
@@ -190,10 +203,8 @@ always @(posedge clk) if (ce_pix) begin
 
 	if (!hblank && !vblank) begin
 		if (check_enable) begin : chk
-			integer row;
 			reg [23:0] exp;
-			row = py;
-			exp = cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
+			exp = cur_mode ? rgb565(fb_pixel16(px, py)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, py));
 			if ({r, g, b} !== exp) begin
 				if (errors < 10) $display("FAIL: fb %0d px %0d py %0d got %h exp %h", cur_fb, px, py, {r, g, b}, exp);
 				errors = errors + 1;
@@ -275,6 +286,44 @@ initial begin
 	check_enable = 0;
 	$display("8bpp again: checked %0d pixels, %0d errors", checked, errors);
 
+	// 640x200, 8bpp then RGB565
+	fill_wide(200);
+	cur_vmode = 1;
+	set_ctrl(0, 0, 0, 10);
+	wait_fields(3);
+	check_enable = 1;
+	wait_fields(2);
+	check_enable = 0;
+	$display("640x200: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d, vsync period %0d",
+		checked, errors, field_rows, hs_period, vs_period);
+	if (field_rows != 200 || hs_period != 800 || vs_period != 800 * 262) begin $display("FAIL: 640x200 timing"); $finish; end
+	if (mem[9][13:12] != 2'd1) begin $display("FAIL: status mode"); errors = errors + 1; end
+	set_ctrl(2, 1, 0, 10);
+	wait_fields(2);
+	cur_fb = 2; cur_mode = 1;
+	check_enable = 1;
+	wait_fields(2);
+	check_enable = 0;
+	$display("640x200 rgb565: checked %0d pixels, %0d errors", checked, errors);
+
+	// a mode the core does not have is 320x200
+	cur_vmode = 2;
+	set_ctrl(2, 1, 0, 10);
+	wait_fields(3);
+	if (hs_period != 400 || mem[9][13:12] != 2'd0) begin $display("FAIL: unknown mode"); errors = errors + 1; end
+
+	// back to 320x200 (fb1 was not overwritten by the 640 pixel wide rows)
+	cur_vmode = 0;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(3);
+	cur_fb = 1; cur_mode = 0;
+	check_enable = 1;
+	wait_fields(2);
+	check_enable = 0;
+	$display("320x200 again: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d, vsync period %0d",
+		checked, errors, field_rows, hs_period, vs_period);
+	if (field_rows != 200 || hs_period != 400 || vs_period != 400 * 262) begin $display("FAIL: video timing"); $finish; end
+
 	$display("audio: %0d samples, %0d errors, rate %0d Hz, fetch pointer %0d",
 		aud_samples, aud_errors,
 		(aud_samples - 1) * 64'd1000000000 / (aud_last_tick_time - aud_first_tick_time) , mem[24][31:0]);
@@ -312,6 +361,7 @@ always @(posedge clk) if (dut.aud_tick2 && dut.audio_en) begin
 end
 
 initial begin
+	#2_000_000_000;
 	#2_000_000_000;
 	$display("FAIL: timeout");
 	$finish;

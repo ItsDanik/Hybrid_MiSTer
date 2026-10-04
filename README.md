@@ -8,7 +8,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 
 | Path | |
 |---|---|
-| `rtl/hybrid_host.sv` | The FPGA side: 320x200 scanout at 15.6kHz / 59.6Hz from DDR3 (8bpp paletted or RGB565, triple buffered), 44.1kHz audio ring, keyboard, mouse, joysticks and OSD status published every vblank. Its header documents the shared memory layout. `sim/run.sh` runs its testbench. |
+| `rtl/hybrid_host.sv` | The FPGA side: scanout at 15.6kHz / 59.6Hz from DDR3 in the video mode the game sets, 320x200 or 640x200 (8bpp paletted or RGB565, triple buffered), 44.1kHz audio ring, keyboard, mouse, joysticks and OSD status published every vblank. Its header documents the shared memory layout. `sim/run.sh` runs its testbench. |
 | `hps/` | The ARM side as a small C library (`mister_hybrid.h`): attach to the core, present frames, palette, input, audio, the OSD's Menu OK/Back resolution, and the shared screens (game list, error message). |
 | `sdl2/` | SDL2 video, audio and input drivers on top of `hps/`, and the script that builds a static SDL2, SDL2_mixer and SDL2_net with them. An SDL2 game needs little more than a recompile. |
 | `launcher/danik_hybrid_cores.sh` | What starts the games on the MiSTer: a daemon that runs `games/<core name>/danik_hybrid_launch.sh` while that core is loaded. The user runs it once from the Scripts menu; it registers itself in `user-startup.sh`. Its header documents the contract for a `danik_hybrid_launch.sh`. See [The launcher](#the-launcher) for how it reaches the MiSTer and is kept up to date. `make_db.py` builds the Downloader database for it. |
@@ -36,7 +36,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 
 **An SDL2 game:** build it against the SDL2 from `sdl2/build.sh` (`CMAKE_PREFIX_PATH=<work>/mister/prefix`). The "mister" drivers are picked when the core is loaded.
 
-- The window is the screen: 320x200. Other sizes are cropped or centred.
+- The window is the screen, and its size picks the core's video mode: 320x200 or 640x200. Other sizes are cropped or centred in the smallest mode they fit in. The picture is the same size on the screen (4:3) in both modes: 640x200 has two pixels in the place of each pixel of 320x200, so the game has to scale the two axes on their own. Not a fullscreen-desktop window, which is always 320x200.
 - Games that draw 8-bit: set the hint `SDL_MISTER_VIDEO_FORMAT=INDEX8`, draw to `SDL_GetWindowSurface()` and set its palette. The FPGA does the palette lookup, so palette fades and flashes cost nothing. Everything else gets RGB565, including the 2D render API (software renderer).
 - Audio is converted to 44.1kHz stereo by SDL; the core's sample clock paces the audio thread.
 - Keyboard and mouse arrive as SDL events. Joysticks 1 and 2 are SDL joysticks with the d-pad as hat 0, the sticks as axes 0-3 and the buttons of the core's `J1` list as buttons 0.. in that order. Buttons 28 and 29 are Menu OK and Menu Back (see below).
@@ -46,6 +46,8 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 **A game without SDL:** use `hps/` directly, as the SDL drivers do (`sdl2/SDL_mistervideo.c` and `SDL_misteraudio.c` are the reference).
 
 **The FPGA core:** copy a `core/` directory of an existing hybrid core (Template_MiSTer's `sys/`, a 50MHz PLL, `hybrid_host`, `video_mixer`, `video_freak`) and change the name and the `CONF_STR`.
+
+**Frame pacing:** the core shows 59.64 fields per second and takes the newest frame at every vblank. A game that renders at another rate, or by the system clock, drops or repeats frames at regular intervals. Show one frame per field: wait with `MH_WaitField()` (or the `SDL_MISTER_VSYNC` hint) and take the game's time from `MH_FieldCounter()`, not from the system clock. A game with a fixed logic rate that is not the field rate (Wolfenstein 3D: 70 per second) has to draw between two steps of its logic as well, see the ECWolf core.
 
 **Testing without a MiSTer:** `gcc -o fakecore tools/fakecore.c`, start `fakecore <file> [script]`, then the PC build of the game with `MISTER_HYBRID_SHM=<file>`.
 
@@ -72,6 +74,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 "-;",
 "O[10:7],Sound Volume,100%,90%,...,0%;",      only if the game mixes sound and music separately
 "O[14:11],Music Volume,100%,90%,...,0%;",
+"O[..],Resolution,320x200,640x200;",          first of the game options, if the game can render both
 <game options, status bits 24..63>
 "-;",
 "O[19:16],Menu OK,MiSTer,A,B,X,Y,L,R,Select,Start;",
@@ -85,6 +88,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 - Status bits 0..23 mean the same in every core (`MH_OSD_*` in `mister_hybrid.h`), bits 24..63 belong to the game, bits 64 and up never reach the game and are for the core's video options.
 - The first entry of every option is its default, so a fresh install needs no settings.
 - An option the game cannot honour is left out, not shown greyed or ignored.
+- *Resolution* is the game's to read: it sizes its window (or calls `MH_SetMode()`) and the core follows. It applies while the game runs, without a restart. The shared screens are always 320x200.
 
 **Controls**
 
@@ -100,7 +104,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 - A game with several data sets (or nothing but a choice to make before it starts) asks with `MH_UI_Menu()`. Problems the player can fix (missing data) are shown with `MH_UI_Message()` in plain words that say which files go where, never left in the log only.
 - Quitting from the game's menu returns to the MiSTer menu (or to the game list if the player came from it). The launcher loads the menu core only if `/tmp/CORENAME` still names this core.
 - The game leaves when another core is loaded (`MH_CheckAlive()`, `SDL_QUIT`) and never touches the shared memory afterwards.
-- The launcher runs the game with `taskset 0x03`; the game thread takes CPU0, audio and the frame copy run on CPU1.
+- The launcher runs the game with `nice -n -20 taskset 0x03`; the game thread takes CPU0, audio and the frame copy run on CPU1. The priority matters: the rest of the system runs on CPU0 too, and a game that is to show one frame per field cannot wait for it.
 - `touch /tmp/<name>_nolaunch` keeps the core loaded without starting the game, for development.
 
 **Documentation**

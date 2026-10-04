@@ -2,8 +2,9 @@
 //
 //  MiSTer hybrid core host - HPS <-> FPGA bridge shared by all hybrid cores
 //
-//  The game runs on the HPS (ARM). It renders 320x200 frames into DDR3 and
-//  this module scans them out with native 15kHz timings. Audio comes from a
+//  The game runs on the HPS (ARM). It renders frames into DDR3 and this
+//  module scans them out with native 15kHz timings, in the video mode the
+//  game asks for: 320x200 or 640x200. Audio comes from a
 //  ring in the same memory and input state is published back through it.
 //  The HPS side of this protocol is hybrid/hps/mister_hybrid.c.
 //
@@ -12,12 +13,14 @@
 //              w0[31:0]  magic "MHYB" (0x4259484D)
 //              w0[39:32] framebuffer index to display (0..2)
 //              w0[40]    pixel format: 0 = 8bpp paletted, 1 = RGB565
+//              w0[45:44] video mode: 0 = 320x200, 1 = 640x200
 //              w0[48]    palette slot (0..1)
 //              w0[56]    audio enable
 //              w1[31:0]  palette sequence number (reload when changed)
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
-//              w1  {version, 21'b0, ctrl_valid, 1'b0, format, 6'b0, fb_index[1:0]}
+//              w1  {version, 18'b0, mode[1:0], 1'b0, ctrl_valid, 1'b0, format,
+//                   6'b0, fb_index[1:0]}
 //              w2  {joystick_1, joystick_0}
 //              w3  {r_analog_1, l_analog_1, r_analog_0, l_analog_0}
 //              w4  OSD status[63:0]
@@ -30,7 +33,7 @@
 //    0x001000  palette slot 0: 256 x 32-bit 0x00RRGGBB
 //    0x001400  palette slot 1
 //    0x010000  audio ring: 16384 stereo frames, 16-bit signed {R, L}, 44.1kHz
-//    0x100000  framebuffer 0 (row stride = 320 pixels)
+//    0x100000  framebuffer 0 (row stride = width of the video mode in pixels)
 //    0x200000  framebuffer 1
 //    0x300000  framebuffer 2
 //
@@ -86,7 +89,7 @@ module hybrid_host
 
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
-localparam [31:0] VERSION      = 32'd2;
+localparam [31:0] VERSION      = 32'd4;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -102,13 +105,21 @@ assign ddr_be = 8'hFF;
 //////////////////////////////////////////////////////////////////
 // Video timing
 //
-// 320x200 progressive. 50MHz/8 = 6.25MHz pixel clock, 400 x 262 lines
-// -> 15.625kHz / 59.6Hz. Line and frame counters run on the pixel enable.
+// Mode 0: 320x200 progressive. 50MHz/8 = 6.25MHz pixel clock, 400 x 262
+//         lines -> 15.625kHz / 59.6Hz.
+// Mode 1: 640x200 progressive. 12.5MHz pixel clock, 800 x 262 lines: the
+//         lines of mode 0 with twice the pixels.
+// Line and frame counters run on the pixel enable. The mode the HPS asks for
+// (vmode, latched during vblank) becomes the timing in use (wide) when the
+// next field starts.
 
-localparam [9:0] H_TOTAL  = 10'd400;
-localparam [9:0] H_ACTIVE = 10'd320;
-localparam [9:0] HS_START = 10'd336;
-localparam [9:0] HS_END   = 10'd368;
+reg        vmode = 0;
+reg        wide = 0;
+
+wire [9:0] H_TOTAL  = wide ? 10'd800 : 10'd400;
+wire [9:0] H_ACTIVE = wide ? 10'd640 : 10'd320;
+wire [9:0] HS_START = wide ? 10'd672 : 10'd336;
+wire [9:0] HS_END   = wide ? 10'd736 : 10'd368;
 localparam [9:0] V_TOTAL  = 10'd262;
 localparam [9:0] V_ACTIVE = 10'd200;
 localparam [9:0] VS_START = 10'd228;
@@ -118,7 +129,7 @@ reg  [2:0] ce_div = 0;
 reg  [9:0] hc = 0;
 reg  [9:0] vc = 0;
 
-wire       ce = (ce_div == 3'd7);
+wire       ce = wide ? (ce_div[1:0] == 2'd3) : (ce_div == 3'd7);
 wire       line_start = ce && (hc == H_TOTAL - 1'd1);   // next ce begins a new line
 wire [9:0] next_vc  = (vc == V_TOTAL - 1'd1) ? 10'd0 : vc + 1'd1;
 wire [9:0] next2_vc = (next_vc == V_TOTAL - 1'd1) ? 10'd0 : next_vc + 1'd1;
@@ -132,6 +143,7 @@ always @(posedge clk) begin
 		if (hc == H_TOTAL - 1'd1) begin
 			hc <= 0;
 			vc <= next_vc;
+			if (next_vc == 0) wide <= vmode;
 		end else begin
 			hc <= hc + 1'd1;
 		end
@@ -154,15 +166,16 @@ reg [63:0] ctrl_w0, ctrl_w1;
 //////////////////////////////////////////////////////////////////
 // Memories
 
-// line buffer: two banks of up to 128 x 64-bit words (40 used at 8bpp, 80 at RGB565)
-reg [63:0] lbuf[0:255];
-reg  [7:0] lbuf_waddr;
+// line buffer: two banks of up to 256 x 64-bit words (40 used at 320 pixels
+// of 8bpp, 160 at 640 pixels of RGB565)
+reg [63:0] lbuf[0:511];
+reg  [8:0] lbuf_waddr;
 reg        lbuf_we;
 reg [63:0] lbuf_wdata;
 reg [63:0] lbuf_q;
 always @(posedge clk) begin
 	if (lbuf_we) lbuf[lbuf_waddr] <= lbuf_wdata;
-	lbuf_q <= lbuf[{vc[0], fmt16 ? hc[8:2] : hc[9:3]}];
+	lbuf_q <= lbuf[{vc[0], fmt16 ? hc[9:2] : {1'b0, hc[9:3]}}];
 end
 
 // palette: 128 x 64-bit words, two 0x00RRGGBB entries per word
@@ -287,18 +300,18 @@ reg  [7:0] line_words;      // words fetched so far for the current line
 reg  [3:0] wr_beat;
 
 
-// framebuffer address of a row: FB_ADDR + index * 0x20000 + row * 40 words
-// (80 words at RGB565)
-wire  [7:0] line_burst = fmt16 ? 8'd80 : 8'd40;
-wire [28:0] row_addr = FB_ADDR + {10'd0, fb_index, 17'd0}
-                     + (fmt16 ? {13'd0, fetch_row, 6'd0} + {15'd0, fetch_row, 4'd0}
-                              : {14'd0, fetch_row, 5'd0} + {16'd0, fetch_row, 3'd0});
+// framebuffer address of a row: FB_ADDR + index * 0x20000 + row * 40 words,
+// twice that at 640 pixels and twice again at RGB565
+wire  [1:0] row_shift = {1'b0, fmt16} + {1'b0, vmode};
+wire  [7:0] line_burst = 8'd40 << row_shift;
+wire [16:0] row_words = {2'd0, fetch_row, 5'd0} + {4'd0, fetch_row, 3'd0};
+wire [28:0] row_addr = FB_ADDR + {10'd0, fb_index, 17'd0} + {12'd0, row_words << row_shift};
 
 reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 21'd0, ctrl_valid, 1'd0, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 19'd0, vmode, 1'd0, ctrl_valid, 1'd0, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = osd_status;
@@ -341,7 +354,7 @@ always @(posedge clk) begin
 			end
 			S_LINE_WAIT: begin
 				lbuf_we    <= 1;
-				lbuf_waddr <= {fetch_bank, line_words[6:0]};
+				lbuf_waddr <= {fetch_bank, line_words};
 				lbuf_wdata <= ddr_dout;
 				line_words <= line_words + 1'd1;
 			end
@@ -413,6 +426,7 @@ always @(posedge clk) begin
 				if (ctrl_w0[31:0] == CTRL_MAGIC) begin
 					fb_index <= (ctrl_w0[39:32] > 8'd2) ? 2'd0 : ctrl_w0[33:32];
 					fmt16    <= ctrl_w0[40];
+					vmode    <= (ctrl_w0[45:44] == 2'd1);
 				end
 				if (ctrl_w0[31:0] == CTRL_MAGIC && (!pal_loaded || ctrl_w1[31:0] != pal_seq)) begin
 					pal_loaded   <= 1;
@@ -481,7 +495,7 @@ wire active_now = (hc < H_ACTIVE) && (vc < V_ACTIVE);
 always @(posedge clk) byte_sel <= hc[2:0];
 
 // test pattern (colour bars) until the HPS side publishes a valid control block
-wire [2:0] bar = hc[8:6];
+wire [2:0] bar = wide ? hc[9:7] : hc[8:6];
 
 always @(posedge clk) begin
 	ce_pix <= ce;
