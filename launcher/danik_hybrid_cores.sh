@@ -2,6 +2,8 @@
 #
 # danik_hybrid_cores - starts the game of a MiSTer hybrid core when its core is loaded
 #
+# https://github.com/ItsDanik/Hybrid_MiSTer
+#
 # A hybrid core is an FPGA core whose game runs on the MiSTer's ARM CPU. This
 # script is what connects the two: a small daemon watches which core is loaded
 # (/tmp/CORENAME) and runs /media/fat/games/<core name>/danik_hybrid_launch.sh while it is.
@@ -9,8 +11,13 @@
 #
 #   Run it once from the MiSTer's Scripts menu. That starts the daemon and
 #   adds it to /media/fat/linux/user-startup.sh, so it also runs after a
-#   reboot. Every hybrid core ships this same file; running it again is
-#   harmless and picks up a newer version.
+#   reboot. Running it again is harmless.
+#
+#   Every hybrid core ships this file twice: as Scripts/danik_hybrid_cores.sh
+#   and as a copy in its games folder. The copy with the highest VERSION is
+#   the one that runs: the daemon installs it over the file in Scripts by
+#   itself, so an older core installed later doesn't bring an old launcher
+#   back and nothing has to be run again after an update.
 #
 # usage: danik_hybrid_cores.sh            set up (as from the Scripts menu)
 #        danik_hybrid_cores.sh start      start the daemon (what user-startup.sh calls)
@@ -28,8 +35,19 @@
 # The whole script is read before anything runs (see the last line), so it can
 # be replaced while the daemon is running; the daemon restarts itself with the
 # new file as soon as no game is running.
+#
+# The way of launching a hybrid core (a daemon registered in user-startup.sh
+# that watches /tmp/CORENAME and runs a script from the core's games folder)
+# comes from MiSTer Frontier's Master_Daemon by MiSTer Organize:
+# https://github.com/MiSTerOrganize/MiSTer_Frontier (GPL-3.0). Thank you for
+# the inspiration. This script is written from scratch and does not need
+# MiSTer Frontier.
+#
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the Free
+# Software Foundation, version 3 of the License.
 
-VERSION=1
+VERSION=2
 SELF=$(readlink -f "$0")
 GAMES=/media/fat/games
 LAUNCHER=danik_hybrid_launch.sh
@@ -55,6 +73,32 @@ launcher_of() {
         "" | */* | .*) return 1 ;;
     esac
     [ -f "$GAMES/$1/$LAUNCHER" ] && echo "$GAMES/$1/$LAUNCHER"
+}
+
+# VERSION of a copy of this script
+version_of() {
+    sed -n 's/^VERSION=\([0-9][0-9]*\)$/\1/p' "$1" 2>/dev/null | head -n 1
+}
+
+# Installs the newest copy the hybrid cores brought along (games/*/) over this
+# file, if one is newer than it. True if the file was replaced.
+adopt_newest() {
+    local f v best bestv
+    bestv=$(version_of "$SELF")
+    bestv=${bestv:-0}
+    best=
+    for f in "$GAMES"/*/"$MARK"; do
+        [ -f "$f" ] || continue
+        v=$(version_of "$f")
+        if [ -n "$v" ] && [ "$v" -gt "$bestv" ]; then
+            best=$f
+            bestv=$v
+        fi
+    done
+    [ -n "$best" ] || return 1
+    bash -n "$best" 2>/dev/null || return 1
+    cp -f "$best" "$SELF.new" && chmod +x "$SELF.new" && mv -f "$SELF.new" "$SELF" || return 1
+    log "installed version $bestv from $best"
 }
 
 installed_cores() {
@@ -88,7 +132,7 @@ stop_child() {
 }
 
 run_daemon() {
-    local cur stamp launcher self_stamp
+    local cur stamp launcher self_stamp tick changed
 
     echo $$ > "$PIDFILE"
     trap 'stop_child; rm -f "$PIDFILE"; exit 0' TERM INT
@@ -97,6 +141,7 @@ run_daemon() {
     self_stamp=$(stat -c %Y "$SELF" 2>/dev/null)
     CORE=
     STAMP=
+    tick=0
 
     while :; do
         cur=$(cat "$CORENAME" 2>/dev/null)
@@ -124,11 +169,19 @@ run_daemon() {
             CHILD=
         fi
 
-        # A newer version of this file was installed: switch to it between games
-        if [ -z "$CHILD" ] && [ "$(stat -c %Y "$SELF" 2>/dev/null)" != "$self_stamp" ] && [ -f "$SELF" ]; then
-            if launcher_of "$CORE" > /dev/null; then
-                : # a hybrid core is still loaded and would be started again
-            else
+        # Between games (a hybrid core that is still loaded would be started
+        # again): switch to a newer version of this file. It can have been
+        # installed over this file or have come with a core, which is looked
+        # for every 10 seconds; an older file installed over this one is
+        # replaced by the newest copy the same way.
+        if [ -z "$CHILD" ] && ! launcher_of "$CORE" > /dev/null; then
+            tick=$((tick + 1))
+            changed=
+            [ "$(stat -c %Y "$SELF" 2>/dev/null)" != "$self_stamp" ] && changed=1
+            if [ -n "$changed" ] || [ $((tick % 20)) -eq 0 ]; then
+                adopt_newest && changed=1
+            fi
+            if [ -n "$changed" ] && [ -f "$SELF" ]; then
                 log "restarting with the new $SELF"
                 exec bash "$SELF" daemon
             fi
@@ -182,6 +235,12 @@ status() {
 }
 
 main() {
+    # a core brought a newer version: install it and let it do the rest
+    case "$1" in
+        "" | start | restart)
+            adopt_newest && exec bash "$SELF" "$@"
+            ;;
+    esac
     case "$1" in
         daemon)
             run_daemon

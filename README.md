@@ -2,17 +2,35 @@
 
 What every hybrid core shares. A hybrid core runs an open source game on the MiSTer's ARM CPU (the HPS) and uses a small FPGA core for what the ARM side has no hardware for: native 15kHz video, audio and the MiSTer's input devices. The two halves talk through shared DDR3 memory.
 
-This directory is meant to be the same in every hybrid core repository (a git submodule once it has its own repository). A game repository adds the game, its `CONF_STR` and its launcher.
+This repository is the `hybrid/` submodule of every hybrid core repository, so they all use the same code. A game repository adds the game, its `CONF_STR` and its `danik_hybrid_launch.sh`.
+
+Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenstein 3D). [Dethrace](https://github.com/ItsDanik/Dethrace_MiSTer) (Carmageddon) uses the launcher and has its own, older copy of the rest.
 
 | Path | |
 |---|---|
 | `rtl/hybrid_host.sv` | The FPGA side: 320x200 scanout at 15.6kHz / 59.6Hz from DDR3 (8bpp paletted or RGB565, triple buffered), 44.1kHz audio ring, keyboard, mouse, joysticks and OSD status published every vblank. Its header documents the shared memory layout. `sim/run.sh` runs its testbench. |
 | `hps/` | The ARM side as a small C library (`mister_hybrid.h`): attach to the core, present frames, palette, input, audio, the OSD's Menu OK/Back resolution, and the shared screens (game list, error message). |
 | `sdl2/` | SDL2 video, audio and input drivers on top of `hps/`, and the script that builds a static SDL2, SDL2_mixer and SDL2_net with them. An SDL2 game needs little more than a recompile. |
-| `launcher/danik_hybrid_cores.sh` | What starts the games on the MiSTer: a daemon that runs `games/<core name>/danik_hybrid_launch.sh` while that core is loaded. The user runs it once from the Scripts menu; it registers itself in `user-startup.sh`. Every core ships the same file as `Scripts/danik_hybrid_cores.sh`. Its header documents the contract for a `danik_hybrid_launch.sh`. |
+| `launcher/danik_hybrid_cores.sh` | What starts the games on the MiSTer: a daemon that runs `games/<core name>/danik_hybrid_launch.sh` while that core is loaded. The user runs it once from the Scripts menu; it registers itself in `user-startup.sh`. Its header documents the contract for a `danik_hybrid_launch.sh`. See [The launcher](#the-launcher) for how it reaches the MiSTer and is kept up to date. `make_db.py` builds the Downloader database for it. |
 | `toolchain/` | Docker images: ARM cross compiler matching the MiSTer's glibc, HDL simulation tools. `docker.sh` runs a command in the toolchain. |
 | `tools/fakecore.c` | Stand-in for the FPGA core on the PC: runs the game against a file instead of the DDR3 window, feeds scripted input, takes screenshots and records audio. |
 | `tools/*.py` | For tests on the MiSTer over ssh: `uinput_kbd.py` and `uinput_pad.py` press keys and gamepad buttons through Main_MiSTer, `status.py` prints what the core publishes. |
+
+## The launcher
+
+`danik_hybrid_cores.sh` is the one thing all hybrid cores share on the SD card. It is developed here and nowhere else; a core takes it from this submodule when its release is packaged.
+
+- **It comes with every core.** A release has it as `Scripts/danik_hybrid_cores.sh` and again as `games/<Name>/danik_hybrid_cores.sh`. The user extracts the zip and runs it once from the Scripts menu; there is nothing separate to install.
+- **The newest copy wins.** The script has a `VERSION`. The daemon looks at the copies in `games/*/` when it starts and every 10 seconds while no game runs, installs the one with the highest version over the file in `Scripts` and restarts itself with it. Installing an older core after a newer one therefore cannot bring an old launcher back, and an updated launcher needs no second run from the Scripts menu.
+- **Updates without a core release** (optional): with this entry in `downloader.ini`, `update_all` keeps the launcher current.
+
+  ```ini
+  [ItsDanik/Hybrid_MiSTer]
+  db_url = https://raw.githubusercontent.com/ItsDanik/Hybrid_MiSTer/db/db.json.zip
+  ```
+
+  The database is rebuilt by `.github/workflows/db.yml` whenever `launcher/` changes on `main`.
+- **Changing it:** raise `VERSION` with every change that reaches users, keep the last line as it is (the daemon replaces the file while it runs), and keep the contract in the header working for the launch scripts of cores that are already released.
 
 ## Porting a game
 
@@ -40,7 +58,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 - One name everywhere: core name in `CONF_STR`, `_Other/<Name>_YYYYMMDD.rbf`, `games/<Name>/`, `logs/<Name>/`, binary `games/<Name>/<Name>`.
 - `games/<Name>/danik_hybrid_launch.sh` is the launcher `danik_hybrid_cores` runs. Everything the game writes (settings, saves) stays in `games/<Name>/`; the log goes to `/media/fat/logs/<Name>/`.
 - Game data is never shipped. The README names the files to copy and where.
-- Release: `<Name>_YYYYMMDD.zip` to extract at the root of the SD card, containing `_Other/`, `games/<Name>/` with `README.txt` and the licenses, and `Scripts/danik_hybrid_cores.sh`. Nothing else has to be installed; the README lists running `danik_hybrid_cores` once from the Scripts menu as a requirement.
+- Release: `<Name>_YYYYMMDD.zip` to extract at the root of the SD card, containing `_Other/`, `games/<Name>/` with `README.txt` and the licenses, and the launcher from `launcher/` twice: `Scripts/danik_hybrid_cores.sh` and `games/<Name>/danik_hybrid_cores.sh` (see [The launcher](#the-launcher)). Nothing else has to be installed; the README lists running `danik_hybrid_cores` once from the Scripts menu as a requirement.
 
 **OSD** (`CONF_STR`), in this order:
 
@@ -88,3 +106,13 @@ These make the cores look and work alike. Where the framework can enforce one, i
 **Documentation**
 
 - `README.md` in the repository and `README.txt` in the package have the same sections in the same order: Requirements, Installation, OSD options, Controls (keyboard, then a table of the default gamepad mapping with the MiSTer, Xbox and PlayStation names), Building, Credits, License.
+
+## Credits
+
+- **[MiSTer Frontier](https://github.com/MiSTerOrganize/MiSTer_Frontier)** by MiSTer Organize: thank you for the inspiration. Hybrid cores on the MiSTer, and the way their game is launched (a daemon that watches the loaded core and runs a script from its games folder), come from MiSTer Frontier. The code here is a separate implementation and does not need MiSTer Frontier installed.
+- **[MiSTer](https://github.com/MiSTer-devel)** by Sorgelig and the MiSTer-devel contributors: the framework the cores are built on.
+- **[SDL](https://libsdl.org)** by Sam Lantinga and contributors.
+
+## License
+
+[GPL-3.0](LICENSE), except where a file says otherwise: `rtl/hybrid_host.sv` is GPL-2.0-or-later like the MiSTer framework it is built into, and the SDL drivers in `sdl2/` are under the zlib license like SDL.

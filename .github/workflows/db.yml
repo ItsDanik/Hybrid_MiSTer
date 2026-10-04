@@ -1,0 +1,36 @@
+name: Launcher database
+
+# Publishes db.json.zip on the "db" branch: the database MiSTer's Downloader
+# (update_all) reads to keep Scripts/danik_hybrid_cores.sh up to date.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - launcher/**
+      - .github/workflows/db.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the launcher
+        run: bash -n launcher/danik_hybrid_cores.sh
+      - name: Build the database
+        run: python3 launcher/make_db.py "$GITHUB_SHA" "$RUNNER_TEMP/db"
+      - name: Publish it on the db branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP/db"
+          git init -q -b db
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add db.json.zip
+          git commit -q -m "Launcher database for $GITHUB_SHA"
+          git push -f "https://x-access-token:$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY.git" db
