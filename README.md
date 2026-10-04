@@ -13,6 +13,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 | `sdl2/` | SDL2 video, audio and input drivers on top of `hps/`, and the script that builds a static SDL2, SDL2_mixer and SDL2_net with them. An SDL2 game needs little more than a recompile. |
 | `launcher/danik_hybrid_cores.sh` | What starts the games on the MiSTer: a daemon that runs `games/<core name>/danik_hybrid_launch.sh` while that core is loaded. The user runs it once from the Scripts menu; it registers itself in `user-startup.sh`. Its header documents the contract for a `danik_hybrid_launch.sh`. See [The launcher](#the-launcher) for how it reaches the MiSTer and is kept up to date. `make_db.py` builds the Downloader database for it. |
 | `toolchain/` | Docker images: ARM cross compiler matching the MiSTer's glibc, HDL simulation tools. `docker.sh` runs a command in the toolchain. |
+| `template/`, `new_core.sh` | The start of a new core repository: FPGA core, build, package and deploy scripts, launch script and READMEs with the name filled in. See [Porting a game](#porting-a-game). |
 | `tools/fakecore.c` | Stand-in for the FPGA core on the PC: runs the game against a file instead of the DDR3 window, feeds scripted input, takes screenshots and records audio. |
 | `tools/*.py` | For tests on the MiSTer over ssh: `uinput_kbd.py` and `uinput_pad.py` press keys and gamepad buttons through Main_MiSTer, `status.py` prints what the core publishes. |
 
@@ -34,6 +35,16 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 
 ## Porting a game
 
+**Start from the template**, in a new, empty directory:
+
+```sh
+git init
+git submodule add -b main https://github.com/ItsDanik/Hybrid_MiSTer.git hybrid
+hybrid/new_core.sh <Name> "<Game title>" [<url of our fork of the game>]
+```
+
+That gives a repository laid out like the other cores, with a core that builds as it is. What is left for the game is marked `GAME:` in the scripts and `TODO` in the READMEs. A core starts at 320x200; other video modes are features a core adds later (ECWolf: 640x200). A change that every core should have is made in `template/` as well as in the core.
+
 **An SDL2 game:** build it against the SDL2 from `sdl2/build.sh` (`CMAKE_PREFIX_PATH=<work>/mister/prefix`). The "mister" drivers are picked when the core is loaded.
 
 - The window is the screen, and its size picks the core's video mode: 320x200 or 640x200. Other sizes are cropped or centred in the smallest mode they fit in. The picture is the same size on the screen (4:3) in both modes: 640x200 has two pixels in the place of each pixel of 320x200, so the game has to scale the two axes on their own. Not a fullscreen-desktop window, which is always 320x200.
@@ -45,7 +56,9 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 
 **A game without SDL:** use `hps/` directly, as the SDL drivers do (`sdl2/SDL_mistervideo.c` and `SDL_misteraudio.c` are the reference).
 
-**The FPGA core:** copy a `core/` directory of an existing hybrid core (Template_MiSTer's `sys/`, a 50MHz PLL, `hybrid_host`, `video_mixer`, `video_freak`) and change the name and the `CONF_STR`.
+**The FPGA core:** `core/` from the template (Template_MiSTer's `sys/`, a 50MHz PLL, `hybrid_host`, `video_mixer`, `video_freak`). Only the `CONF_STR` in `core/<Name>.sv` is the game's.
+
+**The game's own file:** `template/game/mister_port.c` is a starting point for what the SDL drivers cannot do for the game: its OSD options, frame pacing, the game list, errors on the screen and the exit code.
 
 **Frame pacing:** the core shows 59.64 fields per second and takes the newest frame at every vblank. A game that renders at another rate, or by the system clock, drops or repeats frames at regular intervals. Show one frame per field: wait with `MH_WaitField()` (or the `SDL_MISTER_VSYNC` hint) and take the game's time from `MH_FieldCounter()`, not from the system clock. A game with a fixed logic rate that is not the field rate (Wolfenstein 3D: 70 per second) has to draw between two steps of its logic as well, see the ECWolf core.
 
