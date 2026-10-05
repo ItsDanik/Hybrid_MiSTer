@@ -14,7 +14,7 @@ ssh "$HOST" "mkdir -p $G && rm -f /media/fat/_Other/@NAME@_*.rbf"
 scp -q "$OUT/games/@NAME@/@NAME@" "$HOST:$G/@NAME@.new"
 ssh "$HOST" "mv -f $G/@NAME@.new $G/@NAME@"
 # everything else of the package (user files on the MiSTer are left alone)
-(cd "$OUT/games/@NAME@" && tar cf - --exclude=./@NAME@ .) | ssh "$HOST" "tar xf - -C $G"
+(cd "$OUT/games/@NAME@" && tar cf - --exclude=./@NAME@ .) | ssh "$HOST" "tar xf - --no-same-owner -C $G"
 scp -q "$OUT/Scripts/danik_hybrid_cores.sh" "$HOST:/media/fat/Scripts/"
 scp -q "$OUT"/_Other/*.rbf "$HOST:/media/fat/_Other/"
 ssh "$HOST" "chmod +x $G/@NAME@ $G/*.sh /media/fat/Scripts/danik_hybrid_cores.sh; ls -la $G /media/fat/_Other/@NAME@_*.rbf"
