@@ -90,6 +90,10 @@ The toolchain image (Debian bullseye, glibc 2.31 to match the MiSTer) is built f
   ```
 - `touch /tmp/@name@_nolaunch` on the MiSTer keeps the core loaded without starting the game, so you can start a development binary by hand (set `MISTER_HYBRID_CORE=@NAME@`). `/tmp/danik_hybrid_cores.log` shows what the launcher daemon did.
 
+## Support
+
+If you enjoy this project, you can support my work on [Patreon](https://www.patreon.com/itsdanik).
+
 ## Credits
 
 - **TODO the game / source port** by its authors.

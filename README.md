@@ -122,7 +122,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 
 **Documentation**
 
-- `README.md` in the repository and `README.txt` in the package have the same sections in the same order: Requirements, Installation, OSD options, Controls (keyboard, then a table of the default gamepad mapping with the MiSTer, Xbox and PlayStation names), Building, Credits, License.
+- `README.md` in the repository and `README.txt` in the package have the same sections in the same order: Requirements, Installation, OSD options, Controls (keyboard, then a table of the default gamepad mapping with the MiSTer, Xbox and PlayStation names), Building, Credits, License. `README.md` also has a one line Support section with the Patreon link before Credits.
 
 ## Credits
 
