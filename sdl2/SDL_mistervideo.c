@@ -5,9 +5,11 @@
   (hybrid/rtl/hybrid_host.sv); input comes from the core through the same
   shared memory. See mister_hybrid.h.
 
-  The size of the window picks the core's video mode: 320x200 or 640x200, the
-  smallest the window fits in. These are also the display modes. A window of
-  another size is cropped or centred.
+  The size of the window picks the core's video mode (see mister_hybrid.h):
+  the smallest the window fits in, of those that are available. These are
+  also the display modes. A window of another size is cropped or centred.
+  800x600 and 1024x768 are only available where no 15kHz screen is in use;
+  if the player changes that while the game runs, the mode is picked again.
 
   Hints (also read from the environment):
     SDL_MISTER_VIDEO_FORMAT  "RGB565" (default) or "INDEX8". With INDEX8 the
@@ -15,8 +17,12 @@
                              SDL_SetPaletteColors(surface->format->palette).
                              Only for games that draw to the window surface;
                              the 2D render API needs RGB565.
+                             Read when a window surface is made: a game
+                             can set it before it resizes its window, to
+                             have one screen in 8 bit and another in RGB565.
     SDL_MISTER_VSYNC         "1": SDL_UpdateWindowSurface() shows at most one
-                             frame per video field (59.6Hz)
+                             frame per video field (59.6Hz), per two
+                             fields with an interlaced mode
 
   Joysticks: two virtual joysticks (players 1 and 2) with 4 axes (left stick,
   right stick), one hat (d-pad) and 30 buttons. Buttons 0..27 are the core's
@@ -56,11 +62,36 @@ static SDL_bool palette_valid;
 static Uint32 last_field;
 /* frame for windows that are not the size of a video mode: cropped or centred */
 static Uint8 *fit_buffer;
+/* The video mode and format of a new window are set with its first frame:
+   what is on the screen (a "Loading..." of MH_UI_Message()) stays until then */
+static SDL_bool mode_pending;
+/* whether the modes above 15kHz were available when the mode was picked */
+static int modes_above;
 
-static const struct { int w, h; } video_modes[MH_MODE_COUNT] = {
-    { 320, 200 }, /* MH_MODE_320x200 */
-    { 640, 200 }  /* MH_MODE_640x200 */
+/* the video modes from the smallest to the largest */
+static const int mode_order[MH_MODE_COUNT] = {
+    MH_MODE_320x200, MH_MODE_320x240, MH_MODE_640x200, MH_MODE_640x400,
+    MH_MODE_640x480, MH_MODE_800x600, MH_MODE_1024x768
 };
+
+/* The smallest available video mode a window fits in, or the largest there
+   is (an older core, a 15kHz screen): the window is cropped then */
+static int MISTER_PickMode(int w, int h)
+{
+    int mode = MH_MODE_320x200;
+    int i;
+
+    for (i = 0; i < MH_MODE_COUNT; i++) {
+        if (!MH_ModeAvailable(mode_order[i])) {
+            continue;
+        }
+        mode = mode_order[i];
+        if (w <= MH_ModeWidth(mode) && h <= MH_ModeHeight(mode)) {
+            break;
+        }
+    }
+    return mode;
+}
 
 static SDL_bool input_valid;
 static mh_input last_input;
@@ -261,8 +292,12 @@ static void MISTER_PumpEvents(_THIS)
     }
 
     if (input.mouse_x != last_input.mouse_x || input.mouse_y != last_input.mouse_y) {
-        /* PS/2 counts y upwards */
-        SDL_SendMouseMotion(window, 0, 1, input.mouse_x - last_input.mouse_x, last_input.mouse_y - input.mouse_y);
+        /* PS/2 counts y upwards. Hosts before version 5 added movement to the
+           left and downwards as 31 bit numbers: bit 31 of their counters is not
+           to be trusted, the difference is taken from the lower 31 */
+        const Sint32 dx = (Sint32)((Uint32)(input.mouse_x - last_input.mouse_x) << 1) >> 1;
+        const Sint32 dy = (Sint32)((Uint32)(input.mouse_y - last_input.mouse_y) << 1) >> 1;
+        SDL_SendMouseMotion(window, 0, 1, dx, -dy);
     }
     if (input.mouse_wheel != last_input.mouse_wheel) {
         SDL_SendMouseWheel(window, 0, 0.0f, (float)(Sint16)(input.mouse_wheel - last_input.mouse_wheel), SDL_MOUSEWHEEL_NORMAL);
@@ -282,6 +317,16 @@ static void MISTER_PumpEvents(_THIS)
 
 /* Window framebuffer */
 
+static Uint32 MISTER_HintFormat(void)
+{
+    const char *hint = SDL_GetHint("SDL_MISTER_VIDEO_FORMAT");
+
+    if (hint && SDL_strcasecmp(hint, "INDEX8") == 0) {
+        return SDL_PIXELFORMAT_INDEX8;
+    }
+    return SDL_PIXELFORMAT_RGB565;
+}
+
 static void MISTER_DestroyWindowFramebuffer(_THIS, SDL_Window *window)
 {
     SDL_Surface *surface;
@@ -295,32 +340,20 @@ static int MISTER_CreateWindowFramebuffer(_THIS, SDL_Window *window, Uint32 *for
 {
     SDL_Surface *surface;
     int w, h;
-    int mode;
 
     MISTER_DestroyWindowFramebuffer(_this, window);
 
+    video_format = MISTER_HintFormat();
     SDL_GetWindowSizeInPixels(window, &w, &h);
     surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 0, video_format);
     if (!surface) {
         return -1;
     }
-    /* the smallest video mode the window fits in; an older core only has the first */
-    for (mode = 0; mode < MH_MODE_COUNT - 1; mode++) {
-        if (w <= video_modes[mode].w && h <= video_modes[mode].h) {
-            break;
-        }
-    }
-    MH_SetMode(mode);
-    if (fit_buffer) {
-        SDL_memset(fit_buffer, 0, MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
-    }
+    mode_pending = SDL_TRUE;
     SDL_SetWindowData(window, MISTER_SURFACE, surface);
     *format = video_format;
     *pixels = surface->pixels;
     *pitch = surface->pitch;
-
-    MH_SetFormat(video_format == SDL_PIXELFORMAT_INDEX8 ? MH_FORMAT_INDEX8 : MH_FORMAT_RGB565);
-    palette_valid = SDL_FALSE;
     return 0;
 }
 
@@ -329,8 +362,7 @@ static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_R
     SDL_Surface *surface = (SDL_Surface *)SDL_GetWindowData(window, MISTER_SURFACE);
     const SDL_Palette *palette;
     const Uint8 *pixels;
-    const int screen_w = MH_Width();
-    const int screen_h = MH_Height();
+    int screen_w, screen_h;
     int pitch;
 
     (void)_this;
@@ -339,6 +371,19 @@ static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_R
     if (!surface) {
         return SDL_SetError("Couldn't find the MiSTer surface for the window");
     }
+
+    if (mode_pending || modes_above != MH_ModeAvailable(MH_MODE_800x600)) {
+        mode_pending = SDL_FALSE;
+        modes_above = MH_ModeAvailable(MH_MODE_800x600);
+        MH_SetMode(MISTER_PickMode(surface->w, surface->h));
+        if (fit_buffer) {
+            SDL_memset(fit_buffer, 0, MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
+        }
+        MH_SetFormat(video_format == SDL_PIXELFORMAT_INDEX8 ? MH_FORMAT_INDEX8 : MH_FORMAT_RGB565);
+        palette_valid = SDL_FALSE;
+    }
+    screen_w = MH_Width();
+    screen_h = MH_Height();
 
     /* the application sets the colours on the surface SDL made from our pixels */
     palette = window->surface ? window->surface->format->palette : NULL;
@@ -384,7 +429,7 @@ static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_R
     }
 
     if (vsync) {
-        MH_WaitField(last_field);
+        MH_WaitFrame(last_field);
         last_field = MH_FieldCounter();
     }
     MH_Present(pixels, pitch);
@@ -413,15 +458,10 @@ static int MISTER_SetDisplayMode(_THIS, SDL_VideoDisplay *display, SDL_DisplayMo
 
 static int MISTER_VideoInit(_THIS)
 {
-    const char *hint;
     SDL_DisplayMode mode;
     int i;
 
-    video_format = SDL_PIXELFORMAT_RGB565;
-    hint = SDL_GetHint("SDL_MISTER_VIDEO_FORMAT");
-    if (hint && SDL_strcasecmp(hint, "INDEX8") == 0) {
-        video_format = SDL_PIXELFORMAT_INDEX8;
-    }
+    video_format = MISTER_HintFormat();
     vsync = SDL_GetHintBoolean("SDL_MISTER_VSYNC", SDL_FALSE);
     input_valid = SDL_FALSE;
     quit_sent = SDL_FALSE;
@@ -434,10 +474,13 @@ static int MISTER_VideoInit(_THIS)
     if (SDL_AddBasicVideoDisplay(&mode) < 0) {
         return -1;
     }
+    /* the modes this core has on this screen, for games that list them */
     for (i = 0; i < MH_MODE_COUNT; i++) {
-        mode.w = video_modes[i].w;
-        mode.h = video_modes[i].h;
-        SDL_AddDisplayMode(&_this->displays[0], &mode);
+        if (MH_ModeAvailable(mode_order[i])) {
+            mode.w = MH_ModeWidth(mode_order[i]);
+            mode.h = MH_ModeHeight(mode_order[i]);
+            SDL_AddDisplayMode(&_this->displays[0], &mode);
+        }
     }
 
     SDL_GetMouse()->SetRelativeMouseMode = MISTER_SetRelativeMouseMode;

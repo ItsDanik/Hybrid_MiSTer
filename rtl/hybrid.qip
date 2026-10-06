@@ -1,0 +1,7 @@
+# The shared FPGA side of a hybrid core. sys/ of the core has pll_cfg.
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_host.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_vclk.sv ]
+set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) pll_vid.v ]
+set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) pll_vid/pll_vid_0002.v ]
+set_global_assignment -name QIP_FILE           [file join $::quartus(qip_path) pll_vid/pll_vid_0002.qip ]
+set_global_assignment -name SDC_FILE           [file join $::quartus(qip_path) hybrid.sdc ]

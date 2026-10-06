@@ -23,7 +23,7 @@
 #include <unistd.h>
 
 #define SHM_PHYS 0x30000000
-#define SHM_SIZE 0x400000
+#define SHM_SIZE 0xA00000
 
 #define CTRL_OFFSET 0x0
 #define STATUS_OFFSET 0x40
@@ -33,7 +33,24 @@
 #define PALETTE_SLOT_SIZE 0x400
 #define FB_OFFSET 0x100000
 #define FB_SIZE 0x100000
+// 1024x768 does not fit in those and has framebuffers of its own
+#define FB_XL_OFFSET 0x400000
+#define FB_XL_SIZE 0x200000
 #define FB_COUNT 3
+
+// status: the mode is interlaced; the field that was on the screen had the
+// even rows; modes above 15kHz are available
+#define STATUS_LACE (1u << 9)
+#define STATUS_FIELD_EVEN (1u << 11)
+#define STATUS_VGA31 (1u << 16)
+
+static const struct {
+    short width, height;
+    unsigned char version; // the host version that has the mode
+} modes[MH_MODE_COUNT] = {
+    { 320, 200, 4 }, { 640, 200, 4 }, { 640, 400, 5 }, { 320, 240, 6 },
+    { 640, 480, 6 }, { 800, 600, 6 }, { 1024, 768, 6 },
+};
 
 #define CTRL_MAGIC 0x4259484D   // "MHYB"
 #define STATUS_MAGIC 0x5359484D // "MHYS"
@@ -51,9 +68,11 @@ static int fb_current;
 static int palette_slot;
 static uint32_t palette_seq;
 static int ctrl_enabled;
+static int menu_mask;
 static int audio_enabled;
 // set once the core is gone: another core may own the memory now, never write to it again
 static volatile int detached;
+static int reloaded; // detached because the core started over
 
 static int cpu1_allowed;
 
@@ -82,7 +101,8 @@ static void write_ctrl(void) {
     __sync_synchronize();
     ctrl[2] = palette_seq;
     ctrl[3] = 0;
-    ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24);
+    ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24)
+        | ((uint32_t)menu_mask << 28);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
     __sync_synchronize();
     pthread_mutex_unlock(&ctrl_lock);
@@ -97,20 +117,48 @@ int MH_Mode(void) {
     return fb_mode;
 }
 
+int MH_ModeWidth(int mode) {
+    return mode >= 0 && mode < MH_MODE_COUNT ? modes[mode].width : 0;
+}
+
+int MH_ModeHeight(int mode) {
+    return mode >= 0 && mode < MH_MODE_COUNT ? modes[mode].height : 0;
+}
+
 int MH_Width(void) {
-    return fb_mode == MH_MODE_320x200 ? 320 : 640;
+    return modes[fb_mode].width;
 }
 
 int MH_Height(void) {
-    return 200;
+    return modes[fb_mode].height;
+}
+
+int MH_ModeAvailable(int mode) {
+    if (!MH_IsOpen() || mode < 0 || mode >= MH_MODE_COUNT || status[3] < modes[mode].version) {
+        return 0;
+    }
+    return mode < MH_MODE_800x600 || (status[2] & STATUS_VGA31) != 0;
 }
 
 static int frame_bytes(void) {
     return MH_Width() * MH_Height() * (fb_format == MH_FORMAT_RGB565 ? 2 : 1);
 }
 
-static void clear_framebuffer(int index) {
-    memset((void*)(shm + FB_OFFSET + index * FB_SIZE), 0, MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
+// The framebuffers of a video mode
+static volatile uint8_t* framebuffer(int mode, int index) {
+    if (mode == MH_MODE_1024x768) {
+        return shm + FB_XL_OFFSET + index * FB_XL_SIZE;
+    }
+    return shm + FB_OFFSET + index * FB_SIZE;
+}
+
+// Bytes of a frame of a mode in the larger pixel format
+static int mode_bytes(int mode) {
+    return modes[mode].width * modes[mode].height * 2;
+}
+
+static void clear_framebuffer(int mode, int index, int bytes) {
+    memset((void*)framebuffer(mode, index), 0, bytes);
 }
 
 // 1 if /tmp/CORENAME names our core (or there is nothing to compare)
@@ -178,12 +226,21 @@ int MH_Open(void) {
         return 0;
     }
     detached = 0;
+    reloaded = 0;
     ctrl_enabled = 0;
     audio_enabled = 0;
     fb_mode = MH_MODE_320x200;
+    // The core reloads the palette when its sequence number changes, and it
+    // may know the number an earlier program ended with: count on from there
+    menu_mask = 0;
+    if (ctrl[0] == CTRL_MAGIC) {
+        palette_seq = ctrl[2];
+        palette_slot = (ctrl[1] >> 16) & 1;
+    }
     alive_time.tv_sec = 0;
     for (i = 0; i < FB_COUNT; i++) {
-        clear_framebuffer(i);
+        // all of it: whatever ran before us may have used a larger mode
+        clear_framebuffer(fb_mode, i, FB_SIZE);
     }
     write_ctrl();
 
@@ -269,7 +326,7 @@ static void present_to_fpga(const uint8_t* pixels, int pitch) {
         sleep_ms(1);
     }
 
-    dst = shm + FB_OFFSET + next * FB_SIZE;
+    dst = framebuffer(fb_mode, next);
     if (pitch == row) {
         memcpy((void*)dst, pixels, row * height);
     } else {
@@ -342,36 +399,20 @@ static void present_flush(void) {
     pthread_mutex_unlock(&present_lock);
 }
 
-void MH_SetFormat(int format) {
-    if (!MH_IsOpen() || format == fb_format) {
-        return;
-    }
-    present_flush();
-    fb_format = format;
-    // the test pattern stays up until the first frame (and palette) in the new format
-    ctrl_enabled = 0;
-    write_ctrl();
-}
-
-int MH_SetMode(int mode) {
+// Clear every framebuffer. The buffer on screen is cleared once the core
+// shows a cleared one. `next_mode` is the mode that is set next: if its
+// framebuffers are others, they are cleared as well.
+static void blank_framebuffers(int next_mode) {
+    int same = framebuffer(next_mode, 0) == framebuffer(fb_mode, 0);
+    int bytes = mode_bytes(fb_mode);
     int i, n;
 
-    if (!MH_IsOpen() || mode < 0 || mode >= MH_MODE_COUNT) {
-        return 0;
+    // what the next mode reads has to be black as far as its frames go
+    if (same && mode_bytes(next_mode) > bytes) {
+        bytes = mode_bytes(next_mode);
     }
-    if (mode == fb_mode) {
-        return 1;
-    }
-    // host version 4 has the modes
-    if (status[3] < 4) {
-        return 0;
-    }
-    present_flush();
-    // The rows of the framebuffers are of another length in the new mode: go
-    // through black (pixel 0) instead of showing the old frames torn apart.
-    // The buffer on screen is cleared once the core shows a cleared one.
     for (n = 1; n < FB_COUNT; n++) {
-        clear_framebuffer((fb_current + n) % FB_COUNT);
+        clear_framebuffer(fb_mode, (fb_current + n) % FB_COUNT, bytes);
     }
     i = fb_current;
     fb_current = (fb_current + 1) % FB_COUNT;
@@ -379,7 +420,42 @@ int MH_SetMode(int mode) {
     for (n = 0; n < 50 && ctrl_enabled && (status[2] & 0xff) == (uint32_t)i; n++) {
         sleep_ms(1);
     }
-    clear_framebuffer(i);
+    clear_framebuffer(fb_mode, i, bytes);
+    if (!same) {
+        for (n = 0; n < FB_COUNT; n++) {
+            clear_framebuffer(next_mode, n, mode_bytes(next_mode));
+        }
+    }
+}
+
+void MH_SetFormat(int format) {
+    if (!MH_IsOpen() || format == fb_format) {
+        return;
+    }
+    present_flush();
+    // A game that changes the format while it runs (8 bit for one screen,
+    // RGB565 for another) goes through black (pixel 0), as in MH_SetMode():
+    // not through the old frames read in the new format, nor the test pattern
+    blank_framebuffers(fb_mode);
+    fb_format = format;
+    write_ctrl();
+}
+
+int MH_SetMode(int mode) {
+
+    if (!MH_IsOpen() || mode < 0 || mode >= MH_MODE_COUNT) {
+        return 0;
+    }
+    if (mode == fb_mode) {
+        return 1;
+    }
+    if (!MH_ModeAvailable(mode)) {
+        return 0;
+    }
+    present_flush();
+    // The rows of the framebuffers are of another length in the new mode: go
+    // through black (pixel 0) instead of showing the old frames torn apart.
+    blank_framebuffers(mode);
     fb_mode = mode;
     write_ctrl();
     return 1;
@@ -460,6 +536,37 @@ void MH_WaitField(uint32_t field) {
     }
 }
 
+int MH_FrameTaken(uint32_t field) {
+    uint32_t state;
+
+    if (!MH_IsOpen()) {
+        return 1;
+    }
+    if ((int32_t)(status[1] - field) <= 0) {
+        return 0;
+    }
+    // interlaced, the core takes a frame in the vblank after the field with the odd rows
+    state = status[2];
+    return !(state & STATUS_LACE) || !(state & STATUS_FIELD_EVEN);
+}
+
+void MH_WaitFrame(uint32_t field) {
+    int i;
+
+    // at most 4 fields, in case the core goes away
+    for (i = 0; i < 70 && !MH_FrameTaken(field); i++) {
+        sleep_ms(1);
+    }
+}
+
+void MH_SetMenuMask(int mask) {
+    if (!MH_IsOpen()) {
+        return;
+    }
+    menu_mask = mask & 0xf;
+    write_ctrl();
+}
+
 static long elapsed_ms(const struct timespec* since) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -478,14 +585,22 @@ int MH_CheckAlive(void) {
     if (elapsed_ms(&alive_time) < 500) {
         return 1;
     }
-    // Another core may use the same memory: stop touching it as soon as ours is gone
-    if (status[0] != STATUS_MAGIC || status[1] == alive_frame || !corename_matches()) {
+    // Another core may use the same memory: stop touching it as soon as ours is gone.
+    // A field counter that went back is our core loaded again: it knows nothing
+    // of this game any more (video mode, palette, audio), which has to start over.
+    if (status[0] != STATUS_MAGIC || status[1] == alive_frame || status[1] < alive_frame || !corename_matches()) {
+        reloaded = status[0] == STATUS_MAGIC && status[1] < alive_frame;
         detached = 1;
         return 0;
     }
     alive_frame = status[1];
     clock_gettime(CLOCK_MONOTONIC, &alive_time);
     return 1;
+}
+
+int MH_CoreReloaded(void) {
+    // caught while it is being loaded, the counter stands still and the name is all there is
+    return detached && (reloaded || (core_name[0] != 0 && !shm_is_file && corename_matches()));
 }
 
 void MH_ReadInput(mh_input* input) {
@@ -542,6 +657,39 @@ void MH_AudioEnable(int enabled) {
     write_ctrl();
 }
 
+// MISTER_HYBRID_STATS=1 in the environment: every 10 seconds of sound a line on
+// stderr that tells how close the audio ring came to running empty. `ahead` is
+// what the core had left to play when the next block arrived.
+static void audio_stats(int32_t ahead, int count) {
+    static int enabled = -1;
+    static int32_t min_ahead = 0x7fffffff;
+    static unsigned writes, underruns, frames;
+
+    if (enabled < 0) {
+        enabled = getenv("MISTER_HYBRID_STATS") != NULL;
+    }
+    if (!enabled) {
+        return;
+    }
+    if (writes++ > 0) {
+        if (ahead < min_ahead) {
+            min_ahead = ahead;
+        }
+        if (ahead <= 0) {
+            underruns++;
+        }
+    }
+    frames += count;
+    if (frames >= 10 * MH_AUDIO_RATE) {
+        fprintf(stderr, "mister: audio, %u blocks of %d frames, least left in the ring %d frames, %u times empty\n", writes,
+                count, (int)min_ahead, underruns);
+        min_ahead = 0x7fffffff;
+        writes = 1;
+        underruns = 0;
+        frames = 0;
+    }
+}
+
 void MH_AudioWrite(const uint32_t* frames, int count, int lead) {
     volatile uint32_t* ring;
     volatile uint32_t* fetch_ptr;
@@ -556,6 +704,8 @@ void MH_AudioWrite(const uint32_t* frames, int count, int lead) {
     }
     ring = (volatile uint32_t*)(shm + AUDIO_RING_OFFSET);
     fetch_ptr = (volatile uint32_t*)(shm + AUDIO_PTR_OFFSET);
+
+    audio_stats((int32_t)(audio_wr - *fetch_ptr), count);
 
     // the core's sample clock paces us
     for (i = 0; i < 1000 && MH_IsOpen(); i++) {

@@ -11,6 +11,8 @@ OUT=dist/@NAME@_$(date +%Y%m%d)
 G=/media/fat/games/@NAME@
 ssh "$HOST" "mkdir -p $G && rm -f /media/fat/_Other/@NAME@_*.rbf"
 # a running game keeps its binary busy: copy next to it, then swap
+# (scp would copy into a folder of that name, if something left one behind)
+ssh "$HOST" "rm -rf $G/@NAME@.new"
 scp -q "$OUT/games/@NAME@/@NAME@" "$HOST:$G/@NAME@.new"
 ssh "$HOST" "mv -f $G/@NAME@.new $G/@NAME@"
 # everything else of the package (user files on the MiSTer are left alone)

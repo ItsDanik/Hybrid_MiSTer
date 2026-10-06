@@ -4,7 +4,7 @@
 // HPS side of a MiSTer hybrid core: the game runs on the ARM and talks to the
 // FPGA core (hybrid/rtl/hybrid_host.sv, which documents the memory layout)
 // through shared DDR3 memory. The core scans out the game's frames at 15kHz
-// (320x200 or 640x200), plays a 44.1kHz audio
+// (320x200 and the other video modes below), plays a 44.1kHz audio
 // ring and publishes keyboard, mouse, joystick and OSD state.
 //
 // Environment variables:
@@ -28,15 +28,36 @@ extern "C" {
 #define MH_WIDTH 320
 #define MH_HEIGHT 200
 // The largest video mode
-#define MH_MAX_WIDTH 640
-#define MH_MAX_HEIGHT 200
+#define MH_MAX_WIDTH 1024
+#define MH_MAX_HEIGHT 768
 
-// Video modes, both with 200 lines at 15.6kHz and 59.6Hz. The picture is the
-// same size on the screen (4:3) in both: 640x200 has two pixels in the place
-// of each pixel of 320x200.
+// Video modes. The picture fills the same 4:3 screen in all of them.
+//
+// 320x200, 640x200 and 320x240 are 15.6kHz at 59.6Hz. 640x200 has two pixels
+// in the place of each pixel of 320x200.
+//
+// 640x400 and 640x480 are for games that have nothing smaller. The core shows
+// them interlaced at 15kHz: a frame is on the screen for two fields, its even
+// rows in the first and its odd rows in the second (29.8 frames per second;
+// fine horizontal lines flicker on a CRT, the HDMI scaler weaves the fields
+// into a steady picture). They are progressive at 31kHz instead where the
+// player says that no 15kHz screen is there to get it: the analog output is a
+// VGA monitor (forced_scandoubler=1 in MiSTer.ini) or is not used at all (the
+// OSD option "HDMI Only", which switches it off while such a mode is shown).
+//
+// 800x600 and 1024x768 (60Hz) have no 15kHz form and exist only in that case:
+// see MH_ModeAvailable().
+//
+// The game does not choose between the forms and a 15kHz screen never gets
+// anything else.
 #define MH_MODE_320x200 0
 #define MH_MODE_640x200 1
-#define MH_MODE_COUNT 2
+#define MH_MODE_640x400 2
+#define MH_MODE_320x240 3
+#define MH_MODE_640x480 4
+#define MH_MODE_800x600 5
+#define MH_MODE_1024x768 6
+#define MH_MODE_COUNT 7
 
 #define MH_FORMAT_INDEX8 0 // 8bpp, palette from MH_SetPalette()
 #define MH_FORMAT_RGB565 1
@@ -81,14 +102,29 @@ typedef struct mh_input {
 int MH_Open(void);
 void MH_Close(void);
 int MH_IsOpen(void);
-// Returns 0 (and detaches for good) once the core is no longer loaded
+// Returns 0 (and detaches for good) once the core is no longer loaded, or was
+// loaded again
 int MH_CheckAlive(void);
+// After MH_CheckAlive() returned 0: 1 if /tmp/CORENAME still names our core.
+// Then it was loaded again (from the MiSTer menu, while the game ran) or is
+// about to be replaced. The game should leave with exit code 43, for its
+// launcher to start it again once the core has settled.
+int MH_CoreReloaded(void);
 const char* MH_CoreName(void);
 
 // Video. The picture stays on the core's test pattern until the first frame.
+// A change of format later on blanks the screen until the next frame.
 void MH_SetFormat(int format);
+// 1 if the core can show the mode right now: it is new enough and, for
+// 800x600 and 1024x768, the player has no 15kHz screen on it (see above).
+// That can change while the game runs (an OSD option): a mode that is no
+// longer available is shown as a black screen until the game sets another.
+int MH_ModeAvailable(int mode);
+// Size of a video mode
+int MH_ModeWidth(int mode);
+int MH_ModeHeight(int mode);
 // Switch to another video mode; the screen is blank until the next frame.
-// Returns 0 if the core does not have the mode (an older core)
+// Returns 0 if the mode is not available
 int MH_SetMode(int mode);
 int MH_Mode(void);
 int MH_Width(void);
@@ -101,6 +137,16 @@ void MH_SetPalette(const uint32_t* rgb);
 uint32_t MH_FieldCounter(void);
 // Sleep until the field counter is past `field`
 void MH_WaitField(uint32_t field);
+// 1 once the core has taken the frame presented at field counter `field`: at
+// the next vblank, with 640x400 interlaced the one after both fields of the
+// frame before were shown. That is the moment to start drawing the next
+// frame; a game that presents more often loses frames.
+int MH_FrameTaken(uint32_t field);
+// Sleep until MH_FrameTaken(field)
+void MH_WaitFrame(uint32_t field);
+// Bits 0..3 that hide or grey out lines of the core's OSD ("H0", "D1", ... in
+// its CONF_STR): for options the game cannot honour with the data it has
+void MH_SetMenuMask(int mask);
 
 // Input
 void MH_ReadInput(mh_input* input);

@@ -6,6 +6,7 @@
 
 #define EXIT_TO_MENU 0
 #define EXIT_RESTART 42 // danik_hybrid_launch.sh starts the game again
+#define EXIT_RELOADED 43 // the same, after the core has settled
 
 static const char *const TITLE = "@NAME@";
 
@@ -33,7 +34,7 @@ unsigned MiSTer_WaitFrame(void)
         LastField = MH_FieldCounter();
         FieldValid = 1;
     }
-    MH_WaitField(LastField);
+    MH_WaitFrame(LastField);
     field = MH_FieldCounter();
     fields = field - LastField; // 0: the core is gone
     LastField = field;
@@ -65,6 +66,9 @@ void MiSTer_ShowError(const char *message)
 
 int MiSTer_ExitCode(void)
 {
+    // The player loaded the core again while the game ran
+    if (MH_CoreReloaded())
+        return EXIT_RELOADED;
     // Not if we are quitting because another core was loaded
     if (PickedFromList && MH_Open())
         return EXIT_RESTART;

@@ -42,7 +42,9 @@ export XDG_DATA_HOME="$GAMEDIR/config"
 # MiSTer (scripts, daemons, interrupts) lands on CPU0 as well: without the
 # higher priority the game waits for it a quarter of the time and misses fields.
 # Exit code 42: the player quit a game picked from a list (MH_UI_Menu), start
-# again to show the list.
+# again to show the list. Exit code 43: the core was loaded again while the
+# game ran (MH_CoreReloaded), start again once it has settled, unless it was
+# another core after all.
 GAME=
 # The game must not outlive us: on SIGTERM it saves its settings and quits
 trap '[ -n "$GAME" ] && kill "$GAME" 2>/dev/null; exit 0' TERM INT
@@ -51,7 +53,13 @@ while :; do
     nice -n -20 taskset 0x03 ./@NAME@ >> "$LOG" 2>&1 &
     GAME=$!
     wait "$GAME"
-    [ $? -eq 42 ] || break
+    RC=$?
+    if [ $RC -eq 43 ]; then
+        sleep 1
+        grep -q "^$CORE" /tmp/CORENAME 2>/dev/null || break
+    elif [ $RC -ne 42 ]; then
+        break
+    fi
 done
 GAME=
 

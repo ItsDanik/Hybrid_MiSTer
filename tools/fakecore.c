@@ -17,6 +17,10 @@
 //   osd <hex>               OSD status bits
 //   shot <file.ppm>         save the picture the core would show, in the
 //                           size of the video mode (not stretched to 4:3)
+//   vga31 <0|1>             whether the modes above 15kHz are available
+//                           (800x600 and 1024x768; at the start they are not)
+//   reload                  count the fields from 0 again, as if the core was
+//                           loaded again
 //   quit                    stop ticking, as if another core was loaded
 // Without a script (or after it ends) it runs until killed.
 
@@ -29,7 +33,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define SHM_SIZE 0x400000
+#define SHM_SIZE 0xA00000
 #define CTRL_MAGIC 0x4259484D
 #define STATUS_MAGIC 0x5359484D
 #define FIELD_NS 16768000 // 400 x 262 pixels at 6.25MHz
@@ -40,7 +44,7 @@ static volatile uint32_t* status;
 static uint32_t field;
 static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
-static int fb_index, fb_format, fb_mode, ctrl_valid;
+static int fb_index, fb_format, fb_mode, ctrl_valid, vga31;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
@@ -69,7 +73,11 @@ static void tick(void) {
     if (ctrl_valid) {
         fb_index = (c1 & 0xff) > 2 ? 0 : (c1 & 3);
         fb_format = (c1 >> 8) & 1;
-        fb_mode = ((c1 >> 12) & 3) == 1;
+        fb_mode = (c1 >> 12) & 15;
+        // a mode the core does not have, or not on this screen
+        if (fb_mode > 6 || (fb_mode >= 5 && !vga31)) {
+            fb_mode = 0;
+        }
         if (c2 != palette_seq) {
             palette_seq = c2;
             memcpy(palette, (void*)(shm + 0x1000 + ((c1 >> 16) & 1) * 0x400), sizeof(palette));
@@ -92,17 +100,21 @@ static void tick(void) {
         }
     }
     field++;
-    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12);
-    status[3] = 4;
+    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (vga31 << 16) | (1 << 17)
+        | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3) << 18);
+    status[3] = 6;
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }
 
 static void screenshot(const char* path) {
-    const volatile uint8_t* fb = shm + 0x100000 + fb_index * 0x100000;
+    static const int sizes[7][2] = { { 320, 200 }, { 640, 200 }, { 640, 400 }, { 320, 240 },
+                                     { 640, 480 }, { 800, 600 }, { 1024, 768 } };
+    // 1024x768 has framebuffers of its own
+    const volatile uint8_t* fb = fb_mode == 6 ? shm + 0x400000 + fb_index * 0x200000 : shm + 0x100000 + fb_index * 0x100000;
     FILE* f = fopen(path, "wb");
-    int width = fb_mode == 0 ? 320 : 640;
-    int height = 200;
+    int width = sizes[fb_mode][0];
+    int height = sizes[fb_mode][1];
     int i;
 
     if (f == NULL) {
@@ -192,6 +204,10 @@ int main(int argc, char** argv) {
             status[9] = (uint32_t)(osd >> 32);
         } else if (sscanf(line, "shot %199s", arg) == 1) {
             screenshot(arg);
+        } else if (sscanf(line, "vga31 %d", &a) == 1) {
+            vga31 = a != 0;
+        } else if (strncmp(line, "reload", 6) == 0) {
+            field = 0;
         } else if (strncmp(line, "quit", 4) == 0) {
             break;
         }

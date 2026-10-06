@@ -11,9 +11,11 @@ This file is in `hybrid/`, the [Hybrid_MiSTer](https://github.com/ItsDanik/Hybri
 
 ## Base of a new core
 
-- Video starts at 320x200, the core's default mode. Higher resolutions and anything else a game can do beyond that (640x200 in ECWolf) are extra features of that core, added once the base works. They are not part of the template.
+- Video starts at 320x200, the core's default mode. Higher resolutions and anything else a game can do beyond that (640x200 in ECWolf, 640x400 in VanillaConquer) are extra features of that core, added once the base works. They are not part of the template.
 - SDL2 games build against the static SDL2 of `hybrid/sdl2` and get video, audio and input from its "mister" drivers; the game needs a `MISTER_HYBRID` build option and a small file of its own (`hybrid/template/game/`).
-- One frame per field, timed by the core's field counter (`MH_WaitField()`, `MH_FieldCounter()`), not by the system clock.
+- One frame per field (per two fields with an interlaced mode), timed by the core's field counter (`MH_WaitFrame()`, `MH_FieldCounter()`), not by the system clock.
+- A 15kHz screen never gets more than 15kHz: 640x400 and 640x480 are interlaced at 15kHz unless the player says no such screen is there, with `forced_scandoubler=1` (VGA monitor) or the OSD option *HDMI Only*, which switches the analog output off while a progressive mode is shown. 800x600 and 1024x768 exist only then (`MH_ModeAvailable()`). `hybrid/README.md`, "Video modes".
+- *HDMI Only* (status bit 0) and the *CRT Options* page (bits 64..76) are in every core's OSD, unchanged.
 - Status bits 0..23 of the OSD mean the same in every core; a game's options start at bit 24.
 
 ## Rules
