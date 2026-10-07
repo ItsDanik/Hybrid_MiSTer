@@ -70,8 +70,8 @@ static int modes_above;
 
 /* the video modes from the smallest to the largest */
 static const int mode_order[MH_MODE_COUNT] = {
-    MH_MODE_320x200, MH_MODE_320x240, MH_MODE_640x200, MH_MODE_640x400,
-    MH_MODE_640x480, MH_MODE_800x600, MH_MODE_1024x768
+    MH_MODE_320x200, MH_MODE_320x240, MH_MODE_640x200, MH_MODE_640x240,
+    MH_MODE_640x400, MH_MODE_640x480, MH_MODE_800x600, MH_MODE_1024x768
 };
 
 /* The smallest available video mode a window fits in, or the largest there

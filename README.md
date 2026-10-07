@@ -68,7 +68,7 @@ That gives a repository laid out like the other cores, with a core that builds a
 
 | Mode | 15kHz screen | VGA monitor or *HDMI Only* |
 |---|---|---|
-| 320x200 (the default), 640x200, 320x240 | 15.6kHz, 59.6Hz | the same; the core's scandoubler makes it 31kHz for a VGA monitor |
+| 320x200 (the default), 640x200, 320x240, 640x240 | 15.6kHz, 59.6Hz | the same; the core's scandoubler makes it 31kHz for a VGA monitor |
 | 640x400, 640x480 | interlaced at 15.6kHz, 29.8 frames per second | progressive at 31.25kHz, 59.5Hz |
 | 800x600, 1024x768 | not available | 37.9kHz / 60.3Hz, 48.4kHz / 60.0Hz |
 

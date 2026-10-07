@@ -22,7 +22,8 @@
 //              w0[39:32] framebuffer index to display (0..2)
 //              w0[40]    pixel format: 0 = 8bpp paletted, 1 = RGB565
 //              w0[47:44] video mode: 0 = 320x200, 1 = 640x200, 2 = 640x400,
-//                        3 = 320x240, 4 = 640x480, 5 = 800x600, 6 = 1024x768
+//                        3 = 320x240, 4 = 640x480, 5 = 800x600, 6 = 1024x768,
+//                        7 = 640x240
 //              w0[48]    palette slot (0..1)
 //              w0[56]    audio enable
 //              w0[63:60] OSD menu mask: bits a game sets to hide or grey out
@@ -149,7 +150,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd7;
+localparam [31:0] VERSION      = 32'd8;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -174,6 +175,7 @@ assign ddr_be = 8'hFF;
 //  4    640x480   interlaced                   progressive, 31kHz
 //  5    800x600   not shown                    progressive, 37.9kHz, 40MHz
 //  6    1024x768  not shown                    progressive, 48.4kHz, 65MHz
+//  7    640x240   progressive                  the same
 //
 // 15kHz: 6.25MHz pixel clock (video clock of 50MHz / 8), 400 x 262 lines ->
 //   15.625kHz / 59.6Hz; 12.5MHz and 800 pixels in a line at 640 wide. 200 or
@@ -277,8 +279,8 @@ reg        field = 0;         // interlaced: 1 = even rows
 
 assign f1 = v_lace & ~field;
 
-wire       w640 = (v_mode == 4'd1) || (v_mode == 4'd2) || (v_mode == 4'd4);
-wire       l240 = (v_mode == 4'd3) || (v_mode == 4'd4);
+wire       w640 = (v_mode == 4'd1) || (v_mode == 4'd2) || (v_mode == 4'd4) || (v_mode == 4'd7);
+wire       l240 = (v_mode == 4'd3) || (v_mode == 4'd4) || (v_mode == 4'd7);
 wire       xl   = (v_mode == 4'd6);
 
 // 15kHz, in pixels of 320: 400 - 4 * size in a line, 32 of sync. The front
@@ -770,7 +772,7 @@ always @(posedge clk) begin
 						fb_index <= (ctrl_w0[39:32] > 8'd2) ? 2'd0 : ctrl_w0[33:32];
 					fmt16    <= ctrl_w0[40];
 					// a mode the core does not have is 320x200
-					vmode    <= (ctrl_w0[47:44] > 4'd6) ? 4'd0 : ctrl_w0[47:44];
+					vmode    <= (ctrl_w0[47:44] > 4'd7) ? 4'd0 : ctrl_w0[47:44];
 				end
 				// no game: the core's picture, in 320x240
 				else vmode <= 4'd3;

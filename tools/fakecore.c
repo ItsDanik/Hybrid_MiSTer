@@ -78,7 +78,7 @@ static void tick(void) {
         fb_format = (c1 >> 8) & 1;
         fb_mode = (c1 >> 12) & 15;
         // a mode the core does not have, or not on this screen
-        if (fb_mode > 6 || (fb_mode >= 5 && !vga31)) {
+        if (fb_mode > 7 || ((fb_mode == 5 || fb_mode == 6) && !vga31)) {
             fb_mode = 0;
         }
         if (c2 != palette_seq) {
@@ -104,15 +104,15 @@ static void tick(void) {
     }
     field++;
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (vga31 << 16) | (1 << 17)
-        | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3) << 18);
-    status[3] = 7;
+        | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3 && fb_mode != 7) << 18);
+    status[3] = 8;
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }
 
 static void screenshot(const char* path) {
-    static const int sizes[7][2] = { { 320, 200 }, { 640, 200 }, { 640, 400 }, { 320, 240 },
-                                     { 640, 480 }, { 800, 600 }, { 1024, 768 } };
+    static const int sizes[8][2] = { { 320, 200 }, { 640, 200 }, { 640, 400 }, { 320, 240 },
+                                     { 640, 480 }, { 800, 600 }, { 1024, 768 }, { 640, 240 } };
     // 1024x768 has framebuffers of its own
     const volatile uint8_t* fb = fb_mode == 6 ? shm + 0x400000 + fb_index * 0x200000 : shm + 0x100000 + fb_index * 0x100000;
     FILE* f = fopen(path, "wb");

@@ -6,7 +6,7 @@ import mmap, os, struct, sys, time
 fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
 m = mmap.mmap(fd, 0x1000, mmap.MAP_SHARED, mmap.PROT_READ, offset=0x30000000)
 last = None
-MODES = [(320, 200), (640, 200), (640, 400), (320, 240), (640, 480), (800, 600), (1024, 768)] + [(0, 0)] * 9
+MODES = [(320, 200), (640, 200), (640, 400), (320, 240), (640, 480), (800, 600), (1024, 768), (640, 240)] + [(0, 0)] * 8
 end = time.monotonic() + (float(sys.argv[1]) if len(sys.argv) > 1 else 0)
 while True:
     ctrl = struct.unpack_from("<4I", m, 0)

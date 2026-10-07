@@ -33,8 +33,8 @@ extern "C" {
 
 // Video modes. The picture fills the same 4:3 screen in all of them.
 //
-// 320x200, 640x200 and 320x240 are 15.6kHz at 59.6Hz. 640x200 has two pixels
-// in the place of each pixel of 320x200.
+// 320x200, 640x200, 320x240 and 640x240 are 15.6kHz at 59.6Hz. 640x200 has
+// two pixels in the place of each pixel of 320x200, and 640x240 of 320x240.
 //
 // 640x400 and 640x480 are for games that have nothing smaller. The core shows
 // them interlaced at 15kHz: a frame is on the screen for two fields, its even
@@ -57,7 +57,8 @@ extern "C" {
 #define MH_MODE_640x480 4
 #define MH_MODE_800x600 5
 #define MH_MODE_1024x768 6
-#define MH_MODE_COUNT 7
+#define MH_MODE_640x240 7
+#define MH_MODE_COUNT 8
 
 #define MH_FORMAT_INDEX8 0 // 8bpp, palette from MH_SetPalette()
 #define MH_FORMAT_RGB565 1

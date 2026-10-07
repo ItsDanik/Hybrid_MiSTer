@@ -49,7 +49,7 @@ static const struct {
     unsigned char version; // the host version that has the mode
 } modes[MH_MODE_COUNT] = {
     { 320, 200, 4 }, { 640, 200, 4 }, { 640, 400, 5 }, { 320, 240, 6 },
-    { 640, 480, 6 }, { 800, 600, 6 }, { 1024, 768, 6 },
+    { 640, 480, 6 }, { 800, 600, 6 }, { 1024, 768, 6 }, { 640, 240, 8 },
 };
 
 #define CTRL_MAGIC 0x4259484D   // "MHYB"
@@ -137,7 +137,7 @@ int MH_ModeAvailable(int mode) {
     if (!MH_IsOpen() || mode < 0 || mode >= MH_MODE_COUNT || status[3] < modes[mode].version) {
         return 0;
     }
-    return mode < MH_MODE_800x600 || (status[2] & STATUS_VGA31) != 0;
+    return (mode != MH_MODE_800x600 && mode != MH_MODE_1024x768) || (status[2] & STATUS_VGA31) != 0;
 }
 
 static int frame_bytes(void) {

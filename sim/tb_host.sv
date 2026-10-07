@@ -176,7 +176,7 @@ function integer mode_w(input integer m);
 	mode_w = (m == 0 || m == 3) ? 320 : (m == 5) ? 800 : (m == 6) ? 1024 : 640;
 endfunction
 function integer mode_h(input integer m);
-	mode_h = (m == 2) ? 400 : (m == 3) ? 240 : (m == 4) ? 480 : (m == 5) ? 600 : (m == 6) ? 768 : 200;
+	mode_h = (m == 2) ? 400 : (m == 3 || m == 7) ? 240 : (m == 4) ? 480 : (m == 5) ? 600 : (m == 6) ? 768 : 200;
 endfunction
 // word index of a framebuffer: 1024x768 has its own, larger ones
 function integer fb_word(input integer m, input integer fb);
@@ -482,6 +482,8 @@ initial begin
 	test_mode(2, 1, 400, 800, 800 * 525, 0);
 	// 320x240, 640x480 interlaced and at 31kHz
 	test_mode(3, 0, 240, 400, 400 * 262, 0);
+	// 640x240
+	test_mode(7, 0, 240, 800, 800 * 262, 0);
 	test_mode(4, 0, 240, 800, 800 * 525 / 2, 1);
 	test_mode(4, 1, 480, 800, 800 * 525, 0);
 	// 800x600 at 40MHz, 1024x768 at 65MHz
@@ -525,7 +527,7 @@ initial begin
 	if (!lace || fast || vs_period != 800 * 525 / 2) begin $display("FAIL: 640x480 to interlaced"); errors = errors + 1; end
 
 	// a mode the core does not have is 320x200
-	cur_vmode = 7;
+	cur_vmode = 8;
 	set_ctrl(2, 1, 0, 10);
 	wait_fields(4);
 	if (hs_period != 400 || mem[9][15:12] != 0) begin $display("FAIL: unknown mode"); errors = errors + 1; end
