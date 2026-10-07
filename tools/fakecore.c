@@ -70,7 +70,10 @@ static void tick(void) {
     c2 = ctrl[2];
     ctrl_valid = c0 == CTRL_MAGIC;
     audio_en = ctrl_valid && ((c1 >> 24) & 1);
-    if (ctrl_valid) {
+    if (!ctrl_valid) {
+        // no game: the core's own picture, 320x240
+        fb_mode = 3;
+    } else {
         fb_index = (c1 & 0xff) > 2 ? 0 : (c1 & 3);
         fb_format = (c1 >> 8) & 1;
         fb_mode = (c1 >> 12) & 15;
@@ -102,7 +105,7 @@ static void tick(void) {
     field++;
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (vga31 << 16) | (1 << 17)
         | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3) << 18);
-    status[3] = 6;
+    status[3] = 7;
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }
@@ -125,11 +128,10 @@ static void screenshot(const char* path) {
     for (i = 0; i < width * height; i++) {
         uint8_t rgb[3] = { 0, 0, 0 };
         if (!ctrl_valid) {
-            // the core's colour bars
-            int bar = (i % width) / (width / 5);
-            rgb[0] = (bar & 2) ? 0xC0 : 0;
-            rgb[1] = (bar & 4) ? 0xC0 : 0;
-            rgb[2] = (bar & 1) ? 0xC0 : 0;
+            // the background of the core's picture (WALL_BG of hybrid_host.sv)
+            rgb[0] = 0x7F;
+            rgb[1] = 0x30;
+            rgb[2] = 0xA0;
         } else if (fb_format) {
             uint16_t p = fb[i * 2] | (fb[i * 2 + 1] << 8);
             rgb[0] = (p >> 11) << 3 | (p >> 13);

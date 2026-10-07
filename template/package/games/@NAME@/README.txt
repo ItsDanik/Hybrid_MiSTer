@@ -14,7 +14,7 @@ Requirements
     the core is loaded, keeps running after a reboot, and serves all our
     hybrid cores. Every hybrid core brings the launcher along and the
     newest version is the one that runs, so it never has to be run again
-    after an update. Without it the core only shows colour bars.
+    after an update. Without it the core only shows the MiSTer logo.
   - Game data. It is not included: TODO which copy of the game.
 
 Install

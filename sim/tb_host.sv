@@ -61,7 +61,7 @@ reg  [3:0] crt_hpos = 0, crt_vpos = 0;
 wire [15:0] audio_l, audio_r;
 wire [7:0] r, g, b;
 
-hybrid_host dut
+hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_TEXT("rtl/hybrid_wall_text.hex")) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
@@ -217,7 +217,46 @@ integer cur_fb = 0, cur_mode = 0, cur_slot = 1;
 integer px = 0, py = 0;
 integer errors = 0, checked = 0;
 integer fields_seen = 0;
-integer check_enable = 0, check_black = 0;
+integer check_enable = 0, check_black = 0, check_wall = 0;
+// the picture without a game: the logo in the middle, the text 10 pixels
+// from the bottom right corner, on a screen of wall_w x wall_h that has one
+// pixel for 1 << wall_sx by 1 << wall_sy of the mode
+reg  [3:0] wall[0:15615];
+reg [23:0] wall_pal[0:15];
+reg [95:0] wall_text[0:7];
+integer wall_w = 320, wall_h = 240, wall_sx = 0, wall_sy = 0;
+initial begin
+	$readmemh("rtl/hybrid_wall.hex", wall);
+	$readmemh("rtl/hybrid_wall_pal.hex", wall_pal);
+	$readmemh("rtl/hybrid_wall_text.hex", wall_text);
+end
+function [23:0] wall_exp(input integer wx, input integer wy);
+	integer lx, ly, tx, ty;
+	begin
+		lx = wx - (wall_w - 244) / 2;
+		ly = wy - (wall_h - 64) / 2;
+		tx = wx - (wall_w - 106);
+		ty = wy - (wall_h - 17);
+		if (lx >= 0 && lx < 244 && ly >= 0 && ly < 64) wall_exp = wall_pal[wall[ly * 244 + lx]];
+		else if (tx >= 0 && tx < 96 && ty >= 0 && ty < 7 && wall_text[ty][tx]) wall_exp = 24'hEFEFEF;
+		else wall_exp = 24'h7F30A0;
+	end
+endfunction
+// the picture in a mode the game did not ask for
+task test_wall(input integer m, input integer w, input integer h, input integer sx, input integer sy, input integer rows);
+	begin
+		force dut.vmode = m[3:0];
+		wall_w = w; wall_h = h; wall_sx = sx; wall_sy = sy;
+		wait_fields(5);
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("no game, mode %0d vga31 %0d: checked %0d pixels, %0d errors, rows/field %0d", m, vga31, checked, errors, field_rows);
+		if (field_rows != rows) begin $display("FAIL: picture in mode %0d", m); errors = errors + 1; end
+	end
+endtask
 reg     old_hblank = 1, old_vblank = 1, old_vsync = 0;
 integer ce_count = 0, last_hs_ce = 0, hs_period = 0, last_vs_ce = 0, vs_period = 0;
 reg     old_hsync = 0;
@@ -282,7 +321,7 @@ always @(posedge clk_vid) if (ce_pix) begin
 		if (check_enable) begin : chk
 			reg [23:0] exp;
 			row = lace ? py * 2 + (f1 ? 1 : 0) : py;
-			exp = check_black ? 24'd0 : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
+			exp = check_black ? 24'd0 : check_wall ? wall_exp(px >> wall_sx, py >> wall_sy) : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
 			if ({r, g, b} !== exp) begin
 				if (errors < 10) $display("FAIL: fb %0d px %0d row %0d got %h exp %h", cur_fb, px, row, {r, g, b}, exp);
 				errors = errors + 1;
@@ -346,13 +385,21 @@ endtask
 initial begin
 	$display("tb_host: start");
 	set_ctrl(0, 0, 0, 0);
-	mem[0][31:0] = 0; // invalid control block: test pattern
+	mem[0][31:0] = 0; // invalid control block: the core's picture
 	repeat (20) @(posedge clk);
 	reset = 0;
 
-	// mode 0 from framebuffer index 0
 	wait_fields(1);
 	if (dut.ctrl_valid) begin $display("FAIL: ctrl valid without magic"); $finish; end
+	check_wall = 1;
+	check_enable = 1;
+	wait_fields(2);
+	check_enable = 0;
+	check_wall = 0;
+	$display("no game: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
+	if (checked != 2 * 76800 || field_rows != 240 || hs_period != 400) begin $display("FAIL: picture without a game"); $finish; end
+
+	// mode 0 from framebuffer index 0
 	set_ctrl(0, 0, 1, 7);
 	cur_fb = 0; cur_mode = 0; cur_slot = 1;
 	// key press and joystick for the status block
@@ -560,6 +607,43 @@ initial begin
 	if (mem[24][31:0] < aud_samples || mem[24][31:0] > aud_samples + 200) begin
 		$display("FAIL: audio fetch pointer"); errors = errors + 1;
 	end
+
+	// the game leaves in 640x400 interlaced: back to 320x240 and the core's picture
+	cur_vmode = 2;
+	fill(2);
+	set_ctrl(0, 0, 0, 10);
+	wait_fields(6);
+	if (!lace) begin $display("FAIL: 640x400 before the game leaves"); errors = errors + 1; end
+	mem[0][31:0] = 0;
+	wait_fields(4);
+	checked = 0;
+	check_wall = 1;
+	check_enable = 1;
+	wait_fields(2);
+	check_enable = 0;
+	check_wall = 0;
+	$display("game left: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
+	if (checked != 2 * 76800 || lace || hires || field_rows != 240 || hs_period != 400 || mem[9][15:12] != 3 || mem[9][10]) begin
+		$display("FAIL: picture after the game left"); errors = errors + 1;
+	end
+	// the picture is the same in every other mode
+	test_wall(0, 320, 200, 0, 0, 200);
+	test_wall(1, 320, 200, 1, 0, 200);
+	test_wall(2, 320, 200, 1, 0, 200);
+	if (!lace) begin $display("FAIL: picture, interlaced"); errors = errors + 1; end
+	vga31 = 1;
+	test_wall(2, 320, 200, 1, 1, 400);
+	test_wall(4, 320, 240, 1, 1, 480);
+	test_wall(5, 400, 300, 1, 1, 600);
+	test_wall(6, 512, 384, 1, 1, 768);
+	release dut.vmode;
+	wait_fields(3);
+	vga31 = 0;
+	wall_w = 320; wall_h = 240; wall_sx = 0; wall_sy = 0;
+	wait_fields(4);
+	if (field_rows != 240 || hs_period != 400 || mem[9][15:12] != 3) begin $display("FAIL: 320x240 without a game"); errors = errors + 1; end
+	if (short_lines != 0 || unmasked_lines != 0) errors = errors + 1;
+
 	if (errors != 0) $display("FAIL: %0d errors", errors);
 	else $display("PASS");
 	$finish;

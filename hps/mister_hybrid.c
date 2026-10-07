@@ -287,7 +287,7 @@ void MH_Close(void) {
     stop_present_thread();
     if (shm != NULL) {
         if (!detached && corename_matches()) {
-            // back to the core's test pattern, audio off. Not once another
+            // back to the core's own picture, audio off. Not once another
             // core is loaded: the memory is its own then
             ctrl_enabled = 0;
             audio_enabled = 0;
@@ -435,7 +435,7 @@ void MH_SetFormat(int format) {
     present_flush();
     // A game that changes the format while it runs (8 bit for one screen,
     // RGB565 for another) goes through black (pixel 0), as in MH_SetMode():
-    // not through the old frames read in the new format, nor the test pattern
+    // not through the old frames read in the new format, nor the core's picture
     blank_framebuffers(fb_mode);
     fb_format = format;
     write_ctrl();

@@ -112,7 +112,7 @@ int MH_CheckAlive(void);
 int MH_CoreReloaded(void);
 const char* MH_CoreName(void);
 
-// Video. The picture stays on the core's test pattern until the first frame.
+// Video. The core shows its own picture (the MiSTer logo) until the first frame.
 // A change of format later on blanks the screen until the next frame.
 void MH_SetFormat(int format);
 // 1 if the core can show the mode right now: it is new enough and, for

@@ -143,7 +143,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 **Behaviour**
 
 - Loading the core starts the game; there is no file to pick in the OSD.
-- Until the game shows its first frame the core shows colour bars, so a core without its game is recognisable.
+- Until the game shows its first frame, and after it left, the core is in 320x240 and shows a picture of its own: the MiSTer logo in the middle of a purple screen and "danik HCF vN" (N is the host version) at the bottom right, 10 pixels from the edges. So a core without its game is recognisable. The picture is in the FPGA: `tools/make_wall.py` makes `rtl/hybrid_wall*.hex` from the logo (a PNG of 244x64 that is not in the repository) and the `VERSION` of `hybrid_host.sv`; run it again when that changes.
 - A game with several data sets (or nothing but a choice to make before it starts) asks with `MH_UI_Menu()`. Problems the player can fix (missing data) are shown with `MH_UI_Message()` in plain words that say which files go where, never left in the log only.
 - Quitting from the game's menu returns to the MiSTer menu (or to the game list if the player came from it). The launcher loads the menu core only if `/tmp/CORENAME` still names this core.
 - The game leaves when another core is loaded (`MH_CheckAlive()`, `SDL_QUIT`) and never touches the shared memory afterwards.

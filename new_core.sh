@@ -68,5 +68,5 @@ $NAME is set up in $ROOT. Next:
     in danik_hybrid_launch.sh (MISTER_HYBRID_JN).
   - README.md and package/games/$NAME/README.txt: every TODO
   - hybrid/README.md has the conventions; ./core/build_core.sh builds the core
-    as it is (colour bars until a game shows a frame).
+    as it is (the MiSTer logo until a game shows a frame).
 END

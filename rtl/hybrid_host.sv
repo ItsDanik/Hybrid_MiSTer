@@ -8,6 +8,11 @@
 //  comes from a ring in the same memory and input state is published back
 //  through it. The HPS side of this protocol is hybrid/hps/mister_hybrid.c.
 //
+//  While no game is attached (no valid control block) the core is in
+//  320x240 and shows a picture of its own: a logo in the middle of the screen
+//  and the version of this module in the bottom right corner (see "Picture
+//  without a game" below).
+//
 //  Two clocks: `clk` (50MHz) for the DDR3 side, audio and input, and
 //  `clk_vid` for the video output, made here by hybrid_vclk.sv.
 //
@@ -67,6 +72,13 @@
 //============================================================================
 
 module hybrid_host
+#(
+	// the picture without a game: logo, its colours and the text. Quartus
+	// reads them from the project's directory, core/
+	parameter WALL      = "../hybrid/rtl/hybrid_wall.hex",
+	parameter WALL_PAL  = "../hybrid/rtl/hybrid_wall_pal.hex",
+	parameter WALL_TEXT = "../hybrid/rtl/hybrid_wall_text.hex"
+)
 (
 	input             clk,          // 50MHz
 	input             reset,
@@ -136,7 +148,8 @@ module hybrid_host
 
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
-localparam [31:0] VERSION      = 32'd6;
+// the picture without a game has the version in it: run tools/make_wall.py
+localparam [31:0] VERSION      = 32'd7;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -186,7 +199,7 @@ assign ddr_be = 8'hFF;
 // Changes within a class (320 or 640 wide, 200 or 240 lines, positions) are
 // taken when the next field starts.
 
-reg  [3:0] vmode = 0;         // the mode the HPS asks for
+reg  [3:0] vmode = 4'd3;      // the mode the HPS asks for; 320x240 without a game
 
 wire       m_dual = (vmode == 4'd2) || (vmode == 4'd4);
 wire       m_hi   = (vmode == 4'd5) || (vmode == 4'd6);
@@ -436,6 +449,68 @@ end
 // RGB565 pixels skip the palette
 reg [15:0] pix16;
 always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
+
+//////////////////////////////////////////////////////////////////
+// Picture without a game
+//
+// A logo of 244x64 in the middle of the screen, on a background of one
+// colour, and the text "danik HCF v<VERSION>" in the bottom right corner, 10
+// pixels from the edges: a 15kHz screen does not show all of the picture.
+// tools/make_wall.py makes the three files. The core is in 320x240 then, but
+// this works in every mode: the picture is laid out on a screen of 320
+// pixels in a line, with 2x2 pixels of the mode for one of it from 640x400
+// on (800x600 and 1024x768 get 400x300 and 512x384 of them).
+
+localparam [23:0] WALL_BG  = 24'h7F30A0;   // BACKGROUND of make_wall.py
+localparam [23:0] WALL_INK = 24'hEFEFEF;   // the text
+
+reg  [3:0] wall[0:15615];     // 244 x 64, 4 bits per pixel
+reg [23:0] wall_pal[0:15];
+reg [95:0] wall_text[0:7];    // 96 x 7 and an empty row, bit 0 is the leftmost pixel
+initial begin
+	$readmemh(WALL, wall);
+	$readmemh(WALL_PAL, wall_pal);
+	$readmemh(WALL_TEXT, wall_text);
+end
+
+// position on the screen the picture is laid out on, and its size
+wire        wall_x2 = w640 | v_hi;
+wire        wall_y2 = v_fast | v_hi;
+wire  [9:0] wall_hc = wall_x2 ? hc[10:1] : hc[9:0];
+wire  [9:0] wall_vc = wall_y2 ? {1'b0, vc[9:1]} : vc;
+wire  [9:0] wall_w  = !v_hi ? 10'd320 : xl ? 10'd512 : 10'd400;
+wire  [9:0] wall_h  = v_hi ? (xl ? 10'd384 : 10'd300) : l240 ? 10'd240 : 10'd200;
+// relative to the logo and to the text
+wire  [9:0] logo_x  = wall_hc - (wall_w - 10'd244) / 2;
+wire  [9:0] logo_y  = wall_vc - (wall_h - 10'd64) / 2;
+wire  [9:0] text_x  = wall_hc - (wall_w - 10'd106);
+wire  [9:0] text_y  = wall_vc - (wall_h - 10'd17);
+
+// The row is worked out a clock after the line starts, which no pixel of the
+// logo or the text is near. Then, as for a pixel of the game: the address,
+// the pixel of the logo, and its colour when the output takes it.
+reg         logo_row_in, text_row_in;
+reg  [13:0] logo_row;         // address of the first pixel of the row
+reg  [95:0] text_row;
+reg         logo_in, logo_in_d, text_on, text_on_d;
+reg  [13:0] wall_addr;
+reg   [3:0] wall_q;
+wire [23:0] wall_rgb = logo_in_d ? wall_pal[wall_q] : text_on_d ? WALL_INK : WALL_BG;
+
+always @(posedge clk_vid) begin
+	logo_row_in <= (logo_y < 10'd64);
+	logo_row    <= logo_y[5:0] * 8'd244;
+	text_row_in <= (text_y < 10'd7);
+	text_row    <= wall_text[text_y[2:0]];
+
+	logo_in   <= logo_row_in && (logo_x < 10'd244);
+	wall_addr <= logo_row + logo_x[7:0];
+	text_on   <= text_row_in && (text_x < 10'd96) && text_row[text_x[6:0]];
+
+	logo_in_d <= logo_in;
+	wall_q    <= wall[wall_addr];
+	text_on_d <= text_on;
+end
 
 //////////////////////////////////////////////////////////////////
 // Audio
@@ -697,6 +772,8 @@ always @(posedge clk) begin
 					// a mode the core does not have is 320x200
 					vmode    <= (ctrl_w0[47:44] > 4'd6) ? 4'd0 : ctrl_w0[47:44];
 				end
+				// no game: the core's picture, in 320x240
+				else vmode <= 4'd3;
 				if (ctrl_w0[31:0] == CTRL_MAGIC && (!pal_loaded || ctrl_w1[31:0] != pal_seq)) begin
 					pal_loaded   <= 1;
 					pal_seq      <= ctrl_w1[31:0];
@@ -758,7 +835,8 @@ end
 // Pixel pipeline (clk_vid)
 //
 // ce edge E0: counters advance. One clock later the line buffer word is
-// read, another one later the palette (or the RGB565 pixel is selected).
+// read, another one later the palette (or the RGB565 pixel is selected, or
+// the pixel of the core's own picture is there).
 // RGB and syncs for the same pixel are registered at the first ce after
 // that: the next one at 15kHz, the second one at 31kHz, where a ce comes
 // every other clock, and the third one where every clock has one. Blanking
@@ -768,15 +846,12 @@ wire       hbl_now    = (hc >= H_ACTIVE);
 wire       vbl_now    = (vc >= V_ACTIVE);
 wire       hs_now     = (hc >= HS_START && hc < HS_END);
 wire       vs_now     = (vc >= VS_START && vc < VS_END);
-// test pattern (colour bars) until the HPS side publishes a valid control block
-wire [2:0] bar_now    = (w640 | v_hi) ? hc[9:7] : hc[8:6];
 
-wire [6:0] now = {hbl_now, vbl_now, hs_now, vs_now, bar_now};
-reg  [6:0] now_d1, now_d2;
-wire [6:0] out = v_hi ? now_d2 : v_fast ? now_d1 : now;
+wire [3:0] now = {hbl_now, vbl_now, hs_now, vs_now};
+reg  [3:0] now_d1, now_d2;
+wire [3:0] out = v_hi ? now_d2 : v_fast ? now_d1 : now;
 wire       o_hbl, o_vbl, o_hs, o_vs;
-wire [2:0] bar;
-assign {o_hbl, o_vbl, o_hs, o_vs, bar} = out;
+assign {o_hbl, o_vbl, o_hs, o_vs} = out;
 
 always @(posedge clk_vid) byte_sel <= hc[2:0];
 
@@ -799,9 +874,8 @@ always @(posedge clk_vid) begin
 		if (o_hbl | o_vbl | v_off) begin
 			{r, g, b} <= 24'd0;
 		end else if (!v_valid) begin
-			r <= bar[1] ? 8'hC0 : 8'h00;
-			g <= bar[2] ? 8'hC0 : 8'h00;
-			b <= bar[0] ? 8'hC0 : 8'h00;
+			// the core's picture until the HPS side publishes a valid control block
+			{r, g, b} <= wall_rgb;
 		end else if (v_fmt16) begin
 			r <= {pix16[15:11], pix16[15:13]};
 			g <= {pix16[10:5], pix16[10:9]};
@@ -813,8 +887,8 @@ always @(posedge clk_vid) begin
 
 	// off: no sync, black
 	if (vrst) begin
-		now_d1 <= 7'b1100000;
-		now_d2 <= 7'b1100000;
+		now_d1 <= 4'b1100;
+		now_d2 <= 4'b1100;
 		hblank <= 1;
 		vblank <= 1;
 		hsync  <= 0;
