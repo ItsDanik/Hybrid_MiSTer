@@ -24,4 +24,4 @@ This file is in `hybrid/`, the [Hybrid_MiSTer](https://github.com/ItsDanik/Hybri
 - Script names on the MiSTer keep the `danik_` prefix.
 - MiSTer Frontier by MiSTer Organize is credited and thanked for the inspiration in every core's `README.md`, package `README.txt` and launch script header. Our launcher does not depend on it.
 - Game data is never committed or shipped.
-- Releases: `<Name>_YYYYMMDD.zip` from `./package.sh`, copied to `releases/` and committed. No git tags or GitHub releases.
+- Releases: `<Name>_YYYYMMDD.zip` from `./package.sh`, copied to `releases/` and committed. "Commit, push, release" (or just "release") also means a GitHub release, without asking: tag `<Name>_YYYYMMDD`, title `<Name> YYYYMMDD`, the zip attached, marked pre-release while the core's README calls it a beta, with notes that say what is new and how to update and install.
