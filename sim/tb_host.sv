@@ -218,13 +218,15 @@ integer px = 0, py = 0;
 integer errors = 0, checked = 0;
 integer fields_seen = 0;
 integer check_enable = 0, check_black = 0, check_wall = 0;
-// the picture without a game: the logo in the middle, the text 10 pixels
-// from the bottom right corner, on a screen of wall_w x wall_h that has one
-// pixel for 1 << wall_sx by 1 << wall_sy of the mode
+// the picture without a game: the logo in the middle, the text 24 pixels
+// from the right edge and 20 lines from the bottom, on a screen of wall_w x
+// wall_h that has one pixel for 1 << wall_sx by 1 << wall_sy of the mode.
+// Its colours are at wall_lvl of 256, the level the core had when the field
+// started (the levels themselves are checked where the picture fades).
 reg  [3:0] wall[0:15615];
 reg [23:0] wall_pal[0:15];
 reg [95:0] wall_text[0:7];
-integer wall_w = 320, wall_h = 240, wall_sx = 0, wall_sy = 0;
+integer wall_w = 320, wall_h = 240, wall_sx = 0, wall_sy = 0, wall_lvl = 0;
 initial begin
 	$readmemh("rtl/hybrid_wall.hex", wall);
 	$readmemh("rtl/hybrid_wall_pal.hex", wall_pal);
@@ -232,16 +234,45 @@ initial begin
 end
 function [23:0] wall_exp(input integer wx, input integer wy);
 	integer lx, ly, tx, ty;
+	reg [23:0] c;
 	begin
 		lx = wx - (wall_w - 244) / 2;
 		ly = wy - (wall_h - 64) / 2;
-		tx = wx - (wall_w - 106);
-		ty = wy - (wall_h - 17);
-		if (lx >= 0 && lx < 244 && ly >= 0 && ly < 64) wall_exp = wall_pal[wall[ly * 244 + lx]];
-		else if (tx >= 0 && tx < 96 && ty >= 0 && ty < 7 && wall_text[ty][tx]) wall_exp = 24'hEFEFEF;
-		else wall_exp = 24'h7F30A0;
+		tx = wx - (wall_w - 96 - 24);
+		ty = wy - (wall_h - 7 - 20);
+		if (lx >= 0 && lx < 244 && ly >= 0 && ly < 64) c = wall_pal[wall[ly * 244 + lx]];
+		else if (tx >= 0 && tx < 96 && ty >= 0 && ty < 7 && wall_text[ty][tx]) c = 24'hEFEFEF;
+		else c = 24'h7F30A0;
+		wall_exp[23:16] = c[23:16] * wall_lvl / 256;
+		wall_exp[15:8]  = c[15:8] * wall_lvl / 256;
+		wall_exp[7:0]   = c[7:0] * wall_lvl / 256;
 	end
 endfunction
+// The picture fades in: the fields of black it still has to wait, then 6 of
+// 256 more with every field up to the full picture, 43 fields, all of it
+// checked. What the core has counted is read in the middle of a field, when
+// nothing changes.
+task test_fade_in;
+	integer n, bad, hold;
+	begin
+		bad = 0;
+		check_wall = 1;
+		check_enable = 1;
+		@(negedge vblank);
+		repeat (50) @(posedge clk);
+		hold = dut.wall_hold;
+		for (n = 1; n <= hold + 45; n = n + 1) begin
+			@(negedge vblank);
+			repeat (50) @(posedge clk);
+			if (wall_lvl != ((n <= hold) ? 0 : (n - hold > 42) ? 256 : 6 * (n - hold))) bad = bad + 1;
+		end
+		wait_fields(1);
+		check_enable = 0;
+		check_wall = 0;
+		$display("fade in: %0d errors, %0d fields at another level, level %0d", errors, bad, wall_lvl);
+		if (bad != 0 || wall_lvl != 256) begin $display("FAIL: fade in"); errors = errors + 1; end
+	end
+endtask
 // the picture in a mode the game did not ask for
 task test_wall(input integer m, input integer w, input integer h, input integer sx, input integer sy, input integer rows);
 	begin
@@ -313,6 +344,7 @@ always @(posedge clk_vid) if (ce_pix) begin
 	old_vblank <= vblank;
 	if (!vblank && old_vblank) begin
 		py = 0;
+		wall_lvl = dut.wall_level;
 	end
 	if (!hblank && old_hblank) px = 0;
 	if (hblank && !old_hblank) hbl_ce = ce_count;
@@ -384,8 +416,9 @@ endtask
 
 initial begin
 	$display("tb_host: start");
+	// a control block that a game left behind: the core clears its magic
+	// when it starts and shows its picture
 	set_ctrl(0, 0, 0, 0);
-	mem[0][31:0] = 0; // invalid control block: the core's picture
 	repeat (20) @(posedge clk);
 	reset = 0;
 
@@ -398,13 +431,47 @@ initial begin
 	check_wall = 0;
 	$display("no game: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
 	if (checked != 2 * 76800 || field_rows != 240 || hs_period != 400) begin $display("FAIL: picture without a game"); $finish; end
+	if (mem[0][31:0] != 0) begin $display("FAIL: magic of an earlier game not cleared: %h", mem[0]); errors = errors + 1; end
+	while (dut.ctrl_clear != 0) wait_fields(1);
+	wait_fields(1);
+	// black for 16 fields in all, then it fades in
+	if (wall_lvl != 0) begin $display("FAIL: picture not black at first"); errors = errors + 1; end
+	test_fade_in;
 
-	// mode 0 from framebuffer index 0
-	set_ctrl(0, 0, 1, 7);
+	// mode 0 from framebuffer index 0. The picture fades out first, in 43
+	// fields and still in 320x240; the game gets the screen after a black one.
+	begin : fade_out
+		integer n, bad;
+		bad = 0;
+		n = 0;
+		check_wall = 1;
+		check_enable = 1;
+		// in the middle of a field: the next vblank reads it
+		@(negedge vblank);
+		repeat (50) @(posedge clk);
+		set_ctrl(0, 0, 1, 7);
+		wait_fields(1);
+		repeat (5000) @(posedge clk);
+		while (!dut.game_on && n < 60) begin
+			@(negedge vblank);
+			repeat (50) @(posedge clk);
+			n = n + 1;
+			if (wall_lvl != ((n > 42) ? 0 : 256 - 6 * n)) bad = bad + 1;
+			if (!mem[9][10] || mem[9][19] || mem[9][15:12] != 3 || field_rows != 240) bad = bad + 1;
+			wait_fields(1);
+			// the control block is read early in the vblank
+			repeat (5000) @(posedge clk);
+		end
+		check_enable = 0;
+		check_wall = 0;
+		$display("fade out: %0d errors, %0d fields, %0d of them wrong", errors, n, bad);
+		if (n != 43 || bad != 0 || wall_lvl != 0) begin $display("FAIL: fade out"); errors = errors + 1; end
+	end
 	cur_fb = 0; cur_mode = 0; cur_slot = 1;
 	// key press and joystick for the status block
 	ps2_key = {~ps2_key[10], 1'b1, 1'b1, 8'h75}; // extended up arrow pressed
 	wait_fields(2);
+	if (!mem[9][19]) begin $display("FAIL: status without the game bit"); errors = errors + 1; end
 	check_enable = 1;
 	wait_fields(2);
 	check_enable = 0;
@@ -625,9 +692,14 @@ initial begin
 	check_enable = 0;
 	check_wall = 0;
 	$display("game left: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
-	if (checked != 2 * 76800 || lace || hires || field_rows != 240 || hs_period != 400 || mem[9][15:12] != 3 || mem[9][10]) begin
+	if (checked != 2 * 76800 || lace || hires || field_rows != 240 || hs_period != 400 || mem[9][15:12] != 3 || mem[9][10] || mem[9][19]) begin
 		$display("FAIL: picture after the game left"); errors = errors + 1;
 	end
+	// it starts from black again, and stays black for 3 seconds (180 fields)
+	// this time; the fields do not count while the output is off for the
+	// change from interlaced
+	if (wall_lvl != 0 || dut.wall_hold < 170) begin $display("FAIL: picture not black after the game left"); errors = errors + 1; end
+	test_fade_in;
 	// the picture is the same in every other mode
 	test_wall(0, 320, 200, 0, 0, 200);
 	test_wall(1, 320, 200, 1, 0, 200);
@@ -655,7 +727,7 @@ end
 // Audio checker: every output sample must be the next ring frame
 
 integer aud_next = -1, aud_samples = 0, aud_errors = 0;
-integer aud_first_tick_time = 0, aud_last_tick_time = 0;
+time    aud_first_tick_time = 0, aud_last_tick_time = 0;
 reg     aud_check = 0;
 always @(posedge clk) if (dut.aud_tick2 && dut.audio_en) begin
 	// outputs update on this edge, look at them one clock later
@@ -676,7 +748,7 @@ always @(posedge clk) if (dut.aud_tick2 && dut.audio_en) begin
 end
 
 initial begin
-	repeat (10) #2_000_000_000;
+	repeat (18) #2_000_000_000;
 	$display("FAIL: timeout");
 	$finish;
 end

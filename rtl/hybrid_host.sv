@@ -11,7 +11,12 @@
 //  While no game is attached (no valid control block) the core is in
 //  320x240 and shows a picture of its own: a logo in the middle of the screen
 //  and the version of this module in the bottom right corner (see "Picture
-//  without a game" below).
+//  without a game" below). The picture fades in when the core starts and
+//  fades out before the game gets the screen.
+//
+//  A game is attached while the control block has its magic. One that was
+//  killed, or running when the MiSTer was reset, leaves that behind, and the
+//  memory keeps it: the core clears the magic when it starts (ctrl_clear).
 //
 //  Two clocks: `clk` (50MHz) for the DDR3 side, audio and input, and
 //  `clk_vid` for the video output, made here by hybrid_vclk.sv.
@@ -31,8 +36,8 @@
 //              w1[31:0]  palette sequence number (reload when changed)
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
-//              w1  {version, 13'b0, fast, running, vga31, mode[3:0], field,
-//                   ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
+//              w1  {version, 12'b0, game, fast, running, vga31, mode[3:0],
+//                   field, ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
 //                   lace: the mode is shown interlaced.
 //                   field: the field that was on the screen had the even
 //                   rows (the core takes a new frame when it is 0).
@@ -43,6 +48,10 @@
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
+//                   game: the game has the screen. 0 while the core shows
+//                   its own picture, which it still does for 0.7 seconds
+//                   after ctrl_valid became 1: it fades out first (the mode
+//                   is 320x240 until then).
 //              w2  {joystick_1, joystick_0}
 //              w3  {r_analog_1, l_analog_1, r_analog_0, l_analog_0}
 //              w4  OSD status[63:0]
@@ -150,7 +159,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd8;
+localparam [31:0] VERSION      = 32'd9;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -201,7 +210,7 @@ assign ddr_be = 8'hFF;
 // Changes within a class (320 or 640 wide, 200 or 240 lines, positions) are
 // taken when the next field starts.
 
-reg  [3:0] vmode = 4'd3;      // the mode the HPS asks for; 320x240 without a game
+reg  [3:0] vmode = 4'd3;      // the mode the HPS asks for; 320x240 until the game has the screen
 
 wire       m_dual = (vmode == 4'd2) || (vmode == 4'd4);
 wire       m_hi   = (vmode == 4'd5) || (vmode == 4'd6);
@@ -367,7 +376,7 @@ always @(posedge clk_vid) begin
 				v_hpos  <= s_hpos;
 				v_vpos  <= s_vpos;
 				v_fmt16 <= fmt16;
-				v_valid <= ctrl_valid;
+				v_valid <= game_on;
 				field   <= v_lace & ~field;
 			end
 		end else begin
@@ -398,7 +407,7 @@ always @(posedge clk_vid) begin
 		v_hpos  <= s_hpos;
 		v_vpos  <= s_vpos;
 		v_fmt16 <= fmt16;
-		v_valid <= ctrl_valid;
+		v_valid <= game_on;
 		field   <= 0;
 		ce_div  <= 0;
 		hc      <= 0;
@@ -410,6 +419,7 @@ end
 // Control state (latched from DDR during vblank)
 
 reg        ctrl_valid = 0;
+reg        game_on = 0;       // the game has the screen
 reg        audio_en = 0;
 reg  [1:0] fb_index = 0;
 reg        fmt16 = 0;         // RGB565 instead of 8bpp paletted
@@ -456,23 +466,71 @@ always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
 // Picture without a game
 //
 // A logo of 244x64 in the middle of the screen, on a background of one
-// colour, and the text "danik HCF v<VERSION>" in the bottom right corner, 10
-// pixels from the edges: a 15kHz screen does not show all of the picture.
+// colour, and the text "danik HCF v<VERSION>" in the bottom right corner, 24
+// pixels from the right edge and 20 lines from the bottom: a 15kHz screen
+// does not show all of the picture, and some hide a lot of it.
 // tools/make_wall.py makes the three files. The core is in 320x240 then, but
 // this works in every mode: the picture is laid out on a screen of 320
 // pixels in a line, with 2x2 pixels of the mode for one of it from 640x400
 // on (800x600 and 1024x768 get 400x300 and 512x384 of them).
+//
+// The picture fades. It is black for its first 16 fields (wall_hold), which
+// a screen needs to lock to the new signal, and for 3 seconds after a game
+// has left: leaving is mostly on the way to the MiSTer menu, and the picture
+// is not to flash up before that. Then it goes from black to the
+// full picture in 43 fields, 0.7 seconds: wall_level, 0..256, in steps of 6.
+// When a game attaches, the picture goes back to black at the same speed,
+// from wherever it is, and only then the
+// game gets the screen (game_on) and its video mode is set. The colours are
+// not multiplied on their way to the output: the 16 of the logo, the
+// background and the text are worked out for the level of the field in the
+// vblank, on clk, and hold still while the video side reads them.
 
 localparam [23:0] WALL_BG  = 24'h7F30A0;   // BACKGROUND of make_wall.py
 localparam [23:0] WALL_INK = 24'hEFEFEF;   // the text
+localparam  [9:0] WALL_MARGIN_X = 10'd24;  // of the text, from the right edge
+localparam  [9:0] WALL_MARGIN_Y = 10'd20;  // and from the bottom
+localparam  [7:0] WALL_HOLD = 8'd16;       // fields of black before the picture fades in
+localparam  [7:0] WALL_HOLD_LEFT = 8'd180; // the same after a game has left
+localparam  [8:0] WALL_STEP = 9'd6;        // of the level, per field
 
 reg  [3:0] wall[0:15615];     // 244 x 64, 4 bits per pixel
 reg [23:0] wall_pal[0:15];
 reg [95:0] wall_text[0:7];    // 96 x 7 and an empty row, bit 0 is the leftmost pixel
+reg [23:0] wall_fpal[0:15];   // wall_pal at the level of this field
+integer    wall_n;
 initial begin
 	$readmemh(WALL, wall);
 	$readmemh(WALL_PAL, wall_pal);
 	$readmemh(WALL_TEXT, wall_text);
+	for (wall_n = 0; wall_n < 16; wall_n = wall_n + 1) wall_fpal[wall_n] = 24'd0;
+end
+
+reg  [7:0] wall_hold = WALL_HOLD;   // fields of black still to come
+reg  [8:0] wall_level = 0;    // 0..256
+reg        fade_start = 0;    // wall_level changed (set in the vblank)
+reg  [4:0] fade_n = 0;
+reg [23:0] wall_bg = 0, wall_ink = 0;
+
+function [7:0] fade8(input [7:0] c, input [8:0] level);
+	reg [16:0] p;
+	begin
+		p = c * level;
+		fade8 = p[15:8];
+	end
+endfunction
+function [23:0] fade(input [23:0] rgb, input [8:0] level);
+	fade = {fade8(rgb[23:16], level), fade8(rgb[15:8], level), fade8(rgb[7:0], level)};
+endfunction
+
+always @(posedge clk) begin
+	wall_bg  <= fade(WALL_BG, wall_level);
+	wall_ink <= fade(WALL_INK, wall_level);
+	if (!fade_n[4]) begin
+		wall_fpal[fade_n[3:0]] <= fade(wall_pal[fade_n[3:0]], wall_level);
+		fade_n <= fade_n + 1'd1;
+	end
+	if (fade_start) fade_n <= 0;
 end
 
 // position on the screen the picture is laid out on, and its size
@@ -485,8 +543,8 @@ wire  [9:0] wall_h  = v_hi ? (xl ? 10'd384 : 10'd300) : l240 ? 10'd240 : 10'd200
 // relative to the logo and to the text
 wire  [9:0] logo_x  = wall_hc - (wall_w - 10'd244) / 2;
 wire  [9:0] logo_y  = wall_vc - (wall_h - 10'd64) / 2;
-wire  [9:0] text_x  = wall_hc - (wall_w - 10'd106);
-wire  [9:0] text_y  = wall_vc - (wall_h - 10'd17);
+wire  [9:0] text_x  = wall_hc - (wall_w - 10'd96 - WALL_MARGIN_X);
+wire  [9:0] text_y  = wall_vc - (wall_h - 10'd7 - WALL_MARGIN_Y);
 
 // The row is worked out a clock after the line starts, which no pixel of the
 // logo or the text is near. Then, as for a pixel of the game: the address,
@@ -497,7 +555,7 @@ reg  [95:0] text_row;
 reg         logo_in, logo_in_d, text_on, text_on_d;
 reg  [13:0] wall_addr;
 reg   [3:0] wall_q;
-wire [23:0] wall_rgb = logo_in_d ? wall_pal[wall_q] : text_on_d ? WALL_INK : WALL_BG;
+wire [23:0] wall_rgb = logo_in_d ? wall_fpal[wall_q] : text_on_d ? wall_ink : wall_bg;
 
 always @(posedge clk_vid) begin
 	logo_row_in <= (logo_y < 10'd64);
@@ -606,8 +664,13 @@ localparam S_STAT      = 4;
 localparam S_LINE_WAIT = 5;
 localparam S_AUD_WAIT  = 6;
 localparam S_AUD_PTR   = 7;
+localparam S_CLEAR     = 8;
 
-reg  [2:0] state = S_IDLE;
+reg  [3:0] state = S_IDLE;
+// The control block is not read before the core has cleared its magic, in
+// its first 4 vblanks (more than once: the memory may not be there for the
+// very first write). Only when the core starts, not with a reset.
+reg  [2:0] ctrl_clear = 3'd4;
 reg        line_req = 0;
 reg        vbl_req = 0;
 reg  [9:0] fetch_row;
@@ -631,11 +694,15 @@ wire  [7:0] line_burst = (row_len > 9'd200) ? 8'd128 : row_len[7:0];
 wire [28:0] fb_addr = (s_mode == 4'd6) ? FB_XL_ADDR + {9'd0, fb_index, 18'd0} : FB_ADDR + {10'd0, fb_index, 17'd0};
 wire [28:0] row_addr = fb_addr + fetch_row * row_len;
 
+// the game gets the screen once the core's picture has faded out
+wire       ctrl_magic = (ctrl_w0[31:0] == CTRL_MAGIC);
+wire       game_take  = ctrl_magic && (game_on || wall_level == 0);
+
 reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 13'd0, fast, run, vga31, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 12'd0, game_on, fast, run, vga31, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = osd_status;
@@ -650,6 +717,7 @@ always @(posedge clk) begin
 	lbuf_we <= 0;
 	pal_we <= 0;
 	afifo_we <= 0;
+	fade_start <= 0;
 
 	// requests from the video timing; what comes with them was set before
 	// the request and stays until the next one
@@ -716,6 +784,10 @@ always @(posedge clk) begin
 					ddr_rd       <= 1;
 					state        <= S_AUD_WAIT;
 				end
+				else if (vbl_req && ctrl_clear != 0) begin
+					vbl_req <= 0;
+					state   <= S_CLEAR;
+				end
 				else if (vbl_req) begin
 					vbl_req      <= 0;
 					rd_cnt       <= 0;
@@ -758,25 +830,53 @@ always @(posedge clk) begin
 					state  <= S_IDLE;
 				end
 
+			S_CLEAR:
+				// single beat write, then the status as in every vblank
+				if (!ddr_we) begin
+					ddr_we       <= 1;
+					ddr_addr     <= CTRL_ADDR;
+					ddr_burstcnt <= 8'd1;
+					ddr_din      <= 64'd0;
+				end else begin
+					ddr_we     <= 0;
+					ctrl_clear <= ctrl_clear - 1'd1;
+					wr_beat    <= 0;
+					state      <= S_STAT;
+				end
+
 			S_CTRL_WAIT:
 				if (rd_cnt == rd_len) state <= S_CTRL;
 
 			S_CTRL: begin
-				ctrl_valid <= (ctrl_w0[31:0] == CTRL_MAGIC);
-				audio_en <= (ctrl_w0[31:0] == CTRL_MAGIC) && ctrl_w0[56];
-				menumask <= (ctrl_w0[31:0] == CTRL_MAGIC) ? ctrl_w0[63:60] : 4'd0;
-				if (ctrl_w0[31:0] == CTRL_MAGIC) begin
+				ctrl_valid <= ctrl_magic;
+				audio_en <= ctrl_magic && ctrl_w0[56];
+				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
+				game_on  <= game_take;
+				if (ctrl_magic) begin
 					// interlaced, both fields are of the same frame: a new one
 					// is taken when the field with the odd rows has been shown
 					if (!(u_lace && run && vbl_field))
 						fb_index <= (ctrl_w0[39:32] > 8'd2) ? 2'd0 : ctrl_w0[33:32];
 					fmt16    <= ctrl_w0[40];
-					// a mode the core does not have is 320x200
-					vmode    <= (ctrl_w0[47:44] > 4'd7) ? 4'd0 : ctrl_w0[47:44];
 				end
-				// no game: the core's picture, in 320x240
+				// a mode the core does not have is 320x200
+				if (game_take) vmode <= (ctrl_w0[47:44] > 4'd7) ? 4'd0 : ctrl_w0[47:44];
+				// no game, or not on the screen yet: the core's picture, in 320x240
 				else vmode <= 4'd3;
-				if (ctrl_w0[31:0] == CTRL_MAGIC && (!pal_loaded || ctrl_w1[31:0] != pal_seq)) begin
+				// the picture's next field: fading out for a game, black again
+				// when one has left, else fading in while there is an output
+				if (!game_take) begin
+					fade_start <= 1;
+					if (ctrl_magic) wall_level <= (wall_level < WALL_STEP) ? 9'd0 : wall_level - WALL_STEP;
+					else if (game_on) begin
+						wall_hold  <= WALL_HOLD_LEFT;
+						wall_level <= 0;
+					end
+					else if (!run) ;
+					else if (wall_hold != 0) wall_hold <= wall_hold - 1'd1;
+					else wall_level <= (wall_level > 9'd256 - WALL_STEP) ? 9'd256 : wall_level + WALL_STEP;
+				end
+				if (ctrl_magic && (!pal_loaded || ctrl_w1[31:0] != pal_seq)) begin
 					pal_loaded   <= 1;
 					pal_seq      <= ctrl_w1[31:0];
 					rd_cnt       <= 0;
@@ -826,6 +926,10 @@ always @(posedge clk) begin
 		line_req   <= 0;
 		vbl_req    <= 0;
 		ctrl_valid <= 0;
+		game_on    <= 0;
+		wall_hold  <= WALL_HOLD;
+		wall_level <= 0;
+		fade_start <= 1;
 		pal_loaded <= 0;
 		audio_en   <= 0;
 		menumask   <= 0;

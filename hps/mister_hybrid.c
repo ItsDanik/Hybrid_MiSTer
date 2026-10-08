@@ -39,10 +39,12 @@
 #define FB_COUNT 3
 
 // status: the mode is interlaced; the field that was on the screen had the
-// even rows; modes above 15kHz are available
+// even rows; modes above 15kHz are available; the game has the screen (host
+// version 9)
 #define STATUS_LACE (1u << 9)
 #define STATUS_FIELD_EVEN (1u << 11)
 #define STATUS_VGA31 (1u << 16)
+#define STATUS_GAME (1u << 19)
 
 static const struct {
     short width, height;
@@ -68,6 +70,7 @@ static int fb_current;
 static int palette_slot;
 static uint32_t palette_seq;
 static int ctrl_enabled;
+static int screen_ours; // the core's own picture is gone
 static int menu_mask;
 static int audio_enabled;
 // set once the core is gone: another core may own the memory now, never write to it again
@@ -228,6 +231,7 @@ int MH_Open(void) {
     detached = 0;
     reloaded = 0;
     ctrl_enabled = 0;
+    screen_ours = 0;
     audio_enabled = 0;
     fb_mode = MH_MODE_320x200;
     // The core reloads the palette when its sequence number changes, and it
@@ -399,6 +403,21 @@ static void present_flush(void) {
     pthread_mutex_unlock(&present_lock);
 }
 
+// The core fades its own picture out before it shows the first of ours (host
+// version 9), which takes 0.7 seconds. Waiting for that here is what keeps
+// the game from showing its first frames to nobody.
+static void wait_for_screen(void) {
+    int i;
+
+    if (screen_ours || !ctrl_enabled) {
+        return;
+    }
+    for (i = 0; i < 150 && MH_IsOpen() && status[3] >= 9 && !(status[2] & STATUS_GAME); i++) {
+        sleep_ms(10);
+    }
+    screen_ours = 1;
+}
+
 // Clear every framebuffer. The buffer on screen is cleared once the core
 // shows a cleared one. `next_mode` is the mode that is set next: if its
 // framebuffers are others, they are cleared as well.
@@ -475,6 +494,7 @@ void MH_Present(const void* pixels, int pitch) {
     start_present_thread();
     if (!present_threaded) {
         present_to_fpga(src, pitch);
+        wait_for_screen();
         return;
     }
 
@@ -500,6 +520,10 @@ void MH_Present(const void* pixels, int pitch) {
     queue_count++;
     pthread_cond_signal(&present_cond);
     pthread_mutex_unlock(&present_lock);
+    if (!screen_ours) {
+        present_flush();
+        wait_for_screen();
+    }
 }
 
 void MH_SetPalette(const uint32_t* rgb) {
@@ -521,6 +545,7 @@ void MH_SetPalette(const uint32_t* rgb) {
     palette_seq++;
     ctrl_enabled = 1;
     write_ctrl();
+    wait_for_screen();
 }
 
 uint32_t MH_FieldCounter(void) {

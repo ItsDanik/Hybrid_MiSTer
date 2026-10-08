@@ -113,7 +113,10 @@ int MH_CheckAlive(void);
 int MH_CoreReloaded(void);
 const char* MH_CoreName(void);
 
-// Video. The core shows its own picture (the MiSTer logo) until the first frame.
+// Video. The core shows its own picture (the MiSTer logo) until the first
+// frame, and fades it out before that frame is shown: the call that shows it
+// (MH_Present(), or MH_SetPalette() with 8bpp) returns 0.7 seconds later,
+// when the game has the screen.
 // A change of format later on blanks the screen until the next frame.
 void MH_SetFormat(int format);
 // 1 if the core can show the mode right now: it is new enough and, for

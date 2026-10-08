@@ -103,9 +103,10 @@ static void tick(void) {
         }
     }
     field++;
+    // the game has the screen (bit 19) at once: nothing fades here
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (vga31 << 16) | (1 << 17)
-        | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3 && fb_mode != 7) << 18);
-    status[3] = 8;
+        | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3 && fb_mode != 7) << 18) | (ctrl_valid << 19);
+    status[3] = 9;
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }

@@ -16,6 +16,9 @@ while True:
     # host version 6: video mode and how it is shown, the video clock asked for and measured
     mode = "%dx%d%s%s" % (MODES[(st[2] >> 12) & 15] + ("i" if st[2] & 0x200 else "", " off" if not st[2] & 0x20000 else ""))
     line += " mode %s vga31 %d clock %.1f/%.3f MHz" % (mode, (st[2] >> 16) & 1, (st[14] & 0xff) / 2, (st[14] >> 16) / 80)
+    # host version 9: who has the screen (the core's picture fades out before the game gets it)
+    if st[3] >= 9:
+        line += " screen %s" % ("game" if st[2] & 0x80000 else "core, fading out" if st[2] & 0x400 else "core")
     if line != last:
         print("field %d ctrl %08x %08x: %s" % (st[1], ctrl[0], ctrl[1], line), flush=True)
         last = line
