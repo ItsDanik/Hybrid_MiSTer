@@ -169,6 +169,29 @@ void MH_AudioEnable(int enabled);
 // `count` frames. The core's sample clock paces the caller.
 void MH_AudioWrite(const uint32_t* frames, int count, int lead);
 
+// FM chip: a YM3812 (OPL2, the AdLib card's chip) in the core, for games that
+// made their music with one. The game sends the chip's register writes and
+// the core adds the chip's sound to the audio; nothing is worked out on the
+// ARM. A host older than version 10 has no chip: MH_FMAvailable() is 0 and the
+// calls below do nothing, so a game keeps its own way of making the music for
+// that case (or needs the newer core).
+#define MH_FM_RING_WRITES 4096
+int MH_FMAvailable(void);
+// Needs MH_AudioEnable(1) first. Enabling resets the chip and writes zero to
+// all its registers; disabling silences it (and takes two fields).
+void MH_FMEnable(int enabled);
+// 0..127: 32 is the chip as it comes, 127 nearly four times that (held at
+// the limits)
+void MH_FMVolume(int volume);
+// Write `value` to register `reg` (0..255) of the chip. The write is made
+// when audio frame `ahead` of the block the game will queue NEXT with
+// MH_AudioWrite() is played (0 = with its first frame), so music made inside
+// an audio callback keeps its timing to the sample: pass the position in the
+// block being filled, in 44.1kHz frames. Call it from the thread that calls
+// MH_AudioWrite(), or with 0 from anywhere. If the core has 4096 writes
+// waiting (more than a second of the densest music), the write is dropped.
+void MH_FMWrite(int reg, int value, int ahead);
+
 // Screens every hybrid core shares (mister_ui.c), drawn straight to the core;
 // they work before the game has set up anything.
 // A list to pick from, with the keyboard or joystick 1. Returns the index of

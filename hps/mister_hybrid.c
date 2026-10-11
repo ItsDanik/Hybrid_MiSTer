@@ -98,14 +98,21 @@ static struct timespec alive_time;
 
 static uint32_t audio_wr;
 
+// FM chip: ring of register writes at FM_RING_OFFSET, 64 bits each
+// {16'b0, reg, value, audio frame}
+#define FM_RING_OFFSET 0x20000
+static int fm_enabled;
+static int fm_volume = 32;
+static uint32_t fm_wr;
+
 static void write_ctrl(void) {
     // Palette/framebuffer writes must land before the FPGA can see the new control block
     pthread_mutex_lock(&ctrl_lock);
     __sync_synchronize();
     ctrl[2] = palette_seq;
-    ctrl[3] = 0;
+    ctrl[3] = fm_wr;
     ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24)
-        | ((uint32_t)menu_mask << 28);
+        | ((uint32_t)fm_volume << 17) | ((uint32_t)(fm_enabled && audio_enabled) << 25) | ((uint32_t)menu_mask << 28);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
     __sync_synchronize();
     pthread_mutex_unlock(&ctrl_lock);
@@ -233,6 +240,8 @@ int MH_Open(void) {
     ctrl_enabled = 0;
     screen_ours = 0;
     audio_enabled = 0;
+    fm_enabled = 0;
+    fm_wr = 0;
     fb_mode = MH_MODE_320x200;
     // The core reloads the palette when its sequence number changes, and it
     // may know the number an earlier program ended with: count on from there
@@ -295,6 +304,8 @@ void MH_Close(void) {
             // core is loaded: the memory is its own then
             ctrl_enabled = 0;
             audio_enabled = 0;
+            fm_enabled = 0;
+            fm_wr = 0;
             write_ctrl();
         }
         munmap((void*)shm, SHM_SIZE);
@@ -678,6 +689,11 @@ void MH_AudioEnable(int enabled) {
         *(volatile uint32_t*)(shm + AUDIO_PTR_OFFSET) = 0;
         audio_wr = 0;
     }
+    if (!enabled) {
+        // the chip goes with the audio
+        fm_enabled = 0;
+        fm_wr = 0;
+    }
     audio_enabled = enabled;
     write_ctrl();
 }
@@ -752,6 +768,67 @@ void MH_AudioWrite(const uint32_t* frames, int count, int lead) {
         ring[(audio_wr + i) % MH_AUDIO_RING_FRAMES] = frames[i];
     }
     audio_wr += count;
+}
+
+int MH_FMAvailable(void) {
+    return MH_IsOpen() && status[3] >= 10;
+}
+
+void MH_FMVolume(int volume) {
+    fm_volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    if (MH_IsOpen()) {
+        write_ctrl();
+    }
+}
+
+void MH_FMWrite(int reg, int value, int ahead) {
+    volatile uint32_t* ring;
+    uint32_t at;
+
+    if (!MH_IsOpen() || !fm_enabled || !audio_enabled) {
+        return;
+    }
+    // status[15]: the number of writes the core has read
+    if (fm_wr - status[15] >= MH_FM_RING_WRITES - 1) {
+        return;
+    }
+    ring = (volatile uint32_t*)(shm + FM_RING_OFFSET);
+    at = fm_wr % MH_FM_RING_WRITES;
+    ring[at * 2] = audio_wr + (uint32_t)(ahead < 0 ? 0 : ahead);
+    ring[at * 2 + 1] = ((uint32_t)(reg & 0xff) << 8) | (uint32_t)(value & 0xff);
+    __sync_synchronize();
+    // the core reads the count at its next vblank; a count is one word, so
+    // this needs no lock against write_ctrl(), which writes the same number
+    fm_wr++;
+    ctrl[3] = fm_wr;
+}
+
+void MH_FMEnable(int enabled) {
+    int reg;
+
+    enabled = enabled != 0;
+    if (!MH_FMAvailable() || !audio_enabled || enabled == fm_enabled) {
+        return;
+    }
+    if (!enabled) {
+        // the core holds the chip in reset and starts its read count from 0
+        // once it has seen this, at a vblank
+        fm_enabled = 0;
+        write_ctrl();
+        sleep_ms(40);
+        fm_wr = 0;
+        write_ctrl();
+        return;
+    }
+    fm_wr = 0;
+    fm_enabled = 1;
+    write_ctrl();
+    // The chip's reset does not reach the registers of its channels and
+    // operators: clear them all, as an AdLib program does before it plays.
+    // 0x40..0x55 are the operators' levels, where 0x3F is silence.
+    for (reg = 0x01; reg <= 0xF5; reg++) {
+        MH_FMWrite(reg, reg >= 0x40 && reg <= 0x55 ? 0x3F : 0, 0);
+    }
 }
 
 void MH_QuitToMenu(void) {

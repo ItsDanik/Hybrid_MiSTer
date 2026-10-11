@@ -18,6 +18,11 @@ This file is in `hybrid/`, the [Hybrid_MiSTer](https://github.com/ItsDanik/Hybri
 - *HDMI Only* (status bit 0) and the *CRT Options* page (bits 64..76) are in every core's OSD, unchanged.
 - Status bits 0..23 of the OSD mean the same in every core; a game's options start at bit 24.
 
+## FM music
+
+- A game whose music was made for an AdLib / OPL2 chip sends the chip's register writes to the core (`MH_FMWrite()`, host version 10; `hybrid/README.md`, "The FM chip") and does not run a software chip on the ARM, except as the fall-back for a core without the chip.
+- `rtl/jtopl/` is JTOPL commit 7ac0c81 with SIX changes of ours, each marked `HYBRID:` (in `jtopl_op.v` the feedback's strength; `jtopl_eg_final.v` key scaling levels 1 and 2 swapped; `jtopl_eg_step.v` rate scaling halved, and attacks twice too fast; `jtopl_eg_ctrl.v` the release's extra half step; `jtopl_eg_pure.v` the four fastest decays; `jtopl_acc.v` a per-channel volume test its author left in). All were found by comparing with Nuked OPL3, which is taken from the chip's die: `sim/fm_song.sh <log> <out>` plays a log of register writes (`FAKECORE_FMLOG=<file>` makes fakecore write one from a running game) on both with Verilator, 25 seconds of music in 20. Do not edit `rtl/jtopl/` otherwise; when replacing it, carry the changes over or check each is no longer needed, with that tool. Still different from the chip, slightly: attack rates 1 to 3, the shape of the tremolo, and about 2dB less of the upper harmonics of a note that is dying away.
+
 ## Rules
 
 - The launcher `launcher/danik_hybrid_cores.sh` is developed only here. Raise its `VERSION` with every change that reaches users and keep the contract in its header working for cores already released.

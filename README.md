@@ -8,13 +8,14 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 
 | Path | |
 |---|---|
-| `rtl/` | The FPGA side. `hybrid_host.sv`: scanout from DDR3 in the video mode the game sets (8bpp paletted or RGB565, triple buffered), at 15.6kHz / 59.6Hz wherever the mode allows it, 44.1kHz audio ring, keyboard, mouse, joysticks and OSD status published every vblank. Its header documents the shared memory layout and the video timings. `hybrid_vclk.sv` and `pll_vid` make its video clock, which changes with the mode and the CRT options. A core takes all of it with `hybrid.qip`. `sim/run.sh` runs the testbenches. |
+| `rtl/` | The FPGA side. `hybrid_host.sv`: scanout from DDR3 in the video mode the game sets (8bpp paletted or RGB565, triple buffered), at 15.6kHz / 59.6Hz wherever the mode allows it, 44.1kHz audio ring, keyboard, mouse, joysticks and OSD status published every vblank. Its header documents the shared memory layout and the video timings. `hybrid_vclk.sv` and `pll_vid` make its video clock, which changes with the mode and the CRT options. `hybrid_fm.sv` is the FM chip (a YM3812, with [JTOPL](https://github.com/jotego/jtopl) in `rtl/jtopl/`): see [The FM chip](#the-fm-chip). A core takes all of it with `hybrid.qip`. `sim/run.sh` runs the testbenches. |
 | `hps/` | The ARM side as a small C library (`mister_hybrid.h`): attach to the core, present frames, palette, input, audio, the OSD's Menu OK/Back resolution, and the shared screens (game list, error message). |
 | `sdl2/` | SDL2 video, audio and input drivers on top of `hps/`, and the script that builds a static SDL2, SDL2_mixer and SDL2_net with them. An SDL2 game needs little more than a recompile. |
 | `launcher/danik_hybrid_cores.sh` | What starts the games on the MiSTer: a daemon that runs `games/<core name>/danik_hybrid_launch.sh` while that core is loaded. The user runs it once from the Scripts menu; it registers itself in `user-startup.sh`. Its header documents the contract for a `danik_hybrid_launch.sh`. See [The launcher](#the-launcher) for how it reaches the MiSTer and is kept up to date. `make_db.py` builds the Downloader database for it. |
 | `toolchain/` | Docker images: ARM cross compiler matching the MiSTer's glibc, HDL simulation tools. `docker.sh` runs a command in the toolchain. |
 | `template/`, `new_core.sh` | The start of a new core repository: FPGA core, build, package and deploy scripts, launch script and READMEs with the name filled in. See [Porting a game](#porting-a-game). |
-| `tools/fakecore.c` | Stand-in for the FPGA core on the PC: runs the game against a file instead of the DDR3 window, feeds scripted input, takes screenshots and records audio. |
+| `tools/fakecore.c` | Stand-in for the FPGA core on the PC: runs the game against a file instead of the DDR3 window, feeds scripted input, takes screenshots and records audio. Its FM chip is a software one (Nuked OPL3, `tools/nuked/`). |
+| `tools/fmtest.c` | Plays a scale on the FM chip, on the PC with `fakecore` or on the MiSTer: the test that the chip is there and in tune. |
 | `tools/*.py` | For tests on the MiSTer over ssh: `uinput_kbd.py` and `uinput_pad.py` press keys and gamepad buttons through Main_MiSTer, `status.py` prints what the core publishes. |
 
 ## The launcher
@@ -63,6 +64,26 @@ That gives a repository laid out like the other cores, with a core that builds a
 **Frame pacing:** the core shows 59.64 fields per second and takes the newest frame at every vblank (with an interlaced mode at every second one; 800x600 and 1024x768 are 60.3 and 60.0 frames per second). A game that renders at another rate, or by the system clock, drops or repeats frames at regular intervals. Show one frame each time the core takes one: wait with `MH_WaitFrame()` (or the `SDL_MISTER_VSYNC` hint) and take the game's time from `MH_FieldCounter()`, not from the system clock. A game with a fixed logic rate that is not the field rate (Wolfenstein 3D: 70 per second) has to draw between two steps of its logic as well, see the ECWolf core.
 
 **Testing without a MiSTer:** `gcc -o fakecore tools/fakecore.c`, start `fakecore <file> [script]`, then the PC build of the game with `MISTER_HYBRID_SHM=<file>`. It shows every mode as a plain picture: the two forms of a mode, the CRT options and the analog output are the FPGA's and can only be seen on a MiSTer (`tools/status.py` prints the mode and the video clock the core has measured).
+
+## The FM chip
+
+Since host version 10 the core has a YM3812 (OPL2, the chip of the AdLib and Sound Blaster cards) for games that made their music with one. The game does not work the chip out on the ARM: it sends the register writes it would have sent to the card, and the core adds the chip's sound to the game's audio.
+
+```c
+MH_AudioEnable(1);
+if (MH_FMAvailable()) {            // 0 with a core older than host version 10
+    MH_FMEnable(1);                // chip reset, all registers cleared
+    MH_FMWrite(reg, value, ahead); // as often as the music needs
+}
+```
+
+- **Timing is the audio's.** Every write is made when a certain audio frame is played: frame `ahead` of the block the game will queue next (`MH_AudioWrite()`, or the buffer its SDL audio callback is filling: give the position in it, in 44.1kHz frames). So the music keeps time to the sample whatever the game's frame rate does, and stays in step with the sound effects. A game that makes its music outside the audio path passes 0, "now".
+- **A game with a software chip of its own** (DOSBox's, Nuked, MAME's) sends what it would have written into that to `MH_FMWrite()` and no longer runs it. It keeps the software chip for a core without one.
+- The chip is mono and goes to both sides. `MH_FMVolume()` sets its level (32 = as it comes, up to 127 = four times); the OSD's *Music Volume* is the game's to apply with it.
+- 4096 writes can wait in the core; one more is dropped. No music comes near that.
+- An OPL3 is not there: JTOPL's is not finished. Music written for two operators and nine channels, which is all an AdLib has, needs no more.
+- On the PC, `fakecore` has a software chip in its place and its `audio.raw` has the music. `tools/fmtest.c` plays a scale; run it on the MiSTer with any core of host version 10 kept from starting its game (`touch /tmp/<name>_nolaunch`).
+- A core gets the chip by being built again with this `hybrid/`; nothing in `core/` changes. It costs logic, not the ARM's time.
 
 ## Video modes
 
@@ -157,6 +178,8 @@ These make the cores look and work alike. Where the framework can enforce one, i
 ## Credits
 
 - **[MiSTer Frontier](https://github.com/MiSTerOrganize/MiSTer_Frontier)** by MiSTer Organize: thank you for the inspiration. Hybrid cores on the MiSTer, and the way their game is launched (a daemon that watches the loaded core and runs a script from its games folder), come from MiSTer Frontier. The code here is a separate implementation and does not need MiSTer Frontier installed.
+- **[JTOPL](https://github.com/jotego/jtopl)** by Jose Tejada (jotego): the FM chip, GPL-3. `rtl/jtopl/` is a copy of the files a YM3812 needs, unchanged.
+- **[Nuked OPL3](https://github.com/nukeykt/Nuked-OPL3)** by Nuke.YKT: the chip `fakecore` uses on the PC, LGPL-2.1.
 - **[MiSTer](https://github.com/MiSTer-devel)** by Sorgelig and the MiSTer-devel contributors: the framework the cores are built on.
 - **[SDL](https://libsdl.org)** by Sam Lantinga and contributors.
 

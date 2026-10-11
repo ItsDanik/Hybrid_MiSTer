@@ -1,2 +1,9 @@
 # the sources of rtl/hybrid_wall*.hex (tools/make_wall.py); not in the repository
 /wall*.png
+
+# what jtopl writes when it is simulated
+opl_wr.log
+jtopl.raw
+
+# scratch of sim/fm_song.sh
+/build_song/

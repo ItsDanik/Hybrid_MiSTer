@@ -30,10 +30,14 @@
 //                        3 = 320x240, 4 = 640x480, 5 = 800x600, 6 = 1024x768,
 //                        7 = 640x240
 //              w0[48]    palette slot (0..1)
+//              w0[55:49] FM chip volume: 32 = as it comes, 127 = four times
 //              w0[56]    audio enable
+//              w0[57]    FM chip enable (the chip is in reset without it,
+//                        and without audio enable)
 //              w0[63:60] OSD menu mask: bits a game sets to hide or grey out
 //                        lines of the core's CONF_STR (H/h/D/d 0..3)
 //              w1[31:0]  palette sequence number (reload when changed)
+//              w1[63:32] number of entries written to the FM ring so far
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
 //              w1  {version, 12'b0, game, fast, running, vga31, mode[3:0],
@@ -57,15 +61,20 @@
 //              w4  OSD status[63:0]
 //              w5  {mouse y accumulator, mouse x accumulator}
 //              w6  {wheel accumulator[15:0], 13'b0, mouse buttons[2:0]}
-//              w7  {32'b0, 3'b0, video clock measured[12:0], 8'b0, video
-//                   clock asked for[7:0]}: the clock asked for in units of
-//                   0.5MHz, the one measured in units of 1/80 MHz
+//              w7  {FM ring entries read so far[31:0], 3'b0, video clock
+//                   measured[12:0], 8'b0, video clock asked for[7:0]}: the
+//                   clock asked for in units of 0.5MHz, the one measured in
+//                   units of 1/80 MHz
 //              w8..w15 keyboard bitmap, bit index = {extended, PS/2 set 2 code}
 //    0x0000C0  audio fetch pointer (FPGA -> HPS), 32-bit count of stereo
 //              frames read from the ring, written after every audio fetch
 //    0x001000  palette slot 0: 256 x 32-bit 0x00RRGGBB
 //    0x001400  palette slot 1
 //    0x010000  audio ring: 16384 stereo frames, 16-bit signed {R, L}, 44.1kHz
+//    0x020000  FM ring: 4096 register writes for the FM chip (hybrid_fm.sv),
+//              64 bits each: [31:0] the audio frame to make it at, counted
+//              as the audio fetch pointer counts, [39:32] value, [47:40]
+//              register. The chip's sound is added to the audio ring's.
 //    0x100000  framebuffer 0 (row stride = width of the video mode in pixels;
 //              an interlaced mode has all its rows here, as a progressive one)
 //    0x200000  framebuffer 1
@@ -159,7 +168,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd9;
+localparam [31:0] VERSION      = 32'd10;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -170,6 +179,7 @@ localparam [28:0] FB_XL_ADDR = BASE + 29'h80000;   // 1024x768: 2MB each
 localparam [28:0] AUD_ADDR   = BASE + 29'h2000;   // ring, 8192 words
 localparam [28:0] AUD_PTR    = BASE + 29'h18;
 localparam  [7:0] AUD_BURST  = 8'd16;             // 32 frames
+localparam [28:0] FM_ADDR    = BASE + 29'h4000;   // ring, 4096 words
 
 assign ddr_be = 8'hFF;
 
@@ -589,6 +599,12 @@ reg        aud_half = 0;
 reg [18:0] aud_acc = 0;
 reg        aud_tick = 0;
 reg        aud_tick2 = 0;
+reg        aud_tick3 = 0;
+reg [31:0] aud_play = 0;      // frames played
+reg signed [15:0] pcm_l = 0, pcm_r = 0;
+wire signed [15:0] fm_snd;
+wire signed [16:0] mix_l = pcm_l + fm_snd;
+wire signed [16:0] mix_r = pcm_r + fm_snd;
 
 wire [6:0] afifo_level = afifo_wr - afifo_rd;
 
@@ -613,19 +629,60 @@ always @(posedge clk) begin
 	aud_tick2 <= aud_tick;
 	if (aud_tick2) begin
 		if (!audio_en) begin
-			audio_l <= 0;
-			audio_r <= 0;
+			pcm_l <= 0;
+			pcm_r <= 0;
 			aud_half <= 0;
 		end else if (afifo_level != 0) begin
-			{audio_r, audio_l} <= aud_half ? afifo_q[63:32] : afifo_q[31:0];
+			{pcm_r, pcm_l} <= aud_half ? afifo_q[63:32] : afifo_q[31:0];
 			aud_half <= ~aud_half;
+			aud_play <= aud_play + 1'd1;
 			if (aud_half) afifo_rd <= afifo_rd + 1'd1;
 		end
 		// on underrun the last sample is held
 	end
 
-	if (!audio_en) afifo_rd <= afifo_wr;
+	// the FM chip's sound on top (it is silent while not enabled), held at
+	// the limits
+	aud_tick3 <= aud_tick2;
+	if (aud_tick3) begin
+		audio_l <= (mix_l[16] != mix_l[15]) ? {mix_l[16], {15{!mix_l[16]}}} : mix_l[15:0];
+		audio_r <= (mix_r[16] != mix_r[15]) ? {mix_r[16], {15{!mix_r[16]}}} : mix_r[15:0];
+	end
+
+	if (!audio_en) begin
+		afifo_rd <= afifo_wr;
+		aud_play <= 0;
+	end
 end
+
+//////////////////////////////////////////////////////////////////
+// FM chip (hybrid_fm.sv)
+//
+// The DDR engine below reads the FM ring one entry at a time into fm_ent,
+// whenever that is empty and the game has written more than was read; the
+// chip takes it when its audio frame is being played.
+
+reg        fm_en = 0;
+reg  [6:0] fm_vol = 7'd64;
+reg [31:0] fm_wcount = 0;     // entries the game has written
+reg [31:0] fm_fetch = 0;      // entries read
+reg [63:0] fm_ent = 0;
+reg        fm_ent_valid = 0;
+wire       fm_take;
+
+hybrid_fm fm
+(
+	.clk      (clk),
+	.en       (fm_en),
+	.volume   (fm_vol),
+	.frame    (aud_play),
+	.wr_valid (fm_ent_valid),
+	.wr_frame (fm_ent[31:0]),
+	.wr_reg   (fm_ent[47:40]),
+	.wr_data  (fm_ent[39:32]),
+	.wr_take  (fm_take),
+	.snd      (fm_snd)
+);
 
 //////////////////////////////////////////////////////////////////
 // Input state
@@ -665,6 +722,7 @@ localparam S_LINE_WAIT = 5;
 localparam S_AUD_WAIT  = 6;
 localparam S_AUD_PTR   = 7;
 localparam S_CLEAR     = 8;
+localparam S_FM_WAIT   = 9;
 
 reg  [3:0] state = S_IDLE;
 // The control block is not read before the core has cleared its magic, in
@@ -708,7 +766,7 @@ always @(*) begin
 		4'd4:  stat_word = osd_status;
 		4'd5:  stat_word = {mouse_y, mouse_x};
 		4'd6:  stat_word = {32'd0, mouse_wheel, 13'd0, mouse_btn};
-		4'd7:  stat_word = {32'd0, 3'd0, vclk_count, 8'd0, vclk_code};
+		4'd7:  stat_word = {fm_fetch, 3'd0, vclk_count, 8'd0, vclk_code};
 		default: stat_word = keys[{wr_beat[2:0], 6'd0} +: 64];
 	endcase
 end
@@ -718,6 +776,7 @@ always @(posedge clk) begin
 	pal_we <= 0;
 	afifo_we <= 0;
 	fade_start <= 0;
+	if (fm_take) fm_ent_valid <= 0;
 
 	// requests from the video timing; what comes with them was set before
 	// the request and stays until the next one
@@ -749,6 +808,11 @@ always @(posedge clk) begin
 			S_AUD_WAIT: begin
 				afifo_we    <= 1;
 				afifo_wdata <= ddr_dout;
+			end
+			S_FM_WAIT: begin
+				fm_ent       <= ddr_dout;
+				fm_ent_valid <= 1;
+				fm_fetch     <= fm_fetch + 1'd1;
 			end
 			S_LINE_WAIT: begin
 				lbuf_we    <= 1;
@@ -784,6 +848,14 @@ always @(posedge clk) begin
 					ddr_rd       <= 1;
 					state        <= S_AUD_WAIT;
 				end
+				else if (fm_en && !fm_ent_valid && !fm_take && fm_fetch != fm_wcount) begin
+					rd_cnt       <= 0;
+					rd_len       <= 8'd1;
+					ddr_addr     <= FM_ADDR + {17'd0, fm_fetch[11:0]};
+					ddr_burstcnt <= 8'd1;
+					ddr_rd       <= 1;
+					state        <= S_FM_WAIT;
+				end
 				else if (vbl_req && ctrl_clear != 0) begin
 					vbl_req <= 0;
 					state   <= S_CLEAR;
@@ -818,6 +890,9 @@ always @(posedge clk) begin
 					state     <= S_AUD_PTR;
 				end
 
+			S_FM_WAIT:
+				if (rd_cnt == rd_len) state <= S_IDLE;
+
 			S_AUD_PTR:
 				// publish the fetch pointer: single beat write
 				if (!ddr_we) begin
@@ -850,6 +925,9 @@ always @(posedge clk) begin
 			S_CTRL: begin
 				ctrl_valid <= ctrl_magic;
 				audio_en <= ctrl_magic && ctrl_w0[56];
+				fm_en    <= ctrl_magic && ctrl_w0[56] && ctrl_w0[57];
+				fm_vol   <= ctrl_w0[55:49];
+				fm_wcount <= ctrl_w1[63:32];
 				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
 				game_on  <= game_take;
 				if (ctrl_magic) begin
@@ -932,9 +1010,14 @@ always @(posedge clk) begin
 		fade_start <= 1;
 		pal_loaded <= 0;
 		audio_en   <= 0;
+		fm_en      <= 0;
 		menumask   <= 0;
 	end
 	if (!audio_en) aud_fetch <= 0;
+	if (!fm_en) begin
+		fm_fetch     <= 0;
+		fm_ent_valid <= 0;
+	end
 end
 
 //////////////////////////////////////////////////////////////////

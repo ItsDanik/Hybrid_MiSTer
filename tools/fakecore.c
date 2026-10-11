@@ -5,6 +5,10 @@
 // consumed at 44.1kHz. A script feeds input and takes screenshots. Start it
 // first, then the game with MISTER_HYBRID_SHM=<file>.
 //
+// The FM chip of the core (hybrid_fm.sv) is a software one here, Nuked OPL3
+// (tools/nuked/, LGPL): the register writes the game queues are made at their
+// audio frames and the chip's sound is in audio.raw with the game's own.
+//
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
 // Script, one command per line (# starts a comment):
@@ -28,10 +32,13 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "nuked/opl3.c"
 
 #define SHM_SIZE 0xA00000
 #define CTRL_MAGIC 0x4259484D
@@ -48,11 +55,37 @@ static int fb_index, fb_format, fb_mode, ctrl_valid, vga31;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
+static opl3_chip fm_chip;
+static int fm_on;
+static uint32_t fm_fetch;
+static FILE* fm_log;
+
+// one audio frame of the FM chip, after the writes that are due at `frame`
+static int fm_frame(uint32_t frame, uint32_t wcount, int volume) {
+    int16_t out[2];
+    int v;
+
+    while (fm_fetch != wcount) {
+        volatile uint32_t* e = (volatile uint32_t*)(shm + 0x20000 + (fm_fetch % 4096) * 8);
+        if ((int32_t)(frame - e[0]) < 0) {
+            break;
+        }
+        OPL3_WriteReg(&fm_chip, (e[1] >> 8) & 0xff, e[1] & 0xff);
+        if (fm_log) {
+            // FAKECORE_FMLOG=<file>: every write, "<audio frame> <register> <value>"
+            fprintf(fm_log, "%u %u %u\n", frame, (e[1] >> 8) & 0xff, e[1] & 0xff);
+        }
+        fm_fetch++;
+    }
+    OPL3_GenerateResampled(&fm_chip, out);
+    v = out[0] * volume / 32;
+    return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+}
 
 static void tick(void) {
     static struct timespec next;
-    uint32_t c0, c1, c2;
-    int audio_en;
+    uint32_t c0, c1, c2, c3;
+    int audio_en, fm_en;
 
     if (next.tv_sec == 0) {
         clock_gettime(CLOCK_MONOTONIC, &next);
@@ -68,8 +101,17 @@ static void tick(void) {
     c0 = ctrl[0];
     c1 = ctrl[1];
     c2 = ctrl[2];
+    c3 = ctrl[3];
     ctrl_valid = c0 == CTRL_MAGIC;
     audio_en = ctrl_valid && ((c1 >> 24) & 1);
+    fm_en = audio_en && ((c1 >> 25) & 1);
+    if (fm_en && !fm_on) {
+        OPL3_Reset(&fm_chip, 44100);
+    }
+    if (!fm_en) {
+        fm_fetch = 0;
+    }
+    fm_on = fm_en;
     if (!ctrl_valid) {
         // no game: the core's own picture, 320x240
         fb_mode = 3;
@@ -95,8 +137,17 @@ static void tick(void) {
         audio_frac += 44100ull * FIELD_NS;
         target = (uint32_t)(audio_frac / 1000000000ull);
         while (audio_fetch + 32 <= target + 128) {
+            int16_t block[64];
+            int i;
+            memcpy(block, (void*)(shm + 0x10000 + (audio_fetch % 16384) * 4), sizeof(block));
+            for (i = 0; fm_on && i < 32; i++) {
+                int fm = fm_frame(audio_fetch + i, c3, (c1 >> 17) & 127);
+                int l = block[i * 2] + fm, r = block[i * 2 + 1] + fm;
+                block[i * 2] = l > 32767 ? 32767 : l < -32768 ? -32768 : l;
+                block[i * 2 + 1] = r > 32767 ? 32767 : r < -32768 ? -32768 : r;
+            }
             if (audio_out != NULL) {
-                fwrite((void*)(shm + 0x10000 + (audio_fetch % 16384) * 4), 4, 32, audio_out);
+                fwrite(block, 4, 32, audio_out);
             }
             audio_fetch += 32;
             *(volatile uint32_t*)(shm + 0xC0) = audio_fetch;
@@ -106,7 +157,8 @@ static void tick(void) {
     // the game has the screen (bit 19) at once: nothing fades here
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (vga31 << 16) | (1 << 17)
         | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3 && fb_mode != 7) << 18) | (ctrl_valid << 19);
-    status[3] = 9;
+    status[3] = 10;
+    status[15] = fm_fetch;
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }
@@ -177,6 +229,9 @@ int main(int argc, char** argv) {
     }
     if (argc > 3) {
         audio_out = fopen(argv[3], "wb");
+    }
+    if (getenv("FAKECORE_FMLOG")) {
+        fm_log = fopen(getenv("FAKECORE_FMLOG"), "w");
     }
 
     while (script != NULL && fgets(line, sizeof(line), script) != NULL) {

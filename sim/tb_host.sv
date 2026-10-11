@@ -166,9 +166,11 @@ endfunction
 
 // mode: pixel format, vmode: video mode
 integer cur_vmode = 0, cur_mask = 0;
+// the FM chip: enable, and the number of entries written to its ring
+integer cur_fm = 0, cur_fmw = 0;
 task set_ctrl(input integer fb, input integer mode, input integer slot, input integer seq);
-	mem[0] = {cur_mask[3:0], 3'd0, 1'b1, 7'd0, slot[0], cur_vmode[3:0], 3'd0, mode[0], fb[7:0], 32'h4259484D};
-	mem[1] = {32'd0, seq[31:0]};
+	mem[0] = {cur_mask[3:0], 2'd0, cur_fm[0], 1'b1, 7'd64, slot[0], cur_vmode[3:0], 3'd0, mode[0], fb[7:0], 32'h4259484D};
+	mem[1] = {cur_fmw[31:0], seq[31:0]};
 endtask
 
 // the video modes
@@ -677,6 +679,37 @@ initial begin
 		$display("FAIL: audio fetch pointer"); errors = errors + 1;
 	end
 
+	// The FM chip: three register writes in its ring (none of them makes a
+	// sound, the audio is still being compared with the ring), the last one
+	// for an audio frame a little ahead. All three are read, in order, the
+	// last one made only when its frame is played; without the enable
+	// nothing is read.
+	begin : fm_test
+		integer f0;
+		fm_takes = 0;
+		f0 = dut.aud_play;
+		mem[29'h4000] = {16'd0, 8'hC0, 8'h00, 32'd0};
+		mem[29'h4001] = {16'd0, 8'h20, 8'h01, 32'd0};
+		mem[29'h4002] = {16'd0, 8'h40, 8'h3F, f0[31:0] + 32'd6000};
+		cur_fmw = 3;
+		set_ctrl(1, 0, 0, 10);
+		wait_fields(4);
+		if (fm_takes != 0 || dut.fm_fetch != 0) begin $display("FAIL: FM ring read without the enable"); errors = errors + 1; end
+		cur_fm = 1;
+		set_ctrl(1, 0, 0, 10);
+		wait_fields(4);
+		if (fm_takes != 2 || fm_last != 16'h2001) begin $display("FAIL: FM writes, %0d made, last %h", fm_takes, fm_last); errors = errors + 1; end
+		wait_fields(8);
+		$display("fm: %0d writes made, last %h at frame %0d (asked for %0d), read pointer %0d", fm_takes, fm_last, fm_last_frame, f0 + 6000, mem[15][63:32]);
+		if (fm_takes != 3 || fm_last != 16'h403F || fm_last_frame < f0 + 6000 || fm_last_frame > f0 + 6010 || mem[15][63:32] != 3) begin
+			$display("FAIL: FM write for a later frame"); errors = errors + 1;
+		end
+		cur_fm = 0; cur_fmw = 0;
+		set_ctrl(1, 0, 0, 10);
+		wait_fields(3);
+		if (dut.fm_fetch != 0) begin $display("FAIL: FM ring after the enable went"); errors = errors + 1; end
+	end
+
 	// the game leaves in 640x400 interlaced: back to 320x240 and the core's picture
 	cur_vmode = 2;
 	fill(2);
@@ -751,6 +784,14 @@ initial begin
 	repeat (18) #2_000_000_000;
 	$display("FAIL: timeout");
 	$finish;
+end
+
+// writes made to the FM chip
+integer fm_takes = 0, fm_last = 0, fm_last_frame = 0;
+always @(posedge clk) if (dut.fm_take) begin
+	fm_takes = fm_takes + 1;
+	fm_last = {dut.fm_ent[47:40], dut.fm_ent[39:32]};
+	fm_last_frame = dut.aud_play;
 end
 
 endmodule
