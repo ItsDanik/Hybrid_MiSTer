@@ -820,7 +820,16 @@ void MH_FMEnable(int enabled) {
         write_ctrl();
         return;
     }
+    // The core starts its read count from 0 only when it has seen the chip
+    // switched off, at a vblank. If it was on a moment ago (the audio was
+    // closed and opened again inside one field) it has not: wait for that,
+    // or it would take everything between its old count and the new one
+    // for writes.
     fm_wr = 0;
+    write_ctrl();
+    for (reg = 0; reg < 100 && status[15] != 0; reg++) {
+        sleep_ms(2);
+    }
     fm_enabled = 1;
     write_ctrl();
     // The chip's reset does not reach the registers of its channels and
