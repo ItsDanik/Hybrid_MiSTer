@@ -4,7 +4,7 @@
 // with fakecore the notes are in its audio.raw.
 //
 //   PC:      gcc -O2 -o fakecore tools/fakecore.c
-//            gcc -O2 -Ihps -o fmtest tools/fmtest.c hps/mister_hybrid.c hps/mister_joymap.c hps/mister_ui.c -lpthread
+//            gcc -O2 -Ihps -o fmtest tools/fmtest.c hps/mister_hybrid.c hps/mister_joymap.c hps/mister_ui.c hps/mister_triggers.c -lpthread
 //            ./fakecore /tmp/shm script audio.raw &   MISTER_HYBRID_SHM=/tmp/shm ./fmtest
 //   MiSTer:  build it with the toolchain, load any hybrid core of host
 //            version 10 or later with its game kept from starting

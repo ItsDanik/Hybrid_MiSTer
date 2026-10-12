@@ -24,8 +24,9 @@
                              frame per video field (59.6Hz), per two
                              fields with an interlaced mode
 
-  Joysticks: two virtual joysticks (players 1 and 2) with 4 axes (left stick,
-  right stick), one hat (d-pad) and 30 buttons. Buttons 0..27 are the core's
+  Joysticks: two virtual joysticks (players 1 and 2) with 6 axes (left stick,
+  right stick, and on player 1 the analog triggers L2 and R2 as axes 4 and 5,
+  0..32767: MH_ReadTriggers()), one hat (d-pad) and 30 buttons. Buttons 0..27 are the core's
   buttons in the order of its "J1," list; buttons 28 and 29 of player 1 are
   "Menu OK" and "Menu Back", see MH_MenuButtons().
 
@@ -121,6 +122,13 @@ static void SDLCALL MISTER_JoystickUpdate(void *userdata)
     SDL_JoystickSetVirtualAxis(joystick, 1, (Sint16)(input.analog_ly[player] * 256));
     SDL_JoystickSetVirtualAxis(joystick, 2, (Sint16)(input.analog_rx[player] * 256));
     SDL_JoystickSetVirtualAxis(joystick, 3, (Sint16)(input.analog_ry[player] * 256));
+    if (player == 0) {
+        int left = 0, right = 0;
+
+        MH_ReadTriggers(&left, &right);
+        SDL_JoystickSetVirtualAxis(joystick, 4, (Sint16)(left * 32767 / 255));
+        SDL_JoystickSetVirtualAxis(joystick, 5, (Sint16)(right * 32767 / 255));
+    }
 
     if (joy & MH_JOY_UP) {
         hat |= SDL_HAT_UP;
@@ -159,7 +167,7 @@ static void MISTER_InitJoysticks(void)
         SDL_zero(desc);
         desc.version = SDL_VIRTUAL_JOYSTICK_DESC_VERSION;
         desc.type = SDL_JOYSTICK_TYPE_UNKNOWN;
-        desc.naxes = 4;
+        desc.naxes = 6;
         desc.nbuttons = MISTER_NUM_BUTTONS;
         desc.nhats = 1;
         desc.name = names[i];

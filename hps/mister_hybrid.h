@@ -163,6 +163,12 @@ uint64_t MH_OSDStatus(void);
 // two core buttons, so this is how a button with a game function can also
 // confirm and cancel in menus. Cheap to call every frame.
 void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits);
+// The gamepad's analog triggers (L2, R2), 0 = released .. 255 = fully pressed.
+// MiSTer does not pass them to a core, so they are read from Linux directly
+// (mister_triggers.c) and are those of whichever controller is pressed
+// furthest: for player 1 of a game one plays alone. Returns 0 while no
+// controller with triggers is connected. Cheap to call every frame.
+int MH_ReadTriggers(int* left, int* right);
 // USB HID usage (= SDL scancode) of a key bitmap index, 0 if there is none
 int MH_KeyToHID(int key_index);
 
