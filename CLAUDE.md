@@ -16,6 +16,7 @@ This file is in `hybrid/`, the [Hybrid_MiSTer](https://github.com/ItsDanik/Hybri
 - One frame per field (per two fields with an interlaced mode), timed by the core's field counter (`MH_WaitFrame()`, `MH_FieldCounter()`), not by the system clock.
 - A 15kHz screen never gets more than 15kHz: 640x400 and 640x480 are interlaced at 15kHz unless the player says no such screen is there, with `forced_scandoubler=1` (VGA monitor) or the OSD option *HDMI Only*, which switches the analog output off while a progressive mode is shown. 800x600 and 1024x768 exist only then (`MH_ModeAvailable()`). `hybrid/README.md`, "Video modes".
 - *HDMI Only* (status bit 0) and the *CRT Options* page (bits 64..76) are in every core's OSD, unchanged.
+- *FPS Counter* (status bit 15, `"O[15],FPS Counter,Off,On;"` after *Stereo Mix*) is in every core's OSD too. The library draws it (`fps_stamp()` in `hps/mister_hybrid.c`, into the copy of the frame the core shows, RGB565 or 8bpp): a game needs no code for it, only the line in its `CONF_STR` and a build against this library. No change to the FPGA side. Cores that predate it (2026-10-12) get it at their next build: add the line.
 - Status bits 0..23 of the OSD mean the same in every core; a game's options start at bit 24.
 
 ## FM music

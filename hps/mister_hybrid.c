@@ -11,6 +11,7 @@
 
 #define _GNU_SOURCE
 #include "mister_hybrid.h"
+#include "mister_font.h"
 
 #include <fcntl.h>
 #include <pthread.h>
@@ -325,6 +326,81 @@ const char* MH_CoreName(void) {
     return core_name;
 }
 
+// The OSD's FPS Counter (MH_OSD_FPS): the frames presented in the last second,
+// drawn into the copy of the frame that the core shows, 8 pixels in from the
+// corner (a television hides the edge). With a palette: its lightest colour
+// on its darkest.
+static void fps_stamp(volatile uint8_t* dst, int row, int height) {
+    static struct timespec since;
+    static int count;
+    static int shown = -1;
+    static uint32_t pal_seq = ~0u;
+    static uint8_t ink8, paper8;
+    struct timespec now;
+    char text[8];
+    double elapsed;
+    int width = MH_Width();
+    int bpp = row / width;
+    int sx = width >= 640 ? 2 : 1;
+    int sy = height >= 400 ? 2 : 1;
+    int n, c, x, y, w;
+
+    if (!MH_OSD_FPS(MH_OSDStatus())) {
+        shown = -1;
+        count = 0;
+        return;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (shown < 0 && count == 0) {
+        since = now;
+    }
+    count++;
+    elapsed = (double)(now.tv_sec - since.tv_sec) + (double)(now.tv_nsec - since.tv_nsec) * 1e-9;
+    if (elapsed >= 1.0) {
+        shown = (int)((count - 1) / elapsed + 0.5);
+        count = 1;
+        since = now;
+    }
+    if (shown < 0) {
+        return;
+    }
+    if (bpp == 1 && pal_seq != palette_seq) {
+        const volatile uint32_t* pal = (const volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
+        int light = -1, dark = 1 << 30;
+
+        for (c = 0; c < 256; c++) {
+            uint32_t p = pal[c];
+            int v = (int)((p >> 16) & 255) * 2 + (int)((p >> 8) & 255) * 5 + (int)(p & 255);
+
+            if (v > light) { light = v; ink8 = (uint8_t)c; }
+            if (v < dark) { dark = v; paper8 = (uint8_t)c; }
+        }
+        pal_seq = palette_seq;
+    }
+    n = snprintf(text, sizeof text, "%d", shown > 999 ? 999 : shown);
+    w = n * 8 + 2;
+    if ((8 + w) * sx > width || 18 * sy > height) {
+        return;
+    }
+    for (y = 0; y < 10 * sy; y++) {
+        volatile uint8_t* line = dst + (8 * sy + y) * row;
+
+        for (x = 0; x < w * sx; x++) {
+            int gx = x / sx - 1, gy = y / sy - 1;
+            int on = 0;
+
+            if (gx >= 0 && gx < n * 8 && gy >= 0 && gy < 8) {
+                on = (mh_font[text[gx / 8] - 32][gy] >> (gx & 7)) & 1;
+            }
+            if (bpp == 2) {
+                ((volatile uint16_t*)line)[8 * sx + x] = on ? 0xFFE0 : 0x0000;
+            } else {
+                line[8 * sx + x] = on ? ink8 : paper8;
+            }
+        }
+    }
+}
+
 // Copy a frame into the next framebuffer and flip to it
 static void present_to_fpga(const uint8_t* pixels, int pitch) {
     volatile uint8_t* dst;
@@ -349,6 +425,7 @@ static void present_to_fpga(const uint8_t* pixels, int pitch) {
             memcpy((void*)(dst + y * row), pixels + y * pitch, row);
         }
     }
+    fps_stamp(dst, row, height);
     fb_current = next;
     if (fb_format == MH_FORMAT_RGB565) {
         ctrl_enabled = 1;

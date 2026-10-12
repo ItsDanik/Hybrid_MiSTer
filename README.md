@@ -134,6 +134,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 "P1O[72:69],Horizontal Pos,0,+1,...,+7,-8,...,-1;",
 "P1O[76:73],Vertical Pos,0,+1,...,+7,-8,...,-1;",
 "O[6:5],Stereo Mix,None,25%,50%,100%;",
+"O[15],FPS Counter,Off,On;",
 "-;",
 "O[10:7],Sound Volume,100%,90%,...,0%;",      only if the game mixes sound and music separately
 "O[14:11],Music Volume,100%,90%,...,0%;",
@@ -148,7 +149,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 "V,v",`BUILD_DATE
 ```
 
-- Status bits 0..23 mean the same in every core (`MH_OSD_*` in `mister_hybrid.h`), bits 24..63 belong to the game, bits 64 and up never reach the game and are for the core's video options. Bit 1 and bit 15 are free.
+- Status bits 0..23 mean the same in every core (`MH_OSD_*` in `mister_hybrid.h`), bits 24..63 belong to the game, bits 64 and up never reach the game and are for the core's video options. Bit 15 is the *FPS Counter*: the library draws the frames shown in the last second into the top left corner of every frame it hands to the core (`MH_Present()`, so SDL games too), and the game does nothing for it. Bit 1 is free.
 - *HDMI Only* and *CRT Options* are the same lines in every core, whether or not its game has a mode they matter for: see [Video modes](#video-modes). The menu mask bits 4 and 5 that hide them are the core's; a game has bits 0..3 (`MH_SetMenuMask()`).
 - The first entry of every option is its default, so a fresh install needs no settings.
 - An option the game cannot honour is left out. One that depends on the data the player installed (a resolution this copy of the game has no graphics for) is replaced by a greyed line that says what is in use, with `MH_SetMenuMask()` and `H`/`D` flags in the `CONF_STR` (see VanillaConquer's *Resolution*).

@@ -63,6 +63,8 @@ localparam CONF_STR = {
 	"P1O[72:69],Horizontal Pos,0,+1,+2,+3,+4,+5,+6,+7,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"P1O[76:73],Vertical Pos,0,+1,+2,+3,+4,+5,+6,+7,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"O[6:5],Stereo Mix,None,25%,50%,100%;",
+	// drawn by the hybrid library over the game's frames (MH_OSD_FPS)
+	"O[15],FPS Counter,Off,On;",
 	"-;",
 	// A game can hide or grey out lines with MH_SetMenuMask(): "H0".."H3" and
 	// "D0".."D3" in front of a line (hidden / greyed while the bit is set,

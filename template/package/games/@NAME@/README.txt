@@ -28,6 +28,7 @@ Install
 
 OSD options
   Aspect ratio, Scale, Scandoubler Fx, Stereo Mix as in other cores.
+  FPS Counter   shows the pictures per second in the top left corner.
   HDMI Only     Yes if no CRT is connected: resolutions of 640x400 and
                 more are then progressive instead of interlaced, and the
                 analog output is switched off while one is shown, so that a

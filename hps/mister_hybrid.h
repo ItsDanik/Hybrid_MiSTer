@@ -81,6 +81,9 @@ extern "C" {
 // 0 = the MiSTer menu's OK/Back buttons, 1.. = A, B, X, Y, L, R, Select, Start
 #define MH_OSD_MENU_OK(s) ((int)(((s) >> 16) & 0xF))
 #define MH_OSD_MENU_BACK(s) ((int)(((s) >> 20) & 0xF))
+// "O[15],FPS Counter,Off,On;": the library draws the number of frames shown in
+// the last second in the top left corner of every frame, the game does nothing
+#define MH_OSD_FPS(s) ((int)(((s) >> 15) & 1))
 #define MH_OSD_GAME_BITS(s, lsb, width) ((int)(((s) >> (lsb)) & ((1u << (width)) - 1)))
 
 typedef struct mh_input {
