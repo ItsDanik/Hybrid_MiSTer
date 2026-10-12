@@ -26,7 +26,8 @@
 
   Joysticks: two virtual joysticks (players 1 and 2) with 6 axes (left stick,
   right stick, and on player 1 the analog triggers L2 and R2 as axes 4 and 5,
-  0..32767: MH_ReadTriggers()), one hat (d-pad) and 30 buttons. Buttons 0..27 are the core's
+  0..32767: MH_ReadTriggers()), one hat (d-pad) and 30 buttons. SDL's rumble
+  calls on joystick 1 shake every controller that can (MH_Rumble()). Buttons 0..27 are the core's
   buttons in the order of its "J1," list; buttons 28 and 29 of player 1 are
   "Menu OK" and "Menu Back", see MH_MenuButtons().
 
@@ -154,6 +155,16 @@ static void SDLCALL MISTER_JoystickUpdate(void *userdata)
     SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_BACK, (joy & back_bits) ? SDL_PRESSED : SDL_RELEASED);
 }
 
+/* SDL_JoystickRumble() / SDL_GameControllerRumble() on joystick 1 */
+static int SDLCALL MISTER_JoystickRumble(void *userdata, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble)
+{
+    if ((int)(intptr_t)userdata != 0) {
+        return SDL_Unsupported();
+    }
+    MH_Rumble(low_frequency_rumble >> 8, high_frequency_rumble >> 8);
+    return 0;
+}
+
 static void MISTER_InitJoysticks(void)
 {
     static const char *const names[MISTER_NUM_JOYSTICKS] = { "MiSTer Joystick 1", "MiSTer Joystick 2" };
@@ -173,6 +184,7 @@ static void MISTER_InitJoysticks(void)
         desc.name = names[i];
         desc.userdata = (void *)(intptr_t)i;
         desc.Update = MISTER_JoystickUpdate;
+        desc.Rumble = MISTER_JoystickRumble;
         joystick_index[i] = SDL_JoystickAttachVirtualEx(&desc);
         if (joystick_index[i] >= 0) {
             /* kept open: the virtual joystick is fed through this handle */

@@ -169,6 +169,13 @@ void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits)
 // furthest: for player 1 of a game one plays alone. Returns 0 while no
 // controller with triggers is connected. Cheap to call every frame.
 int MH_ReadTriggers(int* left, int* right);
+// Rumble: the strength of the gamepad's heavy (slow) and light (fast) motor,
+// 0 = off .. 255, on every connected controller that can. It goes on at that
+// strength until the next call, but a game must repeat the call at least
+// every second or two while it wants rumble (once a frame is fine and costs
+// nothing): left alone the motors stop by themselves after two seconds.
+// Returns 0 while no controller that can rumble is connected.
+int MH_Rumble(int strong, int weak);
 // USB HID usage (= SDL scancode) of a key bitmap index, 0 if there is none
 int MH_KeyToHID(int key_index);
 

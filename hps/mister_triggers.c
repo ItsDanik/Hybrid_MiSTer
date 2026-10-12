@@ -1,4 +1,5 @@
-// Analog triggers (L2 / R2), for MH_ReadTriggers() (mister_hybrid.h).
+// Analog triggers (L2 / R2) and rumble, for MH_ReadTriggers() and MH_Rumble()
+// (mister_hybrid.h): what a gamepad has that MiSTer does not pass on.
 //
 // Main_MiSTer gives a core the two sticks and the buttons of a gamepad, but
 // not its triggers as axes. The game runs on the same Linux, so this module
@@ -16,6 +17,13 @@
 //
 // Main_MiSTer decides which controller is which player, and that cannot be
 // seen from here: the values are the furthest-pressed of all controllers.
+//
+// Rumble is Linux force feedback on the same devices: one effect a
+// controller, stored again and started whenever the strength changes. It is
+// given two seconds to run, so that the motors of a game that has gone away
+// stop by themselves; a game that wants them to go on keeps calling
+// MH_Rumble(), which stores the effect again every second. Every controller
+// that can rumble does.
 
 #include "mister_hybrid.h"
 
@@ -42,6 +50,8 @@ typedef struct {
     int seen;        // in the directory at the last scan
     int left, right; // axis codes, -1 until they are known
     struct input_absinfo left_info, right_info;
+    int rumbles; // it can, and was opened for writing
+    int effect;  // the stored effect, -1 = none yet
 } pad;
 
 static pad pads[MAX_PADS];
@@ -90,8 +100,9 @@ static void scan(void) {
         pads[i].seen = 0;
     }
     while (dir != NULL && (e = readdir(dir)) != NULL) {
+        unsigned long ff[FF_MAX / (8 * sizeof(long)) + 1];
         char path[300];
-        int fd, free_slot = -1;
+        int fd, writable, free_slot = -1;
 
         if (strncmp(e->d_name, "event", 5) != 0) {
             continue;
@@ -109,7 +120,13 @@ static void scan(void) {
             continue;
         }
         snprintf(path, sizeof path, INPUT_DIR "/%s", e->d_name);
-        fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        // (for writing too: force feedback is written to the device)
+        writable = 1;
+        fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) {
+            writable = 0;
+            fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        }
         if (fd < 0) {
             continue;
         }
@@ -117,6 +134,9 @@ static void scan(void) {
             close(fd);
             continue;
         }
+        memset(ff, 0, sizeof ff);
+        pads[free_slot].rumbles = writable && ioctl(fd, EVIOCGBIT(EV_FF, sizeof ff), ff) >= 0 && has_bit(ff, FF_RUMBLE);
+        pads[free_slot].effect = -1;
         pads[free_slot].fd = fd;
         snprintf(pads[free_slot].name, sizeof pads[free_slot].name, "%s", e->d_name);
         pads[free_slot].seen = 1;
@@ -173,20 +193,11 @@ static int scaled(const struct input_absinfo* a) {
     return v < 0 ? 0 : v > 255 ? 255 : v;
 }
 
-int MH_ReadTriggers(int* left, int* right) {
-    const char* fixed = getenv("MISTER_HYBRID_TRIGGERS"); // "left,right": for tests without a controller
+// The list of controllers, looked over again every two seconds
+static void refresh(void) {
     time_t now = time(NULL);
-    int l = 0, r = 0, found = 0;
     int i;
 
-    if (fixed != NULL) {
-        if (sscanf(fixed, "%d,%d", &l, &r) < 2) {
-            l = r = 0;
-        }
-        *left = l;
-        *right = r;
-        return 1;
-    }
     if (!pads_ready) {
         for (i = 0; i < MAX_PADS; i++) {
             pads[i].fd = -1;
@@ -198,6 +209,99 @@ int MH_ReadTriggers(int* left, int* right) {
         scanned = now;
         scan();
     }
+}
+
+static long long now_ms(void) {
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+int MH_Rumble(int strong, int weak) {
+    static int last_strong, last_weak;
+    static long long sent;
+    long long now = now_ms();
+    int any = 0;
+    int i;
+
+    strong = strong < 0 ? 0 : strong > 255 ? 255 : strong;
+    weak = weak < 0 ? 0 : weak > 255 ? 255 : weak;
+    refresh();
+    if (strong == last_strong && weak == last_weak) {
+        // nothing new: only kept going
+        if ((strong == 0 && weak == 0) || now - sent < 1000) {
+            for (i = 0; i < MAX_PADS; i++) {
+                any |= pads[i].fd >= 0 && pads[i].rumbles;
+            }
+            return any;
+        }
+    } else if ((strong != 0 || weak != 0) && now - sent < 25) {
+        // a controller is not told more than forty times a second
+        return 1;
+    }
+    for (i = 0; i < MAX_PADS; i++) {
+        pad* p = &pads[i];
+        struct input_event ev;
+        struct ff_effect effect;
+
+        if (p->fd < 0 || !p->rumbles) {
+            continue;
+        }
+        any = 1;
+        memset(&ev, 0, sizeof ev);
+        ev.type = EV_FF;
+        if (strong == 0 && weak == 0) {
+            if (p->effect >= 0) {
+                ev.code = (unsigned short)p->effect;
+                ev.value = 0;
+                if (write(p->fd, &ev, sizeof ev) < 0 && errno == ENODEV) {
+                    close(p->fd);
+                    p->fd = -1;
+                }
+            }
+            continue;
+        }
+        memset(&effect, 0, sizeof effect);
+        effect.type = FF_RUMBLE;
+        effect.id = (short)p->effect;
+        effect.u.rumble.strong_magnitude = (unsigned short)(strong * 257);
+        effect.u.rumble.weak_magnitude = (unsigned short)(weak * 257);
+        effect.replay.length = 2000;
+        if (ioctl(p->fd, EVIOCSFF, &effect) < 0) {
+            if (errno == ENODEV) {
+                close(p->fd);
+                p->fd = -1;
+            }
+            continue;
+        }
+        p->effect = effect.id;
+        ev.code = (unsigned short)p->effect;
+        ev.value = 1;
+        if (write(p->fd, &ev, sizeof ev) < 0) {
+            continue;
+        }
+    }
+    last_strong = strong;
+    last_weak = weak;
+    sent = now;
+    return any;
+}
+
+int MH_ReadTriggers(int* left, int* right) {
+    const char* fixed = getenv("MISTER_HYBRID_TRIGGERS"); // "left,right": for tests without a controller
+    int l = 0, r = 0, found = 0;
+    int i;
+
+    if (fixed != NULL) {
+        if (sscanf(fixed, "%d,%d", &l, &r) < 2) {
+            l = r = 0;
+        }
+        *left = l;
+        *right = r;
+        return 1;
+    }
+    refresh();
     for (i = 0; i < MAX_PADS; i++) {
         pad* p = &pads[i];
         int v;
