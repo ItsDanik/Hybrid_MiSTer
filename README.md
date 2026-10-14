@@ -115,7 +115,7 @@ These make the cores look and work alike. Where the framework can enforce one, i
 **Naming and layout on the SD card**
 
 - One name everywhere: core name in `CONF_STR`, `_Other/<Name>_YYYYMMDD.rbf`, `games/<Name>/`, `logs/<Name>/`, binary `games/<Name>/<Name>`.
-- `games/<Name>/danik_hybrid_launch.sh` is the launcher `danik_hybrid_cores` runs. Everything the game writes (settings, saves) stays in `games/<Name>/`; the log goes to `/media/fat/logs/<Name>/`.
+- `games/<Name>/danik_hybrid_launch.sh` is the launcher `danik_hybrid_cores` runs. Everything the game writes (settings, saves) stays in `games/<Name>/`; the log goes to `/media/fat/logs/<Name>/`, when the game has left: while it runs, what it prints is kept in `/tmp`, because the SD card is mounted `sync` and every line printed to it stops the game for about 9ms.
 - Game data is never shipped. The README names the files to copy and where.
 - Release: `<Name>_YYYYMMDD.zip` to extract at the root of the SD card, containing `_Other/`, `games/<Name>/` with `README.txt` and the licenses, and the launcher from `launcher/` twice: `Scripts/danik_hybrid_cores.sh` and `games/<Name>/danik_hybrid_cores.sh` (see [The launcher](#the-launcher)). Nothing else has to be installed; the README lists running `danik_hybrid_cores` once from the Scripts menu as a requirement.
 

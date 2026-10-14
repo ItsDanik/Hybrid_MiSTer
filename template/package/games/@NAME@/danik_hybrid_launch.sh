@@ -28,6 +28,18 @@ sleep 1
 
 mv -f "$LOG" "$LOGDIR/@name@.prev.log" 2>/dev/null
 
+# What the game prints is kept in memory while it runs and goes to the log on
+# the SD card when it has left. The card is mounted "sync": a line printed
+# straight to it is a write that waits for the card, about 9ms in which the
+# game stands still. (A game that is still running when the MiSTer is
+# switched off leaves no log of that run.)
+RUNLOG=/tmp/@name@.log
+: > "$RUNLOG"
+savelog() {
+    cat "$RUNLOG" >> "$LOG" 2>/dev/null
+    : > "$RUNLOG"
+}
+
 # For the hybrid core drivers in the binary: which core to attach to and its
 # default button mapping ("jn" in core/@NAME@.sv)
 export MISTER_HYBRID_CORE="$CORE"
@@ -47,13 +59,14 @@ export XDG_DATA_HOME="$GAMEDIR/config"
 # another core after all.
 GAME=
 # The game must not outlive us: on SIGTERM it saves its settings and quits
-trap '[ -n "$GAME" ] && kill "$GAME" 2>/dev/null; exit 0' TERM INT
+trap '[ -n "$GAME" ] && kill "$GAME" 2>/dev/null && wait "$GAME"; savelog; exit 0' TERM INT
 while :; do
     # GAME: its command line (where it finds data, settings and saved games)
-    nice -n -20 taskset 0x03 ./@NAME@ >> "$LOG" 2>&1 &
+    nice -n -20 taskset 0x03 ./@NAME@ >> "$RUNLOG" 2>&1 &
     GAME=$!
     wait "$GAME"
     RC=$?
+    savelog
     if [ $RC -eq 43 ]; then
         sleep 1
         grep -q "^$CORE" /tmp/CORENAME 2>/dev/null || break
