@@ -139,6 +139,16 @@ int MH_Height(void);
 // Show a frame of MH_Width() x MH_Height(). `pitch` is the source's row size
 // in bytes
 void MH_Present(const void* pixels, int pitch);
+// The same without MH_Present()'s copy of the frame (a tenth of a frame's
+// time for a 320x200 game on the MiSTer): MH_FrameBuffer() is the buffer the
+// next frame is to be drawn into, MH_Width() x MH_Height() with rows of
+// MH_Width() pixels, and MH_PresentBuffer() shows it. Draw all of it: it holds
+// the frame before last. MH_FrameBuffer() waits while the two frames before
+// are still on their way to the core, and returns NULL where the library has
+// no buffers of its own (no second CPU): then use MH_Present(). An
+// MH_Present() in between takes the buffer back.
+void* MH_FrameBuffer(void);
+void MH_PresentBuffer(void);
 // 256 entries of 0x00RRGGBB
 void MH_SetPalette(const uint32_t* rgb);
 uint32_t MH_FieldCounter(void);

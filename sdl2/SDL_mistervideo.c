@@ -23,6 +23,14 @@
     SDL_MISTER_VSYNC         "1": SDL_UpdateWindowSurface() shows at most one
                              frame per video field (59.6Hz), per two
                              fields with an interlaced mode
+    SDL_MISTER_DIRECT        "1": the window surface is the library's buffer
+                             of the next frame (MH_FrameBuffer()), not a
+                             copy of it: one copy of a frame less. Its
+                             pixels are another buffer after every
+                             SDL_UpdateWindowSurface() (get them from the
+                             surface each time) and hold the frame before
+                             last: only for games that draw all of every
+                             frame. Read when a window surface is made.
 
   Joysticks: two virtual joysticks (players 1 and 2) with 6 axes (left stick,
   right stick, and on player 1 the analog triggers L2 and R2 as axes 4 and 5,
@@ -59,6 +67,9 @@
 
 static Uint32 video_format;
 static SDL_bool vsync;
+static SDL_bool direct;
+/* the window surface's pixels are the library's buffer (SDL_MISTER_DIRECT) */
+static void *direct_pixels;
 static Uint32 palette_version;
 static SDL_bool palette_valid;
 static Uint32 last_field;
@@ -364,6 +375,8 @@ static int MISTER_CreateWindowFramebuffer(_THIS, SDL_Window *window, Uint32 *for
     MISTER_DestroyWindowFramebuffer(_this, window);
 
     video_format = MISTER_HintFormat();
+    direct = SDL_GetHintBoolean("SDL_MISTER_DIRECT", SDL_FALSE);
+    direct_pixels = NULL;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 0, video_format);
     if (!surface) {
@@ -375,6 +388,21 @@ static int MISTER_CreateWindowFramebuffer(_THIS, SDL_Window *window, Uint32 *for
     *pixels = surface->pixels;
     *pitch = surface->pitch;
     return 0;
+}
+
+/* SDL_MISTER_DIRECT: the next frame is drawn into the library's buffer, if
+   the window is the size of the screen; else into the surface's own pixels */
+static void MISTER_NextDirectBuffer(SDL_Window *window, SDL_Surface *surface, int screen_w, int screen_h)
+{
+    if (!window->surface) {
+        return;
+    }
+    direct_pixels = NULL;
+    if (direct && surface->w == screen_w && surface->h == screen_h &&
+        surface->pitch == screen_w * surface->format->BytesPerPixel) {
+        direct_pixels = MH_FrameBuffer();
+    }
+    window->surface->pixels = direct_pixels ? direct_pixels : surface->pixels;
 }
 
 static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_Rect *rects, int numrects)
@@ -425,6 +453,17 @@ static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_R
 
     pixels = surface->pixels;
     pitch = surface->pitch;
+    if (direct_pixels && window->surface && window->surface->pixels == direct_pixels) {
+        /* drawn into the library's buffer */
+        if (vsync) {
+            MH_WaitFrame(last_field);
+            last_field = MH_FieldCounter();
+        }
+        MH_PresentBuffer();
+        direct_pixels = NULL;
+        MISTER_NextDirectBuffer(window, surface, screen_w, screen_h);
+        return 0;
+    }
     if (surface->w != screen_w || surface->h != screen_h) {
         /* not the size of the screen: show the middle of it, or centre it */
         const int bpp = surface->format->BytesPerPixel;
@@ -453,6 +492,7 @@ static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_R
         last_field = MH_FieldCounter();
     }
     MH_Present(pixels, pitch);
+    MISTER_NextDirectBuffer(window, surface, screen_w, screen_h);
     return 0;
 }
 

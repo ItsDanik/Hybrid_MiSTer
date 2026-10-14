@@ -88,6 +88,7 @@ static pthread_mutex_t present_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t present_cond = PTHREAD_COND_INITIALIZER;
 static uint8_t* staging[2];
 static int staging_next;
+static int staging_direct = -1; // handed out by MH_FrameBuffer()
 static int queue[2];
 static int queue_head;
 static int queue_count;
@@ -295,6 +296,7 @@ static void stop_present_thread(void) {
     pthread_join(present_thread, NULL);
     present_threaded = 0;
     queue_count = 0;
+    staging_direct = -1;
 }
 
 void MH_Close(void) {
@@ -587,6 +589,11 @@ void MH_Present(const void* pixels, int pitch) {
     }
 
     pthread_mutex_lock(&present_lock);
+    if (staging_direct >= 0) {
+        // the buffer of MH_FrameBuffer() is taken back
+        staging_next = staging_direct;
+        staging_direct = -1;
+    }
     while (queue_count == 2) {
         pthread_cond_wait(&present_cond, &present_lock);
     }
@@ -606,6 +613,43 @@ void MH_Present(const void* pixels, int pitch) {
     pthread_mutex_lock(&present_lock);
     queue[(queue_head + queue_count) % 2] = slot;
     queue_count++;
+    pthread_cond_signal(&present_cond);
+    pthread_mutex_unlock(&present_lock);
+    if (!screen_ours) {
+        present_flush();
+        wait_for_screen();
+    }
+}
+
+void* MH_FrameBuffer(void) {
+    if (!MH_IsOpen()) {
+        return NULL;
+    }
+    start_present_thread();
+    if (!present_threaded) {
+        return NULL;
+    }
+    pthread_mutex_lock(&present_lock);
+    if (staging_direct < 0) {
+        // the slot after the queued ones is free once fewer than two are queued
+        while (queue_count == 2) {
+            pthread_cond_wait(&present_cond, &present_lock);
+        }
+        staging_direct = staging_next;
+        staging_next ^= 1;
+    }
+    pthread_mutex_unlock(&present_lock);
+    return staging[staging_direct];
+}
+
+void MH_PresentBuffer(void) {
+    if (!MH_IsOpen() || !present_threaded || staging_direct < 0) {
+        return;
+    }
+    pthread_mutex_lock(&present_lock);
+    queue[(queue_head + queue_count) % 2] = staging_direct;
+    queue_count++;
+    staging_direct = -1;
     pthread_cond_signal(&present_cond);
     pthread_mutex_unlock(&present_lock);
     if (!screen_ours) {
