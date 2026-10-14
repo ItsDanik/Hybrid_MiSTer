@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -57,6 +58,50 @@ typedef struct {
 static pad pads[MAX_PADS];
 static int pads_ready;
 static time_t scanned;
+
+// Devices that were opened and are no gamepads: not opened again while the
+// node is the same one. Opening an event device takes the kernel up to ten
+// milliseconds (a Bluetooth one more), and with a keyboard, a mouse and what
+// else a MiSTer has that was a game standing still for 50ms at every scan.
+#define MAX_OTHERS 32
+typedef struct {
+    char name[32]; // "" = free
+    ino_t ino;
+    time_t ctime;
+    int seen;
+} other;
+
+static other others[MAX_OTHERS];
+
+// 1: this node was looked at before and is no gamepad
+static int known_other(const char* name, const struct stat* st) {
+    int i;
+
+    for (i = 0; i < MAX_OTHERS; i++) {
+        if (others[i].name[0] && strcmp(others[i].name, name) == 0) {
+            if (others[i].ino == st->st_ino && others[i].ctime == st->st_ctime) {
+                others[i].seen = 1;
+                return 1;
+            }
+            others[i].name[0] = 0; // another device has the name now
+        }
+    }
+    return 0;
+}
+
+static void add_other(const char* name, const struct stat* st) {
+    int i;
+
+    for (i = 0; i < MAX_OTHERS; i++) {
+        if (!others[i].name[0] && strlen(name) < sizeof others[i].name) {
+            strcpy(others[i].name, name);
+            others[i].ino = st->st_ino;
+            others[i].ctime = st->st_ctime;
+            others[i].seen = 1;
+            return;
+        }
+    }
+}
 
 static const int pairs[][2] = {
     { ABS_BRAKE, ABS_GAS },
@@ -99,8 +144,12 @@ static void scan(void) {
     for (i = 0; i < MAX_PADS; i++) {
         pads[i].seen = 0;
     }
+    for (i = 0; i < MAX_OTHERS; i++) {
+        others[i].seen = 0;
+    }
     while (dir != NULL && (e = readdir(dir)) != NULL) {
         unsigned long ff[FF_MAX / (8 * sizeof(long)) + 1];
+        struct stat st;
         char path[300];
         int fd, writable, free_slot = -1;
 
@@ -120,6 +169,9 @@ static void scan(void) {
             continue;
         }
         snprintf(path, sizeof path, INPUT_DIR "/%s", e->d_name);
+        if (stat(path, &st) < 0 || known_other(e->d_name, &st)) {
+            continue;
+        }
         // (for writing too: force feedback is written to the device)
         writable = 1;
         fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
@@ -132,6 +184,7 @@ static void scan(void) {
         }
         if (!is_gamepad(fd)) {
             close(fd);
+            add_other(e->d_name, &st);
             continue;
         }
         memset(ff, 0, sizeof ff);
@@ -149,6 +202,11 @@ static void scan(void) {
         if (pads[i].fd >= 0 && !pads[i].seen) {
             close(pads[i].fd);
             pads[i].fd = -1;
+        }
+    }
+    for (i = 0; i < MAX_OTHERS; i++) {
+        if (!others[i].seen) {
+            others[i].name[0] = 0; // unplugged
         }
     }
 }
