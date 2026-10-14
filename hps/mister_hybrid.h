@@ -179,6 +179,12 @@ void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits)
 // furthest: for player 1 of a game one plays alone. Returns 0 while no
 // controller with triggers is connected. Cheap to call every frame.
 int MH_ReadTriggers(int* left, int* right);
+// The clicks of the left and right stick (L3, R3), 1 while pressed, which
+// MiSTer's default map does not pass on either: read the same way, from the
+// gamepads' BTN_THUMBL and BTN_THUMBR (the standard gamepad buttons; a
+// controller whose driver names them otherwise has none here), pressed on
+// any controller. Returns 0 while no gamepad is connected.
+int MH_ReadStickButtons(int* left, int* right);
 // Rumble: the strength of the gamepad's heavy (slow) and light (fast) motor,
 // 0 = off .. 255, on every connected controller that can. It goes on at that
 // strength until the next call, but a game must repeat the call at least

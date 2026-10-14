@@ -34,10 +34,11 @@
 
   Joysticks: two virtual joysticks (players 1 and 2) with 6 axes (left stick,
   right stick, and on player 1 the analog triggers L2 and R2 as axes 4 and 5,
-  0..32767: MH_ReadTriggers()), one hat (d-pad) and 30 buttons. SDL's rumble
+  0..32767: MH_ReadTriggers()), one hat (d-pad) and 32 buttons. SDL's rumble
   calls on joystick 1 shake every controller that can (MH_Rumble()). Buttons 0..27 are the core's
   buttons in the order of its "J1," list; buttons 28 and 29 of player 1 are
-  "Menu OK" and "Menu Back", see MH_MenuButtons().
+  "Menu OK" and "Menu Back", see MH_MenuButtons(); 30 and 31 of player 1
+  the clicks of the left and right stick (L3, R3: MH_ReadStickButtons()).
 
   This software is provided 'as-is' under the zlib license, like SDL itself.
 */
@@ -61,9 +62,11 @@
 #define MISTER_SURFACE "_SDL_MiSTerSurface"
 
 #define MISTER_NUM_JOYSTICKS  2
-#define MISTER_NUM_BUTTONS    30
+#define MISTER_NUM_BUTTONS    32
 #define MISTER_BUTTON_MENU_OK   28
 #define MISTER_BUTTON_MENU_BACK 29
+#define MISTER_BUTTON_L3        30
+#define MISTER_BUTTON_R3        31
 
 static Uint32 video_format;
 static SDL_bool vsync;
@@ -164,6 +167,13 @@ static void SDLCALL MISTER_JoystickUpdate(void *userdata)
     }
     SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_OK, (joy & ok_bits) ? SDL_PRESSED : SDL_RELEASED);
     SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_BACK, (joy & back_bits) ? SDL_PRESSED : SDL_RELEASED);
+    if (player == 0) {
+        int l3 = 0, r3 = 0;
+
+        MH_ReadStickButtons(&l3, &r3);
+        SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_L3, l3 ? SDL_PRESSED : SDL_RELEASED);
+        SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_R3, r3 ? SDL_PRESSED : SDL_RELEASED);
+    }
 }
 
 /* SDL_JoystickRumble() / SDL_GameControllerRumble() on joystick 1 */

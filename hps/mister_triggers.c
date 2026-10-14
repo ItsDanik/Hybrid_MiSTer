@@ -1,5 +1,6 @@
-// Analog triggers (L2 / R2) and rumble, for MH_ReadTriggers() and MH_Rumble()
-// (mister_hybrid.h): what a gamepad has that MiSTer does not pass on.
+// Analog triggers (L2 / R2), the stick clicks (L3 / R3) and rumble, for
+// MH_ReadTriggers(), MH_ReadStickButtons() and MH_Rumble() (mister_hybrid.h):
+// what a gamepad has that MiSTer does not pass on.
 //
 // Main_MiSTer gives a core the two sticks and the buttons of a gamepad, but
 // not its triggers as axes. The game runs on the same Linux, so this module
@@ -344,6 +345,41 @@ int MH_Rumble(int strong, int weak) {
     last_weak = weak;
     sent = now;
     return any;
+}
+
+int MH_ReadStickButtons(int* left, int* right) {
+    const char* fixed = getenv("MISTER_HYBRID_STICKBUTTONS"); // "left,right": for tests without a controller
+    unsigned long keys[KEY_MAX / (8 * sizeof(long)) + 1];
+    int found = 0;
+    int i;
+
+    *left = *right = 0;
+    if (fixed != NULL) {
+        if (sscanf(fixed, "%d,%d", left, right) < 2) {
+            *left = *right = 0;
+        }
+        return 1;
+    }
+    refresh();
+    for (i = 0; i < MAX_PADS; i++) {
+        pad* p = &pads[i];
+
+        if (p->fd < 0) {
+            continue;
+        }
+        memset(keys, 0, sizeof keys);
+        if (ioctl(p->fd, EVIOCGKEY(sizeof keys), keys) < 0) {
+            if (errno == ENODEV) { // unplugged
+                close(p->fd);
+                p->fd = -1;
+            }
+            continue;
+        }
+        found = 1;
+        *left |= has_bit(keys, BTN_THUMBL);
+        *right |= has_bit(keys, BTN_THUMBR);
+    }
+    return found;
 }
 
 int MH_ReadTriggers(int* left, int* right) {
