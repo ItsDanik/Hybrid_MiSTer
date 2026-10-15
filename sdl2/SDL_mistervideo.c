@@ -8,8 +8,6 @@
   The size of the window picks the core's video mode (see mister_hybrid.h):
   the smallest the window fits in, of those that are available. These are
   also the display modes. A window of another size is cropped or centred.
-  800x600 and 1024x768 are only available where no 15kHz screen is in use;
-  if the player changes that while the game runs, the mode is picked again.
 
   Hints (also read from the environment):
     SDL_MISTER_VIDEO_FORMAT  "RGB565" (default) or "INDEX8". With INDEX8 the
@@ -81,14 +79,13 @@ static Uint8 *fit_buffer;
 /* The video mode and format of a new window are set with its first frame:
    what is on the screen (a "Loading..." of MH_UI_Message()) stays until then */
 static SDL_bool mode_pending;
-/* whether the modes above 15kHz were available when the mode was picked */
-static int modes_above;
 
 /* the video modes from the smallest to the largest */
-static const int mode_order[MH_MODE_COUNT] = {
+static const int mode_order[] = {
     MH_MODE_320x200, MH_MODE_320x240, MH_MODE_640x200, MH_MODE_640x240,
-    MH_MODE_640x400, MH_MODE_640x480, MH_MODE_800x600, MH_MODE_1024x768
+    MH_MODE_640x400, MH_MODE_640x480
 };
+#define MODE_ORDER_COUNT ((int)SDL_arraysize(mode_order))
 
 /* The smallest available video mode a window fits in, or the largest there
    is (an older core, a 15kHz screen): the window is cropped then */
@@ -97,7 +94,7 @@ static int MISTER_PickMode(int w, int h)
     int mode = MH_MODE_320x200;
     int i;
 
-    for (i = 0; i < MH_MODE_COUNT; i++) {
+    for (i = 0; i < MODE_ORDER_COUNT; i++) {
         if (!MH_ModeAvailable(mode_order[i])) {
             continue;
         }
@@ -430,9 +427,8 @@ static int MISTER_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_R
         return SDL_SetError("Couldn't find the MiSTer surface for the window");
     }
 
-    if (mode_pending || modes_above != MH_ModeAvailable(MH_MODE_800x600)) {
+    if (mode_pending) {
         mode_pending = SDL_FALSE;
-        modes_above = MH_ModeAvailable(MH_MODE_800x600);
         MH_SetMode(MISTER_PickMode(surface->w, surface->h));
         if (fit_buffer) {
             SDL_memset(fit_buffer, 0, MH_MAX_WIDTH * MH_MAX_HEIGHT * 2);
@@ -545,7 +541,7 @@ static int MISTER_VideoInit(_THIS)
         return -1;
     }
     /* the modes this core has on this screen, for games that list them */
-    for (i = 0; i < MH_MODE_COUNT; i++) {
+    for (i = 0; i < MODE_ORDER_COUNT; i++) {
         if (MH_ModeAvailable(mode_order[i])) {
             mode.w = MH_ModeWidth(mode_order[i]);
             mode.h = MH_ModeHeight(mode_order[i]);

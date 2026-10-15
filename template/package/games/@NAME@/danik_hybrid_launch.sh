@@ -1,16 +1,17 @@
 #!/bin/bash
 #
-# @NAME@ (@TITLE@) launcher. danik_hybrid_cores (Scripts/danik_hybrid_cores.sh)
-# runs it when the @NAME@ core is loaded and stops it, with SIGTERM to the
-# process group, when another core is loaded.
+# @NAME@ (@TITLE@) launcher. danik_hybrid_ports (Scripts/danik_hybrid_ports.sh)
+# runs it when the @NAME@ core is loaded (also with a game's set name, from
+# its menu entry: MISTER_HYBRID_SET, which the game reads) and stops it, with
+# SIGTERM to the process group, when another core is loaded.
 #
 # Laid out after the per-core handlers of MiSTer Frontier by MiSTer Organize
 # (https://github.com/MiSTerOrganize/MiSTer_Frontier, GPL-3.0), with thanks
 # for the inspiration. Licensed under the GPL-3.0.
 
 CORE="@NAME@"
-GAMEDIR="/media/fat/games/$CORE"
-LOGDIR="/media/fat/logs/$CORE"
+GAMEDIR="/media/fat/games/dnk/$CORE"
+LOGDIR="/media/fat/logs/dnk/$CORE"
 LOG="$LOGDIR/@name@.log"
 
 cd "$GAMEDIR" || exit 1
@@ -76,7 +77,14 @@ while :; do
 done
 GAME=
 
-# Back to the MiSTer menu, unless another core was loaded meanwhile
+# Unless another core was loaded meanwhile: a game that left with an error
+# (one that crashed: 128 + the signal) and put no message up says so on the
+# core's picture (./mh_message, host version 13), and a message stays there
+# until the player leaves the core. Else back to the MiSTer menu.
 if grep -q "^$CORE" /tmp/CORENAME 2>/dev/null; then
-    echo "load_core /media/fat/menu.rbf" > /dev/MiSTer_cmd
+    if [ $RC -ne 0 ] && ! ./mh_message --shown >> "$LOG" 2>&1; then
+        ./mh_message --error "The game stopped unexpectedly (exit code $RC).\nIts log: ${LOG#/media/fat/}" >> "$LOG" 2>&1
+        sleep 0.1
+    fi
+    ./mh_message --shown >> "$LOG" 2>&1 || echo "load_core /media/fat/menu.rbf" > /dev/MiSTer_cmd
 fi

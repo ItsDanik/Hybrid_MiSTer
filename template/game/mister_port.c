@@ -3,6 +3,7 @@
 #include "mister_port.h"
 
 #include <mister_hybrid.h>
+#include <stdio.h>
 
 #define EXIT_TO_MENU 0
 #define EXIT_RESTART 42 // danik_hybrid_launch.sh starts the game again
@@ -61,20 +62,35 @@ unsigned MiSTer_WaitFrame(void)
     return fields;
 }
 
+void MiSTer_HudRows(int height, int *top, int *bottom)
+{
+    int scale = height >= 480 ? 2 : 1;
+    int t, b;
+
+    MH_HudMargins(&t, &b);
+    *top = t * scale;
+    *bottom = height - b * scale;
+}
+
 // The player came through the list: quitting a game goes back to it
 static int PickedFromList = 0;
 
-int MiSTer_PickGame(const char *const *names, int count, int selected)
+// GAME: what is said when none of the games is there (4 lines of 71; %s: the
+// game's folder, MH_GamePath())
+#define NO_GAME "No game data found. Copy the game's files to %s/ on the SD card."
+
+int MiSTer_PickGame(const struct mh_game *games, int count)
 {
+    char text[MH_MSG_COLS + 1];
     int pick;
 
     if (!MH_Open())
-        return selected;
-    pick = MH_UI_Menu(TITLE, "Select a game:", names, count, selected);
-    if (pick < 0 || pick >= count)
-        return -1;
-    PickedFromList = 1;
-    MH_UI_Message(TITLE, "Loading...", 0);
+        return MH_PickGame(games, count, NULL, NO_GAME, &PickedFromList);
+    pick = MH_PickGame(games, count, NULL, NO_GAME, &PickedFromList);
+    if (pick >= 0) {
+        snprintf(text, sizeof(text), "Loading %s...", games[pick].name);
+        MH_UI_Message(TITLE, text, 0);
+    }
     return pick;
 }
 

@@ -8,7 +8,8 @@
 // module finds the core buttons it drives by reading the controller's menu
 // mapping (input_<vid>_<pid>_v3.map) and its mapping for this core
 // (<core>_input_<vid>_<pid>_v3.map, or the core's default "jn" mapping when
-// there is none).
+// there is none). Started from a menu entry with a set name (an MGL), Main
+// names the mapping after that (<set>_input_...): MH_SetName().
 
 #include "mister_hybrid.h"
 
@@ -265,7 +266,7 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
     dir_mtime[0] = mtime_of(INPUTS_DIR);
     dir_mtime[1] = mtime_of(CONFIG_DIR);
     files_count = 0;
-    snprintf(prefix, sizeof(prefix), "%s_", MH_CoreName());
+    snprintf(prefix, sizeof(prefix), "%s_", MH_SetName());
     ok_result = 0;
     back_result = 0;
     for (i = 0; i < count; i++) {

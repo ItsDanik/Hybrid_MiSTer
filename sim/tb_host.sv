@@ -61,14 +61,16 @@ reg  [3:0] crt_hpos = 0, crt_vpos = 0;
 wire [15:0] audio_l, audio_r;
 wire [7:0] r, g, b;
 
-hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_TEXT("rtl/hybrid_wall_text.hex")) dut
+hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_DOTS("rtl/hybrid_wall_dots.hex"),
+	.WALL_EASE("rtl/hybrid_wall_ease.hex"), .WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"),
+	.WALL_TIMEOUT(1500)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(joystick_0), .joystick_1(joystick_1),
 	.joy_l_analog_0(16'h1122), .joy_r_analog_0(16'h3344), .joy_l_analog_1(16'h5566), .joy_r_analog_1(16'h7788),
-	.osd_status(64'hCAFE), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
+	.osd_status({64'h0012_3456_789A_BCDE, 64'hCAFE}), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(vga31), .crt_hsize(crt_hsize), .crt_hpos(crt_hpos), .crt_vpos(crt_vpos),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(menumask),
@@ -79,7 +81,7 @@ hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex")
 // DDR model. mem index = word address - BASE
 
 localparam [28:0] BASE = 29'h06000000;
-reg [63:0] mem[0:1310719];
+reg [63:0] mem[0:524287];
 
 // random waitrequest
 reg busy_r = 0;
@@ -175,14 +177,14 @@ endtask
 
 // the video modes
 function integer mode_w(input integer m);
-	mode_w = (m == 0 || m == 3) ? 320 : (m == 5) ? 800 : (m == 6) ? 1024 : 640;
+	mode_w = (m == 0 || m == 3) ? 320 : 640;
 endfunction
 function integer mode_h(input integer m);
-	mode_h = (m == 2) ? 400 : (m == 3 || m == 7) ? 240 : (m == 4) ? 480 : (m == 5) ? 600 : (m == 6) ? 768 : 200;
+	mode_h = (m == 2) ? 400 : (m == 3 || m == 7) ? 240 : (m == 4) ? 480 : 200;
 endfunction
-// word index of a framebuffer: 1024x768 has its own, larger ones
+// word index of a framebuffer
 function integer fb_word(input integer m, input integer fb);
-	fb_word = (m == 6) ? 29'h80000 + fb * 29'h40000 : 29'h20000 * (fb + 1);
+	fb_word = 29'h20000 * (fb + 1);
 endfunction
 
 // framebuffers of a mode: fb0 and fb1 8bpp, fb2 RGB565
@@ -202,7 +204,7 @@ endtask
 
 integer i, x, y, f, s;
 initial begin
-	for (i = 0; i < 1310720; i = i + 1) mem[i] = 0;
+	for (i = 0; i < 524288; i = i + 1) mem[i] = 0;
 	for (s = 0; s < 2; s = s + 1)
 		for (i = 0; i < 256; i = i + 2)
 			mem[29'h200 + s * 29'h80 + i / 2] = {8'd0, pal_rgb(s, i + 1), 8'd0, pal_rgb(s, i)};
@@ -220,74 +222,108 @@ integer px = 0, py = 0;
 integer errors = 0, checked = 0;
 integer fields_seen = 0;
 integer check_enable = 0, check_black = 0, check_wall = 0;
-// the picture without a game: the logo in the middle, the text 24 pixels
-// from the right edge and 20 lines from the bottom, on a screen of wall_w x
-// wall_h that has one pixel for 1 << wall_sx by 1 << wall_sy of the mode.
+// the picture without a game, on a screen of 640x480: the logo (429x111) in
+// the middle, the badge (320x54) 34 pixels from the right edge and from the
+// bottom, their pixels one after the other in the file and 16 colours each.
 // Its colours are at wall_lvl of 256, the level the core had when the field
-// started (the levels themselves are checked where the picture fades).
-reg  [3:0] wall[0:15615];
-reg [23:0] wall_pal[0:15];
-reg [95:0] wall_text[0:7];
-integer wall_w = 320, wall_h = 240, wall_sx = 0, wall_sy = 0, wall_lvl = 0;
+// started (the levels themselves are checked where the picture fades), as
+// the intro leaves it at its end. The dots under "MiSTer" light up in turn
+// all the time: their cells are not checked (wall_skip).
+reg  [3:0] wall[0:429 * 111 + 320 * 54 - 1];
+reg [23:0] wall_pal[0:31];
+reg  [4:0] wall_dots[0:428];
+integer wall_lvl = 0;
+// the message, when one is shown (tb_msg_on): its 40 words of lines, and the font
+reg  [5:0] tb_font[0:95 * 13 - 1];
+reg [63:0] tb_msg[0:39];
+reg [63:0] tb_alone[0:39];
+integer    tb_msg_on = 0;
+integer    tb_list = -1;   // a list: its line selected
+// the core's mixing, from a to b at level of 256
+function [7:0] tb_mix8(input [7:0] a, input [7:0] b, input integer level);
+	integer d;
+	begin
+		d = (b - a) * level;
+		tb_mix8 = a + ((d >= 0) ? d / 256 : -((-d + 255) / 256));
+	end
+endfunction
+function [23:0] tb_mix(input [23:0] a, input [23:0] b, input integer level);
+	tb_mix = {tb_mix8(a[23:16], b[23:16], level), tb_mix8(a[15:8], b[15:8], level), tb_mix8(a[7:0], b[7:0], level)};
+endfunction
 initial begin
 	$readmemh("rtl/hybrid_wall.hex", wall);
 	$readmemh("rtl/hybrid_wall_pal.hex", wall_pal);
-	$readmemh("rtl/hybrid_wall_text.hex", wall_text);
+	$readmemh("rtl/hybrid_wall_dots.hex", wall_dots);
+	$readmemh("rtl/hybrid_wall_font.hex", tb_font);
+	$readmemh("rtl/hybrid_wall_alone.hex", tb_alone);
 end
+// a pixel of the message's text: 4 lines of 71 characters of 6x13, 16 apart,
+// the first 16 below the logo, at its left edge
+function msg_bit(input integer wx, input integer wy);
+	integer tx, ty, c;
+	reg [7:0] ch;
+	begin
+		tx = wx - 105;
+		ty = wy - (184 + 111 + 16);
+		msg_bit = 0;
+		if (tb_msg_on && tx >= 0 && tx < 426 && ty >= 0 && ty < 64 && ty % 16 < 13) begin
+			c  = tx / 6;
+			ch = tb_msg[(ty / 16) * 10 + c / 8][(c % 8) * 8 +: 8];
+			if (ch >= 32 && ch <= 126) msg_bit = tb_font[(ch - 32) * 13 + ty % 16][tx % 6];
+		end
+	end
+endfunction
+function wall_skip(input integer wx, input integer wy);
+	integer lx, ly;
+	begin
+		lx = wx - (640 - 429) / 2;
+		ly = wy - (480 - 111) / 2;
+		wall_skip = lx >= 0 && lx < 429 && ly >= 91 && ly <= 97 && wall_dots[lx] != 31;
+	end
+endfunction
 function [23:0] wall_exp(input integer wx, input integer wy);
-	integer lx, ly, tx, ty;
+	integer lx, ly, bx, by;
 	reg [23:0] c;
 	begin
-		lx = wx - (wall_w - 244) / 2;
-		ly = wy - (wall_h - 64) / 2;
-		tx = wx - (wall_w - 96 - 24);
-		ty = wy - (wall_h - 7 - 20);
-		if (lx >= 0 && lx < 244 && ly >= 0 && ly < 64) c = wall_pal[wall[ly * 244 + lx]];
-		else if (tx >= 0 && tx < 96 && ty >= 0 && ty < 7 && wall_text[ty][tx]) c = 24'hEFEFEF;
+		lx = wx - (640 - 429) / 2;
+		ly = wy - (480 - 111) / 2;
+		bx = wx - (640 - 34 - 320);
+		by = wy - (480 - 34 - 54);
+		if (msg_bit(wx, wy)) c = (tb_list >= 0 && (wx - 105) / 6 == 70) ? tb_mix(24'h7F30A0, 24'hEFEFEF, 154) : 24'hEFEFEF;
+		else if (tb_list >= 0 && wx >= 101 && wx < 101 + 434 && wy >= 311 - 2 + tb_list * 16 && wy < 311 - 2 + tb_list * 16 + 16)
+			c = tb_mix(24'h7F30A0, 24'hFF5CB4, 192);
+		else if (lx >= 0 && lx < 429 && ly >= 0 && ly < 111) c = wall_pal[wall[ly * 429 + lx]];
+		else if (bx >= 0 && bx < 320 && by >= 0 && by < 54) c = wall_pal[16 + wall[429 * 111 + by * 320 + bx]];
 		else c = 24'h7F30A0;
 		wall_exp[23:16] = c[23:16] * wall_lvl / 256;
 		wall_exp[15:8]  = c[15:8] * wall_lvl / 256;
 		wall_exp[7:0]   = c[7:0] * wall_lvl / 256;
 	end
 endfunction
-// The picture fades in: the fields of black it still has to wait, then 6 of
-// 256 more with every field up to the full picture, 43 fields, all of it
-// checked. What the core has counted is read in the middle of a field, when
-// nothing changes.
-task test_fade_in;
-	integer n, bad, hold;
+// The intro: the fields of black it still has to wait, then 242 fields to
+// its end, counted; then the picture as it stays, all of it checked but the
+// dots, at the full level.
+task test_intro;
+	integer n, hold;
 	begin
-		bad = 0;
-		check_wall = 1;
-		check_enable = 1;
 		@(negedge vblank);
 		repeat (50) @(posedge clk);
 		hold = dut.wall_hold;
-		for (n = 1; n <= hold + 45; n = n + 1) begin
-			@(negedge vblank);
-			repeat (50) @(posedge clk);
-			if (wall_lvl != ((n <= hold) ? 0 : (n - hold > 42) ? 256 : 6 * (n - hold))) bad = bad + 1;
+		n = 0;
+		while (!dut.intro_done && n < 400) begin
+			wait_fields(1);
+			n = n + 1;
 		end
-		wait_fields(1);
-		check_enable = 0;
-		check_wall = 0;
-		$display("fade in: %0d errors, %0d fields at another level, level %0d", errors, bad, wall_lvl);
-		if (bad != 0 || wall_lvl != 256) begin $display("FAIL: fade in"); errors = errors + 1; end
-	end
-endtask
-// the picture in a mode the game did not ask for
-task test_wall(input integer m, input integer w, input integer h, input integer sx, input integer sy, input integer rows);
-	begin
-		force dut.vmode = m[3:0];
-		wall_w = w; wall_h = h; wall_sx = sx; wall_sy = sy;
-		wait_fields(5);
+		$display("intro: over after %0d fields, %0d of them black at first", n, hold);
+		if (n < hold + 242 || n > hold + 244) begin $display("FAIL: intro length"); errors = errors + 1; end
+		wait_fields(2);
 		check_wall = 1;
 		check_enable = 1;
 		wait_fields(2);
 		check_enable = 0;
 		check_wall = 0;
-		$display("no game, mode %0d vga31 %0d: checked %0d pixels, %0d errors, rows/field %0d", m, vga31, checked, errors, field_rows);
-		if (field_rows != rows) begin $display("FAIL: picture in mode %0d", m); errors = errors + 1; end
+		$display("intro over: %0d errors, level %0d", errors, wall_lvl);
+		if (wall_lvl != 256) begin $display("FAIL: intro level"); errors = errors + 1; end
 	end
 endtask
 reg     old_hblank = 1, old_vblank = 1, old_vsync = 0;
@@ -355,7 +391,7 @@ always @(posedge clk_vid) if (ce_pix) begin
 		if (check_enable) begin : chk
 			reg [23:0] exp;
 			row = lace ? py * 2 + (f1 ? 1 : 0) : py;
-			exp = check_black ? 24'd0 : check_wall ? wall_exp(px >> wall_sx, py >> wall_sy) : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
+			exp = check_black ? 24'd0 : check_wall ? (wall_skip(px, row) ? {r, g, b} : wall_exp(px, row)) : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
 			if ({r, g, b} !== exp) begin
 				if (errors < 10) $display("FAIL: fb %0d px %0d row %0d got %h exp %h", cur_fb, px, row, {r, g, b}, exp);
 				errors = errors + 1;
@@ -400,7 +436,7 @@ task test_mode(input integer m, input integer v31, input integer rows, input int
 		if (field_rows != rows || hs_period != hs || vs_period != vs || (is_lace && vs_period_prev != vs)) begin
 			$display("FAIL: mode %0d timing", m); $finish;
 		end
-		if (mem[9][15:12] != m || mem[9][9] != is_lace[0] || mem[9][16] != v31[0] || !mem[9][17] || mem[9][18] != fast) begin
+		if (mem[9][15:12] != m || mem[9][9] != is_lace[0] || mem[9][16] || !mem[9][17] || mem[9][18] != fast) begin
 			$display("FAIL: mode %0d status %h", m, mem[9][31:0]); errors = errors + 1;
 		end
 		if (hires != (is_lace != 0 || rows > 240) || fast != (rows > 240)) begin
@@ -426,22 +462,26 @@ initial begin
 
 	wait_fields(1);
 	if (dut.ctrl_valid) begin $display("FAIL: ctrl valid without magic"); $finish; end
+	// 640x480, interlaced: both kinds of field
+	even_fields = 0; odd_fields = 0;
 	check_wall = 1;
 	check_enable = 1;
 	wait_fields(2);
 	check_enable = 0;
 	check_wall = 0;
 	$display("no game: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
-	if (checked != 2 * 76800 || field_rows != 240 || hs_period != 400) begin $display("FAIL: picture without a game"); $finish; end
+	if (checked != 2 * 153600 || field_rows != 240 || hs_period != 800 || !lace || even_fields != 1 || odd_fields != 1 || mem[9][15:12] != 4) begin
+		$display("FAIL: picture without a game"); $finish;
+	end
 	if (mem[0][31:0] != 0) begin $display("FAIL: magic of an earlier game not cleared: %h", mem[0]); errors = errors + 1; end
 	while (dut.ctrl_clear != 0) wait_fields(1);
 	wait_fields(1);
 	// black for 16 fields in all, then it fades in
 	if (wall_lvl != 0) begin $display("FAIL: picture not black at first"); errors = errors + 1; end
-	test_fade_in;
+	test_intro;
 
 	// mode 0 from framebuffer index 0. The picture fades out first, in 43
-	// fields and still in 320x240; the game gets the screen after a black one.
+	// fields and still in 640x480; the game gets the screen after a black one.
 	begin : fade_out
 		integer n, bad;
 		bad = 0;
@@ -459,7 +499,7 @@ initial begin
 			repeat (50) @(posedge clk);
 			n = n + 1;
 			if (wall_lvl != ((n > 42) ? 0 : 256 - 6 * n)) bad = bad + 1;
-			if (!mem[9][10] || mem[9][19] || mem[9][15:12] != 3 || field_rows != 240) bad = bad + 1;
+			if (!mem[9][10] || mem[9][19] || mem[9][15:12] != 4 || field_rows != 240 || !lace) bad = bad + 1;
 			wait_fields(1);
 			// the control block is read early in the vblank
 			repeat (5000) @(posedge clk);
@@ -486,6 +526,8 @@ initial begin
 	if (mem[10] != {32'h34, 32'h12}) begin $display("FAIL: status joystick %h", mem[10]); $finish; end
 	if (mem[11] != 64'h7788556633441122) begin $display("FAIL: status analog %h", mem[11]); $finish; end
 	if (mem[12] != 64'hCAFE) begin $display("FAIL: status osd %h", mem[12]); $finish; end
+	// OSD status [127:64] at 0xC8, next to the audio fetch pointer (checked below)
+	if (mem[25] != 64'h0012_3456_789A_BCDE) begin $display("FAIL: status osd high %h", mem[25]); $finish; end
 	if (!mem[8 + 8 + (9'h175 / 64)][9'h175 % 64]) begin $display("FAIL: key bitmap"); $finish; end
 	$display("status: frame counter %0d, writes %0d", mem[8][63:32], stat_writes);
 
@@ -555,32 +597,15 @@ initial begin
 	test_mode(7, 0, 240, 800, 800 * 262, 0);
 	test_mode(4, 0, 240, 800, 800 * 525 / 2, 1);
 	test_mode(4, 1, 480, 800, 800 * 525, 0);
-	// 800x600 at 40MHz, 1024x768 at 65MHz
-	test_mode(5, 1, 600, 1056, 1056 * 628, 0);
-	if (mem[15][7:0] != 8'd80 || mem[15][28:16] != 13'd3200) begin $display("FAIL: status video clock %h", mem[15]); errors = errors + 1; end
-	test_mode(6, 1, 768, 1344, 1344 * 806, 0);
-	if (hs_ns < 20670 || hs_ns > 20685) begin $display("FAIL: 1024x768 line %0f ns", hs_ns); errors = errors + 1; end
-
-	// vga31 goes away in the middle of 1024x768: the output stops at once
-	// and comes back at 15kHz and black, the mode is reported as not shown
-	repeat (100000) @(posedge clk);
-	vga31 = 0;
-	wait_fields(3);
-	check_black = 1;
-	check_enable = 1;
-	wait_fields(2);
-	check_enable = 0;
-	check_black = 0;
-	$display("1024x768 without vga31: checked %0d pixels, %0d errors, hsync period %0d, line %0f us", checked, errors, hs_period, hs_ns / 1000);
-	if (hs_period != 400 || mem[9][15:12] != 0 || mem[9][16] || fast || hires) begin $display("FAIL: mode that is not available"); errors = errors + 1; end
-	// and it is shown again when vga31 is back
-	vga31 = 1;
-	wait_fields(4);
-	cur_fb = 2; cur_mode = 1;
-	check_enable = 1;
-	wait_fields(2);
-	check_enable = 0;
-	if (hs_period != 1344 || mem[9][15:12] != 6) begin $display("FAIL: 1024x768 again"); errors = errors + 1; end
+	// 800x600 and 1024x768 (up to host version 12) are modes the core does
+	// not have, with vga31 as well: 320x200
+	for (i = 5; i <= 6; i = i + 1) begin
+		cur_vmode = i;
+		set_ctrl(2, 1, 0, 10);
+		wait_fields(4);
+		$display("mode %0d vga31 1: hsync period %0d, mode shown %0d, status vga31 %0d", i, hs_period, mem[9][15:12], mem[9][16]);
+		if (hs_period != 400 || mem[9][15:12] != 0 || mem[9][16] || fast || hires) begin $display("FAIL: mode %0d", i); errors = errors + 1; end
+	end
 	// 640x480 turns interlaced when vga31 goes away
 	cur_vmode = 4;
 	fill(4);
@@ -710,7 +735,7 @@ initial begin
 		if (dut.fm_fetch != 0) begin $display("FAIL: FM ring after the enable went"); errors = errors + 1; end
 	end
 
-	// the game leaves in 640x400 interlaced: back to 320x240 and the core's picture
+	// the game leaves in 640x400 interlaced: back to 640x480 and the core's picture
 	cur_vmode = 2;
 	fill(2);
 	set_ctrl(0, 0, 0, 10);
@@ -725,30 +750,165 @@ initial begin
 	check_enable = 0;
 	check_wall = 0;
 	$display("game left: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
-	if (checked != 2 * 76800 || lace || hires || field_rows != 240 || hs_period != 400 || mem[9][15:12] != 3 || mem[9][10] || mem[9][19]) begin
+	if (checked != 2 * 153600 || !lace || !hires || field_rows != 240 || hs_period != 800 || mem[9][15:12] != 4 || mem[9][10] || mem[9][19]) begin
 		$display("FAIL: picture after the game left"); errors = errors + 1;
 	end
 	// it starts from black again, and stays black for 3 seconds (180 fields)
-	// this time; the fields do not count while the output is off for the
-	// change from interlaced
+	// this time
 	if (wall_lvl != 0 || dut.wall_hold < 170) begin $display("FAIL: picture not black after the game left"); errors = errors + 1; end
-	test_fade_in;
-	// the picture is the same in every other mode
-	test_wall(0, 320, 200, 0, 0, 200);
-	test_wall(1, 320, 200, 1, 0, 200);
-	test_wall(2, 320, 200, 1, 0, 200);
-	if (!lace) begin $display("FAIL: picture, interlaced"); errors = errors + 1; end
+	// (not all of the 3 seconds: the simulation is slow)
+	dut.wall_hold = 4;
+	test_intro;
+	// with vga31 the picture is progressive 640x480 at 31kHz
 	vga31 = 1;
-	test_wall(2, 320, 200, 1, 1, 400);
-	test_wall(4, 320, 240, 1, 1, 480);
-	test_wall(5, 400, 300, 1, 1, 600);
-	test_wall(6, 512, 384, 1, 1, 768);
-	release dut.vmode;
-	wait_fields(3);
+	wait_fields(5);
+	check_wall = 1;
+	check_enable = 1;
+	wait_fields(2);
+	check_enable = 0;
+	check_wall = 0;
+	$display("no game, vga31 1: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
+	if (field_rows != 480 || hs_period != 800 || lace || !fast || mem[9][15:12] != 4) begin $display("FAIL: picture at 31kHz"); errors = errors + 1; end
 	vga31 = 0;
-	wall_w = 320; wall_h = 240; wall_sx = 0; wall_sy = 0;
 	wait_fields(4);
-	if (field_rows != 240 || hs_period != 400 || mem[9][15:12] != 3) begin $display("FAIL: 320x240 without a game"); errors = errors + 1; end
+	if (field_rows != 240 || hs_period != 800 || !lace || mem[9][15:12] != 4) begin $display("FAIL: 640x480 interlaced without a game"); errors = errors + 1; end
+
+	// A game that attaches while the intro runs waits for its end, then the
+	// picture goes out in 43 fields and the game has the screen: from field
+	// 220 of the intro, 22 + 43 fields
+	begin : intro_wait
+		integer n;
+		@(negedge vblank);
+		repeat (50) @(posedge clk);
+		dut.intro_t = 220;
+		cur_vmode = 0;
+		fill(0);
+		set_ctrl(0, 0, 0, 10);
+		wait_fields(10);
+		if (dut.game_on || wall_lvl != 256) begin $display("FAIL: the game did not wait for the intro"); errors = errors + 1; end
+		n = 10;
+		while (!dut.game_on && n < 200) begin
+			wait_fields(1);
+			n = n + 1;
+		end
+		$display("game during the intro: the screen after %0d fields", n);
+		if (n < 64 || n > 68) begin $display("FAIL: game during the intro"); errors = errors + 1; end
+	end
+
+	// A message: the game has the screen, a program puts a message up and
+	// takes the screen from it (mh_message): no black, the picture as at the
+	// end of its intro fading in, the text under the logo, the dots standing
+	// still for an error. Then another message, then none.
+	begin : message
+		integer n, l, c;
+		reg [8*80-1:0] line;
+		for (n = 0; n < 40; n = n + 1) tb_msg[n] = 0;
+		for (l = 0; l < 4; l = l + 1) begin
+			line = (l == 0) ? "Wolfenstein 3D: the game's data files were not found."
+			     : (l == 1) ? "Copy VSWAP.WL6 and the other *.WL6 files to games/dnk/ECWolf/, then"
+			     : (l == 2) ? "~ ! @ # $ % ^ & * ( ) _ + { } | : < > ? 0123456789 abcdefghijklmnopqrstu"
+			     : "start the game again.";
+			// the string is right-aligned in `line`: its characters from the left
+			c = 79;
+			while (c >= 0 && line[8 * c +: 8] == 0) c = c - 1;
+			for (n = 0; n <= c; n = n + 1) tb_msg[l * 10 + n / 8][(n % 8) * 8 +: 8] = line[8 * (c - n) +: 8];
+		end
+		for (n = 0; n < 40; n = n + 1) mem[29'h301 + n] = tb_msg[n];
+		mem[29'h300] = {15'd0, 1'b1, 16'd7, 32'h534D484D};
+		mem[0][31:0] = 0;
+		n = 0;
+		while (!(mem[9][20] && wall_lvl == 256) && n < 100) begin
+			wait_fields(1);
+			n = n + 1;
+		end
+		$display("message: shown at the full level after %0d fields, hold %0d, intro field %0d, dots %0d", n, dut.wall_hold, dut.intro_t, dut.a_dots);
+		if (n < 40 || n > 50 || dut.a_dots) begin $display("FAIL: message picture"); errors = errors + 1; end
+		tb_msg_on = 1;
+		wait_fields(2);
+		checked = 0;
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("message: checked %0d pixels, %0d errors", checked, errors);
+		// another one: read again for its sequence number
+		tb_msg[0][7:0] = "X";
+		mem[29'h301] = tb_msg[0];
+		mem[29'h300] = {15'd0, 1'b0, 16'd8, 32'h534D484D};
+		wait_fields(3);
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("message changed: %0d errors, dots %0d", errors, dut.a_dots);
+		if (!dut.a_dots) begin $display("FAIL: dots of a message that is no error"); errors = errors + 1; end
+		// a list: line 2 selected, a mark that there is more in the last column of line 0
+		tb_msg[8][55:48] = "^";
+		mem[29'h301 + 8] = tb_msg[8];
+		mem[29'h300] = {12'd0, 2'd2, 1'b1, 1'b0, 16'd9, 32'h534D484D};
+		tb_list = 2;
+		wait_fields(3);
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("list: %0d errors, dots %0d", errors, dut.a_dots);
+		if (dut.a_dots) begin $display("FAIL: dots of a list"); errors = errors + 1; end
+		tb_list = -1;
+		// none
+		mem[29'h300] = 0;
+		tb_msg_on = 0;
+		wait_fields(3);
+		if (mem[9][20]) begin $display("FAIL: message still shown"); errors = errors + 1; end
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("message gone: %0d errors", errors);
+	end
+
+	// The core's own message, when no game came in WALL_TIMEOUT fields after
+	// it started (not after a reset of the core: the counting is shortened)
+	begin : alone
+		integer n;
+		reset = 1;
+		repeat (20) @(posedge clk);
+		reset = 0;
+		wait_fields(2);
+		dut.alone_t = 1495;
+		n = 0;
+		while (!mem[9][21] && n < 20) begin
+			wait_fields(1);
+			n = n + 1;
+		end
+		if (!mem[9][21] || mem[9][20]) begin $display("FAIL: the core's own message"); errors = errors + 1; end
+		@(negedge vblank);
+		repeat (50) @(posedge clk);
+		dut.wall_hold = 0;
+		dut.intro_on = 1;
+		dut.intro_t = 242;
+		dut.wall_level = 256;
+		for (n = 0; n < 40; n = n + 1) tb_msg[n] = tb_alone[n];
+		tb_msg_on = 1;
+		wait_fields(3);
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("no game came: the core's message, %0d errors, dots %0d", errors, dut.a_dots);
+		if (dut.a_dots) begin $display("FAIL: dots with the core's message"); errors = errors + 1; end
+		// a game that comes after all has the screen
+		tb_msg_on = 0;
+		cur_vmode = 0;
+		set_ctrl(0, 0, 0, 10);
+		wait_fields(60);
+		if (!dut.game_on || mem[9][21]) begin $display("FAIL: a game after the core's message"); errors = errors + 1; end
+	end
 	if (short_lines != 0 || unmasked_lines != 0) errors = errors + 1;
 
 	if (errors != 0) $display("FAIL: %0d errors", errors);

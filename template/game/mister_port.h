@@ -43,11 +43,22 @@ unsigned MiSTer_WaitFrame(void);
 // The next call starts counting anew, after the game stood still (loading)
 void MiSTer_ResetFrames(void);
 
-// Before the game starts: lets the player pick one of several data sets on
-// the screen. Returns the index, -1 to quit
-int MiSTer_PickGame(const char *const *names, int count, int selected);
-// Problems the player can fix (missing data): shown on the screen until a
-// button is pressed, in plain words that say which files go where
+// HUD margins (hybrid/README.md, "HUD margins"): where the HUD goes on a
+// screen of `height` lines (240, or 480: the margins are doubled), as the
+// player set it in the OSD (CRT Options). `top` is the first row of the top
+// HUD, `bottom` the row under the last row of the bottom HUD (a HUD of h rows
+// is drawn from bottom - h). Call it every frame: the player changes the
+// margins while the game runs.
+void MiSTer_HudRows(int height, int *top, int *bottom);
+
+// A core with several games: which one to start (MH_PickGame(), hybrid/README.md
+// "Several games in one core"), from the game's menu entry or from a list of
+// the games that are there. Returns the index, -1 to quit
+struct mh_game;
+int MiSTer_PickGame(const struct mh_game *games, int count);
+// Problems the player can fix (missing data): shown under the core's logo
+// until the player leaves the core, in plain words that say which files go
+// where, in 4 lines of 71 characters (MH_MSG_ROWS, MH_MSG_COLS) at most
 void MiSTer_ShowError(const char *message);
 // Exit code of the process after the player quit: the launcher starts the
 // game again (back to the list of MiSTer_PickGame) or returns to the menu

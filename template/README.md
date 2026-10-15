@@ -1,6 +1,6 @@
 # @NAME@ for MiSTer
 
-@TITLE@ on [MiSTer FPGA](https://github.com/MiSTer-devel/Main_MiSTer/wiki) as a hybrid core.
+@TITLE@ on [MiSTer FPGA](https://github.com/MiSTer-devel/Main_MiSTer/wiki) as a hybrid port.
 
 TODO: one paragraph: which source port the game is and where it comes from. It runs on the MiSTer's ARM CPU. The @NAME@ FPGA core provides native 15kHz video (CRT, VGA and HDMI) at 320x200, 44.1kHz audio and keyboard, mouse and gamepad input. The two halves talk through shared DDR3 memory.
 
@@ -10,20 +10,25 @@ Disclaimer: AI is being used to speed up development of this project.
 
 ## Requirements
 
-- **danik_hybrid_cores**, the launcher that comes in the release zip (`Scripts/danik_hybrid_cores.sh`): run it **once** from the MiSTer's `Scripts` menu. It starts the game whenever the core is loaded, keeps running after a reboot, and serves all our hybrid cores. Every hybrid core brings the launcher along and the newest version is the one that runs, so it never has to be run again after an update. Without it the core only shows the MiSTer logo.
+- **danik_hybrid_ports**, the launcher (`Scripts/danik_hybrid_ports.sh`): run it **once** from the MiSTer's `Scripts` menu. It starts the game whenever its menu entry is loaded, keeps running after a reboot, and serves all our hybrid ports; its screen picks which ports and games to have, and can keep them up to date through `update_all`. It replaces `danik_hybrid_cores`, the launcher before it, and moves ports installed the old way into the new folders by itself. Without it the core says "Game not running".
 - **Game data**, which is not included: TODO which copy of the game.
 
 ## Installation
 
-1. Download the newest `@NAME@_YYYYMMDD.zip` from [releases](releases/) and extract it to the root of your SD card (`/media/fat`). That gives you:
-   - `_Other/@NAME@_YYYYMMDD.rbf`, the FPGA core
-   - `games/@NAME@/`, the game binary and its launcher
-   - `Scripts/danik_hybrid_cores.sh`, the launcher (from [Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer), which can also keep it up to date through `update_all`)
-2. Copy the game data to `/media/fat/games/@NAME@/`: TODO which files, where.
-3. Run **danik_hybrid_cores** from the `Scripts` menu, if you have not done so before (see Requirements).
-4. Load **@NAME@** from the `Other` menu.
+With `update_all`: run **danik_hybrid_ports** from the `Scripts` menu, tick *In update_all* and the games you want, and press *X: Apply*.
 
-The game's log is in `/media/fat/logs/@NAME@/@name@.log`. TODO: where settings and saved games are.
+By hand:
+
+1. Download the newest `@NAME@_YYYYMMDD.zip` from [releases](releases/) and extract it to the root of your SD card (`/media/fat`). That gives you:
+   - `_Other/dnk-@TITLE@.mgl`, the game's entry in the `Other` menu
+   - `_Other/dnk/dnk-@NAME@_YYYYMMDD.rbf`, the FPGA core
+   - `games/dnk/@NAME@/`, the game binary and its launch script
+   - `Scripts/danik_hybrid_ports.sh`, the launcher (from [Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer))
+2. Copy the game data to `/media/fat/games/dnk/@NAME@/`: TODO which files, where.
+3. Run **danik_hybrid_ports** from the `Scripts` menu, if you have not done so before (see Requirements).
+4. Load **dnk-@TITLE@** from the `Other` menu.
+
+The game's log is in `/media/fat/logs/dnk/@NAME@/@name@.log`. TODO: where settings and saved games are.
 
 ## OSD options
 
@@ -79,10 +84,10 @@ The toolchain image (Debian bullseye, glibc 2.31 to match the MiSTer) is built f
 
 | Path | |
 |---|---|
-| `hybrid/` | submodule: [ItsDanik/Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer), what all our hybrid cores share: the FPGA host module, the ARM side library, SDL2 drivers, the launcher (`danik_hybrid_cores.sh`), toolchain and conventions. See its README. |
+| `hybrid/` | submodule: [ItsDanik/Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer), what all our hybrid ports share: the FPGA host module, the ARM side library, SDL2 drivers, the launcher (`danik_hybrid_ports.sh`), toolchain and conventions. See its README. |
 | `core/` | FPGA core, based on [Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer): `@NAME@.sv` (OSD and button names) around `hybrid/rtl/hybrid_host.sv` |
 | `@name@/` | submodule: the game, branch `mister`, with the MiSTer changes |
-| `package/` | files shipped in the release next to the binary (`danik_hybrid_launch.sh`, README) |
+| `package/` | files shipped in the release next to the binary (`danik_hybrid_launch.sh`, README), and `games.txt`: the games and their menu entries |
 | `releases/` | release packages |
 
 ### Development notes
@@ -93,7 +98,7 @@ The toolchain image (Debian bullseye, glibc 2.31 to match the MiSTer) is built f
   build/host/fakecore /tmp/shm script.txt audio.raw &
   cd <data folder> && MISTER_HYBRID_SHM=/tmp/shm <repository>/build/host/@name@
   ```
-- `touch /tmp/@name@_nolaunch` on the MiSTer keeps the core loaded without starting the game, so you can start a development binary by hand (set `MISTER_HYBRID_CORE=@NAME@`). `/tmp/danik_hybrid_cores.log` shows what the launcher daemon did.
+- `touch /tmp/@name@_nolaunch` on the MiSTer keeps the core loaded without starting the game, so you can start a development binary by hand (set `MISTER_HYBRID_CORE=@NAME@`, and `MISTER_HYBRID_SET` for a game's set name). `/tmp/danik_hybrid_ports.log` shows what the launcher daemon did.
 
 ## Support
 

@@ -27,3 +27,9 @@ hybrid/docker.sh sh -c "
     -DCMAKE_PREFIX_PATH=$PREFIX -DMISTER_HYBRID=ON &&
   cmake --build build/$TARGET -j\$(nproc)"
 ls -la "build/$TARGET/@name@"
+
+# The launch script's messages on the core's picture (hybrid/tools/mh_message.c)
+if [ "$TARGET" = mister ]; then
+    hybrid/docker.sh arm-linux-gnueabihf-gcc -O2 -static -Ihybrid/hps -o build/mister/mh_message \
+        hybrid/tools/mh_message.c hybrid/hps/*.c -lpthread -lm
+fi

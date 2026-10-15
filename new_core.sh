@@ -6,8 +6,11 @@
 #   git submodule add -b main https://github.com/ItsDanik/Hybrid_MiSTer.git hybrid
 #   hybrid/new_core.sh <Name> "<Game title>" [<url of the game's git repository>]
 #
-#   <Name>   the core's name, one word, as it is to appear everywhere: OSD,
-#            _Other/<Name>_YYYYMMDD.rbf, games/<Name>/ (ECWolf, Dethrace)
+#   <Name>   the engine's name, one word, the source port's (never a game's
+#            alone), as it is to appear everywhere: OSD, _Other/dnk/
+#            dnk-<Name>_YYYYMMDD.rbf, games/dnk/<Name>/ (ECWolf, Dethrace)
+#   <Game title>  its game, the menu entry's name (_Other/dnk-<title>.mgl);
+#            more games: package/games.txt
 #   <url>    our fork of the game; added as the submodule <name>/ (the name in
 #            lower case) on its branch "mister"
 #
@@ -34,6 +37,8 @@ LOWER=$(printf %s "$NAME" | tr '[:upper:]' '[:lower:]')
 REPO=${NAME}_MiSTer
 # for sed: the title may have & or | in it
 TITLE_RE=$(printf %s "$TITLE" | sed 's/[&|\\]/\\&/g')
+# the game's id in package/games.txt: its title's letters and digits
+ID=$(printf %s "$TITLE" | tr -cd 'A-Za-z0-9')
 
 cd "$ROOT"
 cp -r "$HYBRID/template/." .
@@ -46,8 +51,8 @@ mkdir -p releases
 find . -depth -name '*@NAME@*' -not -path './hybrid/*' -not -path './.git/*' | while read -r f; do
     mv "$f" "$(dirname "$f")/$(basename "$f" | sed "s/@NAME@/$NAME/g")"
 done
-grep -rlE '@(NAME|name|TITLE|REPO)@' . --exclude-dir=hybrid --exclude-dir=.git | while read -r f; do
-    sed -i "s|@NAME@|$NAME|g; s|@name@|$LOWER|g; s|@TITLE@|$TITLE_RE|g; s|@REPO@|$REPO|g" "$f"
+grep -rlE '@(NAME|name|TITLE|REPO|ID)@' . --exclude-dir=hybrid --exclude-dir=.git | while read -r f; do
+    sed -i "s|@NAME@|$NAME|g; s|@name@|$LOWER|g; s|@TITLE@|$TITLE_RE|g; s|@REPO@|$REPO|g; s|@ID@|$ID|g" "$f"
 done
 
 if [ -n "$GAME_URL" ]; then
@@ -64,6 +69,8 @@ $NAME is set up in $ROOT. Next:
     MISTER_HYBRID build option; hybrid/template/game/ has a starting point.
   - build.sh, package.sh, package/games/$NAME/danik_hybrid_launch.sh: the lines
     marked GAME:
+  - package/games.txt: the games (one line each), and the same lines in the
+    catalogue of hybrid/launcher/danik_hybrid_ports.sh (with its VERSION up)
   - core/$NAME.sv: the game's options, "J1" and "jn" in CONF_STR. Repeat "jn"
     in danik_hybrid_launch.sh (MISTER_HYBRID_JN).
   - README.md and package/games/$NAME/README.txt: every TODO

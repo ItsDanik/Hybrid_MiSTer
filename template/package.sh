@@ -1,23 +1,57 @@
 #!/bin/sh
-# Assemble the MiSTer release in dist/@NAME@_<date>/ from the build outputs
+# Assemble the MiSTer release in dist/@NAME@_<date>/ from the build outputs,
+# in the layout of the hybrid ports (hybrid/README.md, "Naming and layout"):
+#   _Other/dnk-<title>.mgl             a menu entry for each game (package/games.txt)
+#   _Other/dnk/dnk-@NAME@_<date>.rbf    the core, not in the menu itself
+#   games/dnk/@NAME@/                   the game
+#   Scripts/danik_hybrid_ports.sh       the launcher, and its screen in
+#   Scripts/.danik_hybrid_ports/        (copies of both with the game: the
+#                                       newest one installed is the one used)
 set -e
 cd "$(dirname "$0")"
 DATE=$(date +%Y%m%d)
 OUT=dist/@NAME@_$DATE
+G=$OUT/games/dnk/@NAME@
 rm -rf "$OUT"
-mkdir -p "$OUT/_Other" "$OUT/games/@NAME@" "$OUT/Scripts"
-cp hybrid/launcher/danik_hybrid_cores.sh "$OUT/Scripts/danik_hybrid_cores.sh"
-# a copy with the game too: the daemon installs the newest one it finds
-cp hybrid/launcher/danik_hybrid_cores.sh "$OUT/games/@NAME@/danik_hybrid_cores.sh"
-cp core/output_files/@NAME@.rbf "$OUT/_Other/@NAME@_$DATE.rbf"
-cp -r package/games/@NAME@/. "$OUT/games/@NAME@/"
-cp build/mister/@name@ "$OUT/games/@NAME@/@NAME@"
+mkdir -p "$OUT/_Other/dnk" "$G" "$OUT/Scripts/.danik_hybrid_ports"
+
+# the launcher and its screen
+sh hybrid/launcher/ui/build.sh > /dev/null
+cp hybrid/launcher/danik_hybrid_ports.sh "$OUT/Scripts/danik_hybrid_ports.sh"
+cp hybrid/launcher/ui/danik_hybrid_ports_ui "$OUT/Scripts/.danik_hybrid_ports/danik_hybrid_ports_ui"
+cp hybrid/launcher/danik_hybrid_ports.sh hybrid/launcher/ui/danik_hybrid_ports_ui "$G/"
+
+# the core, and a menu entry for each game: package/games.txt, a line each,
+# <id>|<title>. With several games each entry loads the core with the set
+# name @NAME@_<id> (the game's settings and button mappings are its own);
+# one game has no set name. The title is the entry's name in the menu,
+# without what a file name cannot have.
+cp core/output_files/@NAME@.rbf "$OUT/_Other/dnk/dnk-@NAME@_$DATE.rbf"
+GAMES=$(grep -v '^#' package/games.txt | grep -c '|')
+grep -v '^#' package/games.txt | grep '|' | while IFS='|' read -r id title; do
+    set_name=@NAME@_$id
+    [ ${#set_name} -lt 32 ] || { echo "the set name $set_name is too long (31 at most)" >&2; exit 1; }
+    file=$(printf %s "$title" | tr -d ':*?"<>|/\\' | tr -s ' ')
+    if [ "$GAMES" -gt 1 ]; then
+        set_line="<setname same_dir=\"1\">$set_name</setname>"
+    else
+        set_line=
+    fi
+    printf '<mistergamedescription><rbf>_Other/dnk/dnk-@NAME@</rbf>%s</mistergamedescription>\n' "$set_line" \
+        > "$OUT/_Other/dnk-$file.mgl"
+done
+
+# the game
+cp -r package/games/@NAME@/. "$G/"
+cp build/mister/@name@ "$G/@NAME@"
+cp build/mister/mh_message "$G/mh_message"
 # GAME: files the binary needs next to it (never game data)
-hybrid/docker.sh arm-linux-gnueabihf-strip "$OUT/games/@NAME@/@NAME@"
-chmod +x "$OUT/games/@NAME@/@NAME@" "$OUT"/games/@NAME@/*.sh "$OUT/Scripts/danik_hybrid_cores.sh"
+hybrid/docker.sh arm-linux-gnueabihf-strip "$G/@NAME@" "$G/mh_message"
+chmod +x "$G/@NAME@" "$G/mh_message" "$G"/*.sh "$G/danik_hybrid_ports_ui" \
+    "$OUT/Scripts/danik_hybrid_ports.sh" "$OUT/Scripts/.danik_hybrid_ports/danik_hybrid_ports_ui"
 # GAME: the game's license as LICENSE-@name@.txt
-cp build/sdl/src/SDL2-*/LICENSE.txt "$OUT/games/@NAME@/LICENSE-sdl.txt"
-cp LICENSE "$OUT/games/@NAME@/LICENSE-gpl3.txt"
+cp build/sdl/src/SDL2-*/LICENSE.txt "$G/LICENSE-sdl.txt"
+cp LICENSE "$G/LICENSE-gpl3.txt"
 rm -f "dist/@NAME@_$DATE.zip"
 (cd "$OUT" && python3 -m zipfile -c "../@NAME@_$DATE.zip" _Other games Scripts)
 find "$OUT" -type f | sort

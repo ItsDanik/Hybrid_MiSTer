@@ -19,10 +19,13 @@
 //   analog <x> <y> [rx ry]  left (and right) stick of joystick 1, -128..127
 //   mouse <dx> <dy> <btn>   move the mouse (y up) and set its buttons
 //   osd <hex>               OSD status bits
+//   hud <top> <bottom>      the HUD margins of the CRT Options page, 0..24
+//                           pixels (OSD status bits 77..86; 10 at the start)
 //   shot <file.ppm>         save the picture the core would show, in the
 //                           size of the video mode (not stretched to 4:3)
-//   vga31 <0|1>             whether the modes above 15kHz are available
-//                           (800x600 and 1024x768; at the start they are not)
+//   vga31 <0|1>             whether 640x400 and 640x480 are progressive at
+//                           31kHz (forced_scandoubler or HDMI Only) or, at
+//                           the start, interlaced at 15kHz
 //   reload                  count the fields from 0 again, as if the core was
 //                           loaded again
 //   quit                    stop ticking, as if another core was loaded
@@ -40,7 +43,7 @@
 
 #include "nuked/opl3.c"
 
-#define SHM_SIZE 0xA00000
+#define SHM_SIZE 0x400000
 #define CTRL_MAGIC 0x4259484D
 #define STATUS_MAGIC 0x5359484D
 #define FIELD_NS 16768000 // 400 x 262 pixels at 6.25MHz
@@ -51,7 +54,7 @@ static volatile uint32_t* status;
 static uint32_t field;
 static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
-static int fb_index, fb_format, fb_mode, ctrl_valid, vga31;
+static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
@@ -103,6 +106,27 @@ static void tick(void) {
     c2 = ctrl[2];
     c3 = ctrl[3];
     ctrl_valid = c0 == CTRL_MAGIC;
+    // a message (0x1800, host version 13): printed when it changes, as the
+    // core would show it under its logo
+    {
+        static uint32_t shown_seq = 0xFFFFFFFF;
+        volatile uint32_t* m = (volatile uint32_t*)(shm + 0x1800);
+        uint32_t seq = m[0] == 0x534D484D ? m[1] : 0xFFFFFFFF;
+        msg_shown = seq != 0xFFFFFFFF;
+        if (seq != shown_seq && msg_shown) {
+            int l;
+            if ((seq >> 17) & 1) {
+                printf("fakecore: list, line %u selected:\n", (seq >> 18) & 3);
+            } else {
+                printf("fakecore: message%s:\n", (seq >> 16) & 1 ? " (error)" : "");
+            }
+            for (l = 0; l < 4; l++) {
+                printf("  |%.71s\n", (const char*)(shm + 0x1808 + l * 80));
+            }
+            fflush(stdout);
+        }
+        shown_seq = seq;
+    }
     audio_en = ctrl_valid && ((c1 >> 24) & 1);
     fm_en = audio_en && ((c1 >> 25) & 1);
     if (fm_en && !fm_on) {
@@ -113,14 +137,15 @@ static void tick(void) {
     }
     fm_on = fm_en;
     if (!ctrl_valid) {
-        // no game: the core's own picture, 320x240
-        fb_mode = 3;
+        // no game: the core's own picture, 640x480
+        fb_mode = 4;
     } else {
         fb_index = (c1 & 0xff) > 2 ? 0 : (c1 & 3);
         fb_format = (c1 >> 8) & 1;
         fb_mode = (c1 >> 12) & 15;
-        // a mode the core does not have, or not on this screen
-        if (fb_mode > 7 || ((fb_mode == 5 || fb_mode == 6) && !vga31)) {
+        // a mode the core does not have (5 and 6 were 800x600 and 1024x768
+        // up to host version 12)
+        if (fb_mode > 7 || fb_mode == 5 || fb_mode == 6) {
             fb_mode = 0;
         }
         if (c2 != palette_seq) {
@@ -155,9 +180,9 @@ static void tick(void) {
     }
     field++;
     // the game has the screen (bit 19) at once: nothing fades here
-    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (vga31 << 16) | (1 << 17)
-        | ((vga31 && fb_mode != 0 && fb_mode != 1 && fb_mode != 3 && fb_mode != 7) << 18) | (ctrl_valid << 19);
-    status[3] = 12;
+    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
+        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20);
+    status[3] = 13;
     status[15] = fm_fetch;
     status[0] = STATUS_MAGIC;
     status[1] = field;
@@ -165,9 +190,8 @@ static void tick(void) {
 
 static void screenshot(const char* path) {
     static const int sizes[8][2] = { { 320, 200 }, { 640, 200 }, { 640, 400 }, { 320, 240 },
-                                     { 640, 480 }, { 800, 600 }, { 1024, 768 }, { 640, 240 } };
-    // 1024x768 has framebuffers of its own
-    const volatile uint8_t* fb = fb_mode == 6 ? shm + 0x400000 + fb_index * 0x200000 : shm + 0x100000 + fb_index * 0x100000;
+                                     { 640, 480 }, { 0, 0 }, { 0, 0 }, { 640, 240 } };
+    const volatile uint8_t* fb = shm + 0x100000 + fb_index * 0x100000;
     FILE* f = fopen(path, "wb");
     int width = sizes[fb_mode][0];
     int height = sizes[fb_mode][1];
@@ -257,6 +281,9 @@ int main(int argc, char** argv) {
             status[10] += a;
             status[11] += b;
             status[12] = (status[12] & ~7u) | (c & 7);
+        } else if (sscanf(line, "hud %d %d", &a, &b) == 2) {
+            // OSD status bits 64..95 are status[34]; entry n is (n + 10) % 25 pixels
+            status[34] = (status[34] & ~(0x3ffu << 13)) | ((uint32_t)((a + 15) % 25) << 13) | ((uint32_t)((b + 15) % 25) << 18);
         } else if (sscanf(line, "osd %llx", &osd) == 1) {
             status[8] = (uint32_t)osd;
             status[9] = (uint32_t)(osd >> 32);

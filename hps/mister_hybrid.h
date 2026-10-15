@@ -28,8 +28,8 @@ extern "C" {
 #define MH_WIDTH 320
 #define MH_HEIGHT 200
 // The largest video mode
-#define MH_MAX_WIDTH 1024
-#define MH_MAX_HEIGHT 768
+#define MH_MAX_WIDTH 640
+#define MH_MAX_HEIGHT 480
 
 // Video modes. The picture fills the same 4:3 screen in all of them.
 //
@@ -45,11 +45,12 @@ extern "C" {
 // VGA monitor (forced_scandoubler=1 in MiSTer.ini) or is not used at all (the
 // OSD option "HDMI Only", which switches it off while such a mode is shown).
 //
-// 800x600 and 1024x768 (60Hz) have no 15kHz form and exist only in that case:
-// see MH_ModeAvailable().
-//
 // The game does not choose between the forms and a 15kHz screen never gets
 // anything else.
+//
+// 800x600 and 1024x768 (5 and 6) were there with host versions 6 to 12, at
+// 31kHz and above only. They are gone: MH_ModeAvailable() returns 0 for them.
+// Their names are left for code that still has them in a list.
 #define MH_MODE_320x200 0
 #define MH_MODE_640x200 1
 #define MH_MODE_640x400 2
@@ -115,17 +116,23 @@ int MH_CheckAlive(void);
 // launcher to start it again once the core has settled.
 int MH_CoreReloaded(void);
 const char* MH_CoreName(void);
+// The name Main_MiSTer gives the settings (config/<name>.CFG) and button
+// mappings (config/inputs/<name>_input_*) of what was started: the set name
+// of the menu entry (an MGL with <setname>ECWolf_SOD</setname>: "ECWolf_SOD"),
+// or the core's name (MISTER_HYBRID_CORE). From /tmp/CORENAME, or
+// MISTER_HYBRID_SET in the environment. Read once.
+const char* MH_SetName(void);
+// The host version of the core (hybrid_host.sv), 0 without one
+int MH_HostVersion(void);
 
 // Video. The core shows its own picture (the MiSTer logo) until the first
-// frame, and fades it out before that frame is shown: the call that shows it
-// (MH_Present(), or MH_SetPalette() with 8bpp) returns 0.7 seconds later,
-// when the game has the screen.
+// frame, plays its intro to the end and fades it out before that frame is
+// shown: the call that shows it (MH_Present(), or MH_SetPalette() with 8bpp)
+// returns when the game has the screen, 0.7 to 4.8 seconds later.
 // A change of format later on blanks the screen until the next frame.
 void MH_SetFormat(int format);
-// 1 if the core can show the mode right now: it is new enough and, for
-// 800x600 and 1024x768, the player has no 15kHz screen on it (see above).
-// That can change while the game runs (an OSD option): a mode that is no
-// longer available is shown as a black screen until the game sets another.
+// 1 if the core can show the mode: it is new enough (and it is not 800x600 or
+// 1024x768, which no core has any more).
 int MH_ModeAvailable(int mode);
 // Size of a video mode
 int MH_ModeWidth(int mode);
@@ -181,6 +188,20 @@ void MH_SetMenuMask(int mask);
 // Input
 void MH_ReadInput(mh_input* input);
 uint64_t MH_OSDStatus(void);
+// OSD status bits [127:64]: the core's CRT Options page (host version 13; 0
+// with an older core)
+uint64_t MH_OSDStatusHigh(void);
+
+// HUD margins (hybrid/README.md, "HUD margins"): how many pixels the player
+// wants between the game's HUD and the top / bottom edge of the screen, 0..24,
+// for a 240-line screen (twice that in a 480-line mode), from the OSD's CRT
+// Options. A game that draws its view in 240 lines puts its top HUD that far
+// from the top and its bottom HUD that far from the bottom, every frame, so a
+// change shows at once. A screen with overscan hides the edges; HDMI has none.
+// Without the core's lines for it (an older core) both are MH_HUD_DEFAULT.
+#define MH_HUD_DEFAULT 10
+#define MH_HUD_MAX 24
+void MH_HudMargins(int* top, int* bottom);
 // Core buttons (MH_JOY_BUTTON bits) driven by the physical buttons the OSD's
 // Menu OK / Menu Back options name. MiSTer cannot map one physical button to
 // two core buttons, so this is how a button with a game function can also
@@ -237,14 +258,73 @@ void MH_FMVolume(int volume);
 // waiting (more than a second of the densest music), the write is dropped.
 void MH_FMWrite(int reg, int value, int ahead);
 
+// Messages: shown by the core under its logo, on its own picture (the purple
+// screen), host version 13. MH_MSG_ROWS lines of MH_MSG_COLS characters
+// (32..126; others are shown as '?') is all there is room for: write
+// messages to fit, say what is wrong and what to do (which files go where),
+// in plain words. Longer text is cut, its last line ending in "...", and the
+// whole of it is in the log.
+#define MH_MSG_COLS 71
+#define MH_MSG_ROWS 4
+#define MH_MSG_ERROR 1 // the dots under the logo stand still
+// Show a message. The text is wrapped at spaces and at '\n'; empty lines are
+// left out (4 lines are few). A game that has the screen gives it back to
+// the core, which shows its picture with the message; the game takes the
+// screen again with its next frame, and that clears the message. Returns
+// the number of lines the text needed. Works without the game having set up
+// anything, and from another program (tools/mh_message.c).
+int MH_ShowMessage(const char* text, int flags);
+void MH_ClearMessage(void);
+// A list to pick from, in the place of a message: the MH_MSG_ROWS items from
+// `top`, the one `selected` on a bar, a mark in the last column where there
+// are more above or below (items are cut at MH_MSG_COLS - 2 characters).
+// MH_UI_Menu() is the whole of it, with the player's input.
+void MH_ShowList(const char* const* items, int count, int top, int selected);
+// 1 while a message is shown, 2 while the core shows its own (no game came
+// in 12 seconds after it was loaded), 0 else
+int MH_MessageShown(void);
+
+// A core with several games (mister_games.c; hybrid/README.md, "Several games
+// in one core"). Each game has a menu entry of its own, an MGL with the set
+// name <core>_<id>; a shareware or demo version has none.
+typedef struct mh_game {
+    const char* id;           // its menu entry's set name after "<core>_": "SOD" of ECWolf_SOD
+    const char* name;         // in the list: "Spear of Destiny"
+    const char* const* files; // all there when the game is: paths in the game's folder, NULL at
+                              // the end; * and ? and any case ("*.SOD", "addons/WT.GRP")
+    const char* shareware_of; // the id of the full game this is the shareware or demo of, or NULL
+    const char* missing;      // the message (4 lines of 71) when its menu entry was started and
+                              // it is not there: which files to copy where, %s for the folder
+} mh_game;
+// The game's folder as the player sees it on the SD card ("games/dnk/ECWolf"):
+// the current one, for messages
+const char* MH_GamePath(void);
+// 1 if the game's files are in `dir` (NULL: the current folder)
+int MH_GameFound(const mh_game* game, const char* dir);
+// Which game to start. From a game's menu entry: that game; its shareware
+// when the full game is not there; else -1 after its `missing` message. From
+// the core itself (Recent, Zaparoo, a bootcore, the core's .rbf): of the
+// games that are there (a shareware on a line of its own, also next to its
+// full game) the only one, or the one the player picks from a list
+// (*listed = 1); -1 when the player backs out, or after the message `none`
+// when there is none. A message waits until the player leaves the core; %s
+// in it is the game's folder (MH_GamePath()).
+int MH_PickGame(const mh_game* games, int count, const char* dir, const char* none, int* listed);
+
 // Screens every hybrid core shares (mister_ui.c), drawn straight to the core;
 // they work before the game has set up anything.
 // A list to pick from, with the keyboard or joystick 1. Returns the index of
-// the chosen item, or -1 for Back/Esc or when the core is gone.
+// the chosen item, or -1 for Back/Esc or when the core is gone. Host version
+// 13 and later: under the core's logo (MH_ShowList(), 4 items at a time; the
+// title and the prompt only go to the log), the list stays until the next
+// message or the game's first frame; Back clears it. Before: a screen of its
+// own, 320x200.
 int MH_UI_Menu(const char* title, const char* prompt, const char* const* items, int count, int selected);
-#define MH_UI_WAIT 1  // until a key or button is pressed
-#define MH_UI_ERROR 2 // red title bar
-// A message; lines wrap at 36 characters
+#define MH_UI_WAIT 1  // until the player leaves the core (host 12 and older: a key or button)
+#define MH_UI_ERROR 2 // an error: the dots under the logo stand still
+// A message (MH_ShowMessage(); the title goes to the log only, before host
+// version 13 it was a title bar). With MH_UI_WAIT it returns once the core
+// has been left: the message stays until then, whatever the launcher does.
 void MH_UI_Message(const char* title, const char* text, int flags);
 
 // Helper threads (audio, frame copy) belong on CPU1 when the launcher allows

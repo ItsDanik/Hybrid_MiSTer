@@ -1,4 +1,4 @@
-@NAME@ for MiSTer - @TITLE@ as a hybrid core
+@NAME@ for MiSTer - @TITLE@ as a hybrid port
 ====================================================
 
 The game (TODO which source port) runs on the MiSTer's ARM CPU; the @NAME@
@@ -8,23 +8,24 @@ and input.
 Disclaimer: AI is being used to speed up development of this project.
 
 Requirements
-  - danik_hybrid_cores, the launcher that comes with this release
-    (Scripts/danik_hybrid_cores.sh): copy it to /media/fat/Scripts/ and run
-    it ONCE from the MiSTer's Scripts menu. It starts the game whenever
-    the core is loaded, keeps running after a reboot, and serves all our
-    hybrid cores. Every hybrid core brings the launcher along and the
-    newest version is the one that runs, so it never has to be run again
-    after an update. Without it the core only shows the MiSTer logo.
+  - danik_hybrid_ports, the launcher that comes with this release
+    (Scripts/danik_hybrid_ports.sh): run it ONCE from the MiSTer's Scripts
+    menu. It starts the game whenever its menu entry is loaded, keeps
+    running after a reboot, and serves all our hybrid ports; its screen
+    picks which ports and games to have, and can keep them up to date
+    through update_all. It replaces danik_hybrid_cores, the launcher before
+    it, and moves ports installed the old way into the new folders by
+    itself. Without it the core says "Game not running".
   - Game data. It is not included: TODO which copy of the game.
 
 Install
-  1. Copy _Other/@NAME@_*.rbf to /media/fat/_Other/
-  2. Copy games/@NAME@/ to /media/fat/games/@NAME@/
-  3. Copy the game data to /media/fat/games/@NAME@/
+  1. Extract the zip to the root of the SD card (/media/fat): _Other/,
+     games/dnk/@NAME@/ and Scripts/.
+  2. Copy the game data to /media/fat/games/dnk/@NAME@/
        TODO which files, where
-  4. Run danik_hybrid_cores from the Scripts menu, if you have not done so
+  3. Run danik_hybrid_ports from the Scripts menu, if you have not done so
      before (see Requirements).
-  5. Load @NAME@ from the Other menu.
+  4. Load dnk-@TITLE@ from the Other menu.
 
 OSD options
   Aspect ratio, Scale, Scandoubler Fx, Stereo Mix as in other cores.
@@ -67,7 +68,7 @@ Controls
 
 Files
   TODO settings and saved games
-  /media/fat/logs/@NAME@/@name@.log   the game's log
+  /media/fat/logs/dnk/@NAME@/@name@.log   the game's log
 
 Credits
   TODO the game / source port by its authors.

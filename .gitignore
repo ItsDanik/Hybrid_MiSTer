@@ -7,3 +7,6 @@ jtopl.raw
 
 # scratch of sim/fm_song.sh
 /build_song/
+
+# danik_hybrid_ports_ui as launcher/ui/build.sh makes it (it goes into the releases)
+/launcher/ui/danik_hybrid_ports_ui

@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 #define SHM_PHYS 0x30000000
-#define SHM_SIZE 0xA00000
+#define SHM_SIZE 0x400000
 
 #define CTRL_OFFSET 0x0
 #define STATUS_OFFSET 0x40
@@ -32,27 +32,30 @@
 #define AUDIO_RING_OFFSET 0x10000
 #define PALETTE_OFFSET 0x1000
 #define PALETTE_SLOT_SIZE 0x400
+// the message: {flags, sequence number, magic}, then 4 lines of 80 bytes
+#define MSG_OFFSET 0x1800
+#define MSG_MAGIC 0x534D484D // "MHMS"
+#define MSG_LINE 80
 #define FB_OFFSET 0x100000
 #define FB_SIZE 0x100000
-// 1024x768 does not fit in those and has framebuffers of its own
-#define FB_XL_OFFSET 0x400000
-#define FB_XL_SIZE 0x200000
 #define FB_COUNT 3
 
 // status: the mode is interlaced; the field that was on the screen had the
-// even rows; modes above 15kHz are available; the game has the screen (host
-// version 9)
+// even rows; the game has the screen (host version 9). Bit 16 was "800x600
+// and 1024x768 are available" up to host version 12.
 #define STATUS_LACE (1u << 9)
 #define STATUS_FIELD_EVEN (1u << 11)
-#define STATUS_VGA31 (1u << 16)
 #define STATUS_GAME (1u << 19)
+// a message is shown; the core's own (host version 13)
+#define STATUS_MSG (1u << 20)
+#define STATUS_ALONE (1u << 21)
 
 static const struct {
     short width, height;
-    unsigned char version; // the host version that has the mode
+    unsigned char version; // the host version that has the mode, 0: none
 } modes[MH_MODE_COUNT] = {
     { 320, 200, 4 }, { 640, 200, 4 }, { 640, 400, 5 }, { 320, 240, 6 },
-    { 640, 480, 6 }, { 800, 600, 6 }, { 1024, 768, 6 }, { 640, 240, 8 },
+    { 640, 480, 6 }, { 800, 600, 0 }, { 1024, 768, 0 }, { 640, 240, 8 },
 };
 
 #define CTRL_MAGIC 0x4259484D   // "MHYB"
@@ -148,21 +151,16 @@ int MH_Height(void) {
 }
 
 int MH_ModeAvailable(int mode) {
-    if (!MH_IsOpen() || mode < 0 || mode >= MH_MODE_COUNT || status[3] < modes[mode].version) {
-        return 0;
-    }
-    return (mode != MH_MODE_800x600 && mode != MH_MODE_1024x768) || (status[2] & STATUS_VGA31) != 0;
+    return MH_IsOpen() && mode >= 0 && mode < MH_MODE_COUNT && modes[mode].version != 0
+        && status[3] >= modes[mode].version;
 }
 
 static int frame_bytes(void) {
     return MH_Width() * MH_Height() * (fb_format == MH_FORMAT_RGB565 ? 2 : 1);
 }
 
-// The framebuffers of a video mode
-static volatile uint8_t* framebuffer(int mode, int index) {
-    if (mode == MH_MODE_1024x768) {
-        return shm + FB_XL_OFFSET + index * FB_XL_SIZE;
-    }
+// The framebuffers, the same for every video mode
+static volatile uint8_t* framebuffer(int index) {
     return shm + FB_OFFSET + index * FB_SIZE;
 }
 
@@ -171,8 +169,8 @@ static int mode_bytes(int mode) {
     return modes[mode].width * modes[mode].height * 2;
 }
 
-static void clear_framebuffer(int mode, int index, int bytes) {
-    memset((void*)framebuffer(mode, index), 0, bytes);
+static void clear_framebuffer(int index, int bytes) {
+    memset((void*)framebuffer(index), 0, bytes);
 }
 
 // 1 if /tmp/CORENAME names our core (or there is nothing to compare)
@@ -257,7 +255,7 @@ int MH_Open(void) {
     alive_time.tv_sec = 0;
     for (i = 0; i < FB_COUNT; i++) {
         // all of it: whatever ran before us may have used a larger mode
-        clear_framebuffer(fb_mode, i, FB_SIZE);
+        clear_framebuffer(i, FB_SIZE);
     }
     write_ctrl();
 
@@ -328,6 +326,35 @@ int MH_IsOpen(void) {
 
 const char* MH_CoreName(void) {
     return core_name;
+}
+
+const char* MH_SetName(void) {
+    static char set_name[64];
+    const char* core = getenv("MISTER_HYBRID_CORE");
+    const char* env = getenv("MISTER_HYBRID_SET");
+    char name[64] = { 0 };
+    size_t len;
+    FILE* f;
+
+    if (set_name[0] != 0) {
+        return set_name;
+    }
+    core = core ? core : "";
+    len = strlen(core);
+    snprintf(set_name, sizeof(set_name), "%s", core);
+    if (env != NULL && env[0] != 0) {
+        snprintf(set_name, sizeof(set_name), "%s", env);
+    } else if (len != 0 && (f = fopen("/tmp/CORENAME", "r")) != NULL) {
+        if (fgets(name, sizeof(name), f) != NULL) {
+            name[strcspn(name, "\r\n")] = 0;
+            // ours: the core's name or <core>_<game>
+            if (strncmp(name, core, len) == 0 && (name[len] == 0 || name[len] == '_')) {
+                snprintf(set_name, sizeof(set_name), "%s", name);
+            }
+        }
+        fclose(f);
+    }
+    return set_name;
 }
 
 // The OSD's FPS Counter (MH_OSD_FPS): the frames presented in the last second,
@@ -483,7 +510,7 @@ static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
         sleep_ms(1);
     }
 
-    dst = framebuffer(fb_mode, next);
+    dst = framebuffer(next);
     if (pitch == row) {
         memcpy((void*)dst, pixels, row * height);
     } else {
@@ -570,34 +597,167 @@ static void present_flush(void) {
 }
 
 // The core fades its own picture out before it shows the first of ours (host
-// version 9), which takes 0.7 seconds. Waiting for that here is what keeps
-// the game from showing its first frames to nobody.
+// version 9), which takes 0.7 seconds, and from host version 13 it first
+// plays its intro to the end (4.1 seconds from its start). Waiting for that
+// here is what keeps the game from showing its first frames to nobody.
 static void wait_for_screen(void) {
     int i;
 
     if (screen_ours || !ctrl_enabled) {
         return;
     }
-    for (i = 0; i < 150 && MH_IsOpen() && status[3] >= 9 && !(status[2] & STATUS_GAME); i++) {
+    for (i = 0; i < 700 && MH_IsOpen() && status[3] >= 9 && !(status[2] & STATUS_GAME); i++) {
         sleep_ms(10);
     }
     screen_ours = 1;
+    // a message ("Loading...") was shown until now
+    MH_ClearMessage();
+}
+
+// Wrap `text` into lines of MH_MSG_COLS: at '\n', and at the last space that
+// fits (a word longer than a line is broken). Empty lines are left out.
+// Returns the number of lines needed; the first `rows` go to `lines`.
+static int wrap_message(const char* text, char lines[][MH_MSG_COLS + 1], int rows) {
+    int count = 0;
+
+    while (*text != 0) {
+        int len = (int)strcspn(text, "\n");
+        int i;
+
+        if (len > MH_MSG_COLS) {
+            len = MH_MSG_COLS;
+            while (len > 0 && text[len] != ' ') {
+                len--;
+            }
+            if (len == 0) {
+                len = MH_MSG_COLS;
+            }
+        }
+        if (len > 0) {
+            if (count < rows) {
+                for (i = 0; i < len; i++) {
+                    unsigned char c = (unsigned char)text[i];
+                    lines[count][i] = c == '\t' ? ' ' : (c < 32 || c > 126) ? '?' : (char)c;
+                }
+                lines[count][len] = 0;
+            }
+            count++;
+        }
+        text += len;
+        while (*text == ' ' || *text == '\n') {
+            text++;
+        }
+    }
+    return count;
+}
+
+// The message block: 4 lines, and in its first word the flags (bit 0 error,
+// bit 1 list, bits 2..3 the line selected), a new sequence number and the
+// magic, last. A game that has the screen gives it back.
+static void put_message(char lines[MH_MSG_ROWS][MH_MSG_COLS + 1], uint32_t flags) {
+    volatile uint32_t* msg = (volatile uint32_t*)(shm + MSG_OFFSET);
+    volatile uint8_t* chars = shm + MSG_OFFSET + 8;
+    uint32_t seq;
+    int i, j;
+
+    for (i = 0; i < MH_MSG_ROWS; i++) {
+        for (j = 0; j < MSG_LINE; j++) {
+            chars[i * MSG_LINE + j] = j < MH_MSG_COLS ? (uint8_t)lines[i][j] : 0;
+        }
+    }
+    // another sequence number than the one before, also another program's
+    seq = (msg[0] == MSG_MAGIC ? msg[1] + 1 : (uint32_t)time(NULL)) & 0xFFFF;
+    __sync_synchronize();
+    msg[1] = seq | flags << 16;
+    msg[0] = MSG_MAGIC;
+    __sync_synchronize();
+    // the core shows its picture only while no game has the screen
+    if (ctrl_enabled) {
+        present_flush();
+        ctrl_enabled = 0;
+        write_ctrl();
+        screen_ours = 0;
+    }
+}
+
+int MH_ShowMessage(const char* text, int flags) {
+    char lines[MH_MSG_ROWS][MH_MSG_COLS + 1];
+    int count;
+
+    memset(lines, 0, sizeof(lines));
+    count = wrap_message(text, lines, MH_MSG_ROWS);
+    if (count > MH_MSG_ROWS) {
+        int len = (int)strlen(lines[MH_MSG_ROWS - 1]);
+        if (len > MH_MSG_COLS - 3) {
+            len = MH_MSG_COLS - 3;
+        }
+        while (len > 0 && (lines[MH_MSG_ROWS - 1][len - 1] == '.' || lines[MH_MSG_ROWS - 1][len - 1] == ' ')) {
+            len--;
+        }
+        strcpy(lines[MH_MSG_ROWS - 1] + len, "...");
+    }
+    printf("mister: message%s: %s\n", count > MH_MSG_ROWS ? " (cut, it needs more than 4 lines)" : "", text);
+    if (MH_IsOpen() && status[3] >= 13) {
+        put_message(lines, (flags & MH_MSG_ERROR) ? 1 : 0);
+    }
+    return count;
+}
+
+void MH_ShowList(const char* const* items, int count, int top, int selected) {
+    char lines[MH_MSG_ROWS][MH_MSG_COLS + 1];
+    int i, j;
+
+    if (!MH_IsOpen() || status[3] < 13) {
+        return;
+    }
+    memset(lines, 0, sizeof(lines));
+    for (i = 0; i < MH_MSG_ROWS; i++) {
+        memset(lines[i], ' ', MH_MSG_COLS);
+        for (j = 0; top + i < count && j < MH_MSG_COLS - 2 && items[top + i][j] != 0; j++) {
+            unsigned char c = (unsigned char)items[top + i][j];
+            lines[i][j] = (c < 32 || c > 126) ? '?' : (char)c;
+        }
+    }
+    // more above, more below: in the last column, which the core dims
+    if (top > 0) {
+        lines[0][MH_MSG_COLS - 1] = '^';
+    }
+    if (top + MH_MSG_ROWS < count) {
+        lines[MH_MSG_ROWS - 1][MH_MSG_COLS - 1] = 'v';
+    }
+    put_message(lines, 2 | (uint32_t)((selected - top) & 3) << 2);
+}
+
+void MH_ClearMessage(void) {
+    if (MH_IsOpen() && ((volatile uint32_t*)(shm + MSG_OFFSET))[0] == MSG_MAGIC) {
+        ((volatile uint32_t*)(shm + MSG_OFFSET))[0] = 0;
+        __sync_synchronize();
+    }
+}
+
+int MH_HostVersion(void) {
+    return MH_IsOpen() ? (int)status[3] : 0;
+}
+
+int MH_MessageShown(void) {
+    if (!MH_IsOpen() || status[3] < 13) {
+        return 0;
+    }
+    return (status[2] & STATUS_MSG) ? 1 : (status[2] & STATUS_ALONE) ? 2 : 0;
 }
 
 // Clear every framebuffer. The buffer on screen is cleared once the core
-// shows a cleared one. `next_mode` is the mode that is set next: if its
-// framebuffers are others, they are cleared as well.
+// shows a cleared one. `next_mode` is the mode that is set next.
 static void blank_framebuffers(int next_mode) {
-    int same = framebuffer(next_mode, 0) == framebuffer(fb_mode, 0);
     int bytes = mode_bytes(fb_mode);
     int i, n;
 
     // what the next mode reads has to be black as far as its frames go
-    if (same && mode_bytes(next_mode) > bytes) {
+    if (mode_bytes(next_mode) > bytes) {
         bytes = mode_bytes(next_mode);
     }
     for (n = 1; n < FB_COUNT; n++) {
-        clear_framebuffer(fb_mode, (fb_current + n) % FB_COUNT, bytes);
+        clear_framebuffer((fb_current + n) % FB_COUNT, bytes);
     }
     i = fb_current;
     fb_current = (fb_current + 1) % FB_COUNT;
@@ -605,12 +765,7 @@ static void blank_framebuffers(int next_mode) {
     for (n = 0; n < 50 && ctrl_enabled && (status[2] & 0xff) == (uint32_t)i; n++) {
         sleep_ms(1);
     }
-    clear_framebuffer(fb_mode, i, bytes);
-    if (!same) {
-        for (n = 0; n < FB_COUNT; n++) {
-            clear_framebuffer(next_mode, n, mode_bytes(next_mode));
-        }
-    }
+    clear_framebuffer(i, bytes);
 }
 
 void MH_SetFormat(int format) {
@@ -887,6 +1042,35 @@ void MH_ReadInput(mh_input* input) {
     for (i = 0; i < 16; i++) {
         input->keys[i] = status[16 + i];
     }
+}
+
+uint64_t MH_OSDStatusHigh(void) {
+    // status[34..35]: the word at 0xC8, written by host version 13 and later
+    if (!MH_IsOpen() || status[3] < 13) {
+        return 0;
+    }
+    return status[34] | ((uint64_t)status[35] << 32);
+}
+
+// The option's entries start at the default: entry n is (n + 10) % 25 pixels
+static int hud_margin(uint64_t high, int lsb) {
+    int entry = (int)((high >> (lsb - 64)) & 31);
+    return entry > MH_HUD_MAX ? MH_HUD_DEFAULT : (entry + MH_HUD_DEFAULT) % (MH_HUD_MAX + 1);
+}
+
+void MH_HudMargins(int* top, int* bottom) {
+    uint64_t high = MH_OSDStatusHigh();
+    const char* env = getenv("MISTER_HYBRID_HUD");
+    int t, b;
+
+    // "top,bottom" fixes them, for a test or a screenshot
+    if (env != NULL && sscanf(env, "%d,%d", &t, &b) == 2) {
+        *top = t < 0 ? 0 : t > MH_HUD_MAX ? MH_HUD_MAX : t;
+        *bottom = b < 0 ? 0 : b > MH_HUD_MAX ? MH_HUD_MAX : b;
+        return;
+    }
+    *top = hud_margin(high, 77);
+    *bottom = hud_margin(high, 82);
 }
 
 uint64_t MH_OSDStatus(void) {

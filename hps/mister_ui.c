@@ -5,7 +5,9 @@
 #include "mister_hybrid.h"
 #include "mister_font.h"
 
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #define COLS 40
 #define ROWS 25
@@ -26,6 +28,8 @@ static const uint32_t ui_palette[256] = {
 };
 
 static uint8_t screen[MH_WIDTH * MH_HEIGHT];
+
+static void message_screen(const char* title, const char* text, int flags);
 
 // keys of the PS/2 bitmap
 #define KEY_UP 0x175
@@ -132,6 +136,45 @@ static int wait_nav(int* held, int* repeat) {
     return pressed;
 }
 
+// The list under the core's logo (host version 13): 4 items at a time, the
+// one before the selected one in view where it can be
+static int list_menu(const char* const* items, int count, int selected) {
+    int held = NAV_UP | NAV_DOWN | NAV_OK | NAV_BACK; // what is held from before does not count
+    int repeat = 0;
+    int pressed, top, last_top = -1, last = -1;
+
+    for (;;) {
+        top = selected - 1;
+        if (top > count - MH_MSG_ROWS) {
+            top = count - MH_MSG_ROWS;
+        }
+        if (top < 0) {
+            top = 0;
+        }
+        if (top != last_top || selected != last) {
+            MH_ShowList(items, count, top, selected);
+            last_top = top;
+            last = selected;
+        }
+        do {
+            pressed = wait_nav(&held, &repeat);
+        } while (pressed == 0);
+        if (pressed < 0 || (pressed & NAV_BACK)) {
+            MH_ClearMessage();
+            return -1;
+        }
+        if (pressed & NAV_OK) {
+            return selected;
+        }
+        if (pressed & NAV_UP) {
+            selected = selected > 0 ? selected - 1 : count - 1;
+        }
+        if (pressed & NAV_DOWN) {
+            selected = selected < count - 1 ? selected + 1 : 0;
+        }
+    }
+}
+
 int MH_UI_Menu(const char* title, const char* prompt, const char* const* items, int count, int selected) {
     int held = NAV_UP | NAV_DOWN | NAV_OK | NAV_BACK; // what is held from before does not count
     int repeat = 0;
@@ -143,6 +186,10 @@ int MH_UI_Menu(const char* title, const char* prompt, const char* const* items, 
         return -1;
     }
     selected = selected < 0 || selected >= count ? 0 : selected;
+    if (MH_HostVersion() >= 13) {
+        printf("mister: %s: %s\n", title, prompt != NULL ? prompt : "");
+        return list_menu(items, count, selected);
+    }
     for (;;) {
         if (selected < top) {
             top = selected;
@@ -187,6 +234,25 @@ int MH_UI_Menu(const char* title, const char* prompt, const char* const* items, 
 }
 
 void MH_UI_Message(const char* title, const char* text, int flags) {
+    if (!MH_IsOpen()) {
+        printf("mister: %s: %s\n", title, text);
+        return;
+    }
+    printf("mister: %s\n", title);
+    if (MH_HostVersion() >= 13) {
+        // under the core's logo; with MH_UI_WAIT until the player leaves the core
+        MH_ShowMessage(text, (flags & MH_UI_ERROR) ? MH_MSG_ERROR : 0);
+        while ((flags & MH_UI_WAIT) && MH_CheckAlive()) {
+            struct timespec ts = { 0, 100000000 };
+            nanosleep(&ts, NULL);
+        }
+        return;
+    }
+    message_screen(title, text, flags);
+}
+
+// The message as host version 12 and older show it: a screen of its own, 320x200
+static void message_screen(const char* title, const char* text, int flags) {
     int held = NAV_UP | NAV_DOWN | NAV_OK | NAV_BACK;
     int repeat = 0;
     int row = 5;

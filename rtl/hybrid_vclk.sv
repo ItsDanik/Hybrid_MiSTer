@@ -4,10 +4,11 @@
 //
 //  The clock of the video output, from a PLL of its own that is set to
 //  another frequency while the core runs: hybrid_host asks for 50MHz (the
-//  15kHz video modes and those at 31kHz), a little more or less (the CRT
-//  option "Horizontal Size"), 40MHz (800x600) or 65MHz (1024x768).
+//  15kHz video modes and those at 31kHz) or a little more or less (the CRT
+//  option "Horizontal Size", 46.5 to 62MHz). Up to host version 12 it was
+//  40MHz for 800x600 and 65MHz for 1024x768 as well.
 //
-//  `code` is the frequency in units of 0.5MHz, 80..130. The PLL makes
+//  `code` is the frequency in units of 0.5MHz, 93..124. The PLL makes
 //  50MHz * M.K / 10, so M.K = code / 10: M is written to the PLL's M counter
 //  and K to its fractional part. The other settings are the ones Main_MiSTer
 //  uses for the HDMI PLL, which is of the same kind.
