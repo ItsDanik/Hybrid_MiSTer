@@ -90,8 +90,10 @@ static uint8_t* staging[2];
 static int staging_next;
 static int staging_direct = -1; // handed out by MH_FrameBuffer()
 static int queue[2];
+static uint32_t queue_at[2]; // the field each queued frame is to be shown at, 0: at once
 static int queue_head;
 static int queue_count;
+static uint32_t present_at; // MH_PresentAtField() for the next frame presented
 // serialises control block updates between the game, present and audio threads
 static pthread_mutex_t ctrl_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -407,8 +409,66 @@ static void fps_stamp(volatile uint8_t* dst, int row, int height) {
     }
 }
 
+
+// MISTER_HYBRID_PACE=1: every 300 frames, on stderr, how the frames came to
+// the core. It shows the newest at each vblank, so a frame handed over in the
+// same field as the one before means that one was never shown, and one two
+// fields after the one before (where one was meant) that the frame before was
+// shown twice: the stutter of a game that is at 60 frames per second by its
+// own count. Also how long after the start of a field (as the game saw it in
+// MH_WaitFrame() or MH_FieldCounter()) frames were handed over, at most.
+static int pace_on = -1;
+static uint32_t pace_field_seen;
+static struct timespec pace_field_time;
+
+static void pace_field(uint32_t field) {
+    if (pace_on && field != pace_field_seen) {
+        pace_field_seen = field;
+        clock_gettime(CLOCK_MONOTONIC, &pace_field_time);
+    }
+}
+
+static void pace_flip(uint32_t field) {
+    static uint32_t last;
+    static unsigned frames, same, next, later;
+    static double latest;
+    struct timespec now;
+
+    if (pace_on < 0) {
+        pace_on = getenv("MISTER_HYBRID_PACE") != NULL;
+    }
+    if (!pace_on) {
+        return;
+    }
+    if (frames || last) {
+        if (field == last) {
+            same++;
+        } else if (field - last == 1) {
+            next++;
+        } else {
+            later++;
+        }
+    }
+    last = field;
+    if (field == pace_field_seen) {
+        double ms;
+
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        ms = (now.tv_sec - pace_field_time.tv_sec) * 1e3 + (now.tv_nsec - pace_field_time.tv_nsec) * 1e-6;
+        if (ms > latest) {
+            latest = ms;
+        }
+    }
+    if (++frames == 300) {
+        fprintf(stderr, "mister: 300 frames to the core: in the same field as the one before %u, the next %u, later %u; "
+                "at most %.1fms into a field\n", same, next, later, latest);
+        frames = same = next = later = 0;
+        latest = 0;
+    }
+}
+
 // Copy a frame into the next framebuffer and flip to it
-static void present_to_fpga(const uint8_t* pixels, int pitch) {
+static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
     volatile uint8_t* dst;
     int height = MH_Height();
     int row = frame_bytes() / height;
@@ -432,15 +492,26 @@ static void present_to_fpga(const uint8_t* pixels, int pitch) {
         }
     }
     fps_stamp(dst, row, height);
+    // MH_PresentAtField(): the core takes the newest frame at every vblank, so
+    // this one is handed over in the field before its own, not earlier (the
+    // frame before it would never be shown). Interlaced, frames are taken at
+    // every second vblank: at once.
+    if (at != 0 && !(status[2] & STATUS_LACE)) {
+        for (i = 0; i < 100 && MH_IsOpen() && (int32_t)(status[1] - (at - 1)) < 0; i++) {
+            sleep_ms(1);
+        }
+    }
     fb_current = next;
     if (fb_format == MH_FORMAT_RGB565) {
         ctrl_enabled = 1;
     }
     write_ctrl();
+    pace_flip(status[1]);
 }
 
 static void* present_thread_main(void* arg) {
     int slot;
+    uint32_t at;
 
     (void)arg;
     MH_PinThreadToCPU1();
@@ -453,10 +524,11 @@ static void* present_thread_main(void* arg) {
             break;
         }
         slot = queue[queue_head];
+        at = queue_at[queue_head];
         pthread_mutex_unlock(&present_lock);
 
         if (MH_IsOpen()) {
-            present_to_fpga(staging[slot], frame_bytes() / MH_Height());
+            present_to_fpga(staging[slot], frame_bytes() / MH_Height(), at);
         }
 
         pthread_mutex_lock(&present_lock);
@@ -587,7 +659,8 @@ void MH_Present(const void* pixels, int pitch) {
     }
     start_present_thread();
     if (!present_threaded) {
-        present_to_fpga(src, pitch);
+        present_to_fpga(src, pitch, present_at);
+        present_at = 0;
         wait_for_screen();
         return;
     }
@@ -616,6 +689,8 @@ void MH_Present(const void* pixels, int pitch) {
 
     pthread_mutex_lock(&present_lock);
     queue[(queue_head + queue_count) % 2] = slot;
+    queue_at[(queue_head + queue_count) % 2] = present_at;
+    present_at = 0;
     queue_count++;
     pthread_cond_signal(&present_cond);
     pthread_mutex_unlock(&present_lock);
@@ -652,6 +727,8 @@ void MH_PresentBuffer(void) {
     }
     pthread_mutex_lock(&present_lock);
     queue[(queue_head + queue_count) % 2] = staging_direct;
+    queue_at[(queue_head + queue_count) % 2] = present_at;
+    present_at = 0;
     queue_count++;
     staging_direct = -1;
     pthread_cond_signal(&present_cond);
@@ -684,8 +761,26 @@ void MH_SetPalette(const uint32_t* rgb) {
     wait_for_screen();
 }
 
+void MH_PresentAtField(uint32_t field) {
+    // MISTER_HYBRID_AHEAD=0: frames shown as soon as they come, for comparing
+    static int ahead = -1;
+
+    if (ahead < 0) {
+        ahead = !getenv("MISTER_HYBRID_AHEAD") || atoi(getenv("MISTER_HYBRID_AHEAD")) != 0;
+    }
+    present_at = ahead ? field : 0;
+}
+
+int MH_Interlaced(void) {
+    return MH_IsOpen() && (status[2] & STATUS_LACE) != 0;
+}
+
 uint32_t MH_FieldCounter(void) {
-    return MH_IsOpen() ? status[1] : 0;
+    if (!MH_IsOpen()) {
+        return 0;
+    }
+    pace_field(status[1]);
+    return status[1];
 }
 
 void MH_WaitField(uint32_t field) {
@@ -717,6 +812,9 @@ void MH_WaitFrame(uint32_t field) {
     // at most 4 fields, in case the core goes away
     for (i = 0; i < 70 && !MH_FrameTaken(field); i++) {
         sleep_ms(1);
+    }
+    if (MH_IsOpen()) {
+        pace_field(status[1]);
     }
 }
 

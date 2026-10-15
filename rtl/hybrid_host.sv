@@ -168,7 +168,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd11;
+localparam [31:0] VERSION      = 32'd12;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;

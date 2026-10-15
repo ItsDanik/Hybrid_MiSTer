@@ -15,7 +15,13 @@ static const char *const TITLE = "@NAME@";
 //   "O[25:24],Difficulty,Normal,Easy,Hard;"
 // int MiSTer_Difficulty(void) { return MH_OSD_GAME_BITS(MH_OSDStatus(), 24, 2); }
 
-static uint32_t LastField;
+// GAME: 1 if the game's frames take most of a field: each is drawn a field
+// ahead and the library shows it at its own field (MH_PresentAtField()), so
+// that one a little slower than a field is still in time, for one field more
+// latency. Decide by benchmark, hybrid/CLAUDE.md ("Frame pacing").
+#define DRAW_AHEAD 0
+
+static uint32_t LastField; // with DRAW_AHEAD the field the last frame is shown at
 static int FieldValid = 0;
 
 void MiSTer_ResetFrames(void)
@@ -33,6 +39,20 @@ unsigned MiSTer_WaitFrame(void)
     if (!FieldValid) {
         LastField = MH_FieldCounter();
         FieldValid = 1;
+    }
+    if (DRAW_AHEAD && !MH_Interlaced()) {
+        uint32_t target = LastField + 1;
+
+        MH_WaitField(target - 3); // not before the field two before its own
+        field = MH_FieldCounter();
+        if ((int32_t)(field + 1 - target) > 0)
+            target = field + 1; // too late for it: the next vblank
+        if (!MH_IsOpen())
+            return 0;
+        MH_PresentAtField(target);
+        fields = target - LastField;
+        LastField = target;
+        return fields;
     }
     MH_WaitFrame(LastField);
     field = MH_FieldCounter();

@@ -161,6 +161,19 @@ void MH_WaitField(uint32_t field);
 int MH_FrameTaken(uint32_t field);
 // Sleep until MH_FrameTaken(field)
 void MH_WaitFrame(uint32_t field);
+// Show the next frame presented (MH_Present(), MH_PresentBuffer()) at field
+// counter `field`, not before: the library holds it until the field before.
+// For drawing a frame ahead, so that one that takes a little longer than a
+// field is still shown in time: start a frame for field F once the counter
+// is F - 2, and present it with MH_PresentAtField(F). The game's time steps
+// from one F to the next. Not with an interlaced mode (MH_Interlaced()):
+// there frames are shown at once. Without it, or with 0, as soon as possible.
+// MISTER_HYBRID_AHEAD=0 in the game's environment makes it do nothing: the
+// frame drawn from F - 2 is shown at F - 1, as without drawing ahead, which
+// is how to compare the two (hybrid/CLAUDE.md).
+void MH_PresentAtField(uint32_t field);
+// 1 while the mode is shown interlaced (640x400 and 640x480 on a 15kHz screen)
+int MH_Interlaced(void);
 // Bits 0..3 that hide or grey out lines of the core's OSD ("H0", "D1", ... in
 // its CONF_STR): for options the game cannot honour with the data it has
 void MH_SetMenuMask(int mask);
