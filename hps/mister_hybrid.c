@@ -346,8 +346,12 @@ static void fps_stamp(volatile uint8_t* dst, int row, int height) {
     int sx = width >= 640 ? 2 : 1;
     int sy = height >= 400 ? 2 : 1;
     int n, c, x, y, w;
+    static int forced = -2; // MISTER_HYBRID_FPS=0|1: the counter off or on whatever the OSD says (screenshots)
 
-    if (!MH_OSD_FPS(MH_OSDStatus())) {
+    if (forced == -2) {
+        forced = getenv("MISTER_HYBRID_FPS") ? atoi(getenv("MISTER_HYBRID_FPS")) != 0 : -1;
+    }
+    if (forced == 0 || (forced < 0 && !MH_OSD_FPS(MH_OSDStatus()))) {
         shown = -1;
         count = 0;
         return;
