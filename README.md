@@ -107,7 +107,7 @@ A game asks for a mode (`MH_SetMode()`, or the size of its SDL window) and the c
 
 ## HUD margins
 
-Most games were made for 320x200. A game whose view can be drawn in more lines draws it in 240 (320x240, or 640x480) and keeps its HUD at the size it was made: the HUD moves out towards the edges instead, the top HUD up and the bottom HUD down, by up to the 20 lines there are more. On a CRT the edges are partly hidden (overscan), and every screen hides a different amount, so where the HUD ends up is the player's to set, in the OSD:
+Most games were made for 320x200. A game whose view can be drawn in more lines can also draw it in 240 (320x240, or 640x480), as a mode of its own next to the 200-line ones it keeps (ECWolf: 320x200, 640x200, 320x240 and 640x240). In 240 lines the view fills the whole screen, from the top edge to the bottom one, and the HUD keeps the size it was made at and is drawn over the view, out towards the edges: the top HUD up and the bottom HUD down, by up to the 20 lines there are more. The view goes on behind and around the HUD; nothing is left black or filled. On a CRT the edges are partly hidden (overscan), and every screen hides a different amount, so where the HUD ends up is the player's to set, in the OSD:
 
 ```
 CRT Options -> Horizontal Size
@@ -119,6 +119,7 @@ CRT Options -> Horizontal Size
 ```
 
 - The number is the pixels between the HUD and that edge of a 240-line screen: 0 puts the HUD at the very edge (HDMI, which shows all of the picture), 24 leaves 24 lines. In a 480-line mode it is twice that. The same number puts the HUD in the same place in every game. Above 20 the HUD is further in than in the game's own 200-line layout, over the view.
+- In a 200-line mode there is no room to move the HUD: the lines do nothing there, and the game greys them out with `MH_SetMenuMask()` (`D` flags) while one is used.
 - The game reads them with `MH_HudMargins(&top, &bottom)` (or `MiSTer_HudRows()` of `template/game/mister_port.c`, which gives the rows for a screen of 240 or 480 lines) every frame and draws its HUD there: the player sees a change at once, while the OSD is still open. Nothing else moves: the view stays 240 lines, and full-screen pictures stay centred at their own size (artwork is only ever scaled by whole numbers, for the 640-wide modes).
 - The lines are only in the OSD of a game that has a HUD at that edge: ECWolf has a bottom HUD only, so it has *HUD (Bottom)* and no *HUD (Top)*. A game without a HUD has neither, nor the empty line above them. In a core with several games of which only some have a HUD at an edge, the game hides the line with `MH_SetMenuMask()` (`H0`..`H3` in front of it).
 - They are saved with the other options, per game: a game started from its own menu entry (an MGL with a set name) has its own settings file.

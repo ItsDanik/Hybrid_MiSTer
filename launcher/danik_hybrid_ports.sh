@@ -101,9 +101,11 @@ UI=$(dirname "$SELF")/.danik_hybrid_ports/danik_hybrid_ports_ui
 # DANIK_HYBRID_UI_ARGS: more for it, for testing (--fb FILE --geometry WxHxBPP)
 UI_ARGS=${DANIK_HYBRID_UI_ARGS:-}
 
-# The catalogue: every port and its games, engine|game|title. A game's id is
-# its menu entry's set name after "<engine>_" (dnk-<title>.mgl); a port with
-# one game has one line. The database's tags: the engine's name for all its
+# The catalogue: every port and its games that have a menu entry,
+# engine|game|title. A game's id is its menu entry's set name after
+# "<engine>_" (dnk-<title>.mgl); a port with one game has one line. A game
+# a core plays without an entry (ECWolf's Super 3-D Noah's Ark) is not here:
+# it is only in that core's own list, when it is started by itself. The database's tags: the engine's name for all its
 # files, <engine>_<game> for a game's (lower case; Downloader ignores - and
 # _, so these must differ without them). A new port or game: a line here,
 # and VERSION up.
@@ -115,7 +117,6 @@ ECWolf|WL|Wolfenstein 3D
 ECWolf|SOD|Spear of Destiny
 ECWolf|SD2|SoD: Return to Danger
 ECWolf|SD3|SoD: Ultimate Challenge
-ECWolf|N3D|Super 3-D Noah's Ark
 jfSW|SW|Shadow Warrior
 jfSW|WT|SW: Twin Dragon
 jfSW|TD|SW: Wanton Destruction
