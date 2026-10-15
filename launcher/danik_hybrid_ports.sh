@@ -118,8 +118,8 @@ ECWolf|SOD|Spear of Destiny
 ECWolf|SD2|SoD: Return to Danger
 ECWolf|SD3|SoD: Ultimate Challenge
 jfSW|SW|Shadow Warrior
-jfSW|WT|SW: Twin Dragon
-jfSW|TD|SW: Wanton Destruction
+jfSW|WT|SW: Wanton Destruction
+jfSW|TD|SW: Twin Dragon
 KeeperFX|DK|Dungeon Keeper
 OpenScreamer|Screamer|Screamer
 VanillaConquer|TD|Tiberian Dawn
