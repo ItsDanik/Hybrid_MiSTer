@@ -246,13 +246,17 @@ assign ddr_be = 8'hFF;
 // Changes within a class (320 or 640 wide, 200 or 240 lines, positions) are
 // taken when the next field starts.
 
+reg        game_on = 0;       // the game has the screen
 reg  [3:0] vmode = 4'd4;      // the mode the HPS asks for; 640x480 until the game has the screen
 
 wire       m_dual = (vmode == 4'd2) || (vmode == 4'd4);
 wire       t_fast = m_dual & vga31;
 wire       t_lace = m_dual & ~vga31;
-// the size is -24..+7: beyond that the blanking gets too short or the clock too fast
-wire [5:0] hsize  = ($signed(crt_hsize) > 6'sd7) ? 6'sd7 : ($signed(crt_hsize) < -6'sd24) ? -6'sd24 : crt_hsize;
+// the size is -24..+7: beyond that the blanking gets too short or the clock too fast.
+// Only for a game's picture: the core's own (the purple screen) has nothing at
+// its edges, and its text would get narrow and hard to read
+wire [5:0] hsize  = !game_on ? 6'd0 :
+                    ($signed(crt_hsize) > 6'sd7) ? 6'sd7 : ($signed(crt_hsize) < -6'sd24) ? -6'sd24 : crt_hsize;
 wire [7:0] t_code = t_fast ? 8'd100 : 8'd100 - {{2{hsize[5]}}, hsize};
 
 // in use
@@ -436,7 +440,6 @@ end
 // Control state (latched from DDR during vblank)
 
 reg        ctrl_valid = 0;
-reg        game_on = 0;       // the game has the screen
 reg        audio_en = 0;
 reg  [1:0] fb_index = 0;
 reg        fmt16 = 0;         // RGB565 instead of 8bpp paletted

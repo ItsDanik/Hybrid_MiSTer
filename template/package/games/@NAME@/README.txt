@@ -43,8 +43,9 @@ OSD options
                 (VGA monitor); not there with direct_video=1.
   CRT Options   for a 15kHz screen: Horizontal Size, Horizontal Pos and
                 Vertical Pos fit the picture to it. The pixels stay as they
-                are; HDMI is not affected. Not there with
-                forced_scandoubler=1.
+                are; HDMI is not affected. The size is for the game's
+                picture: the core's own, with its messages, keeps its
+                width. Not there with forced_scandoubler=1.
   TODO game options
   Menu OK, Menu Back
                 the gamepad button that confirms / goes back in the game's

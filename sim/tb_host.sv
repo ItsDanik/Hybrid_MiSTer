@@ -747,12 +747,16 @@ initial begin
 		if (dut.fm_fetch != 0) begin $display("FAIL: FM ring after the enable went"); errors = errors + 1; end
 	end
 
-	// the game leaves in 640x400 interlaced: back to 640x480 and the core's picture
+	// the game leaves in 640x400 interlaced: back to 640x480 and the core's
+	// picture. The CRT's horizontal size is the game's only: the core's
+	// picture keeps size 0, whatever the option says
+	crt_hsize = -6'sd9;
 	cur_vmode = 2;
 	fill(2);
 	set_ctrl(0, 0, 0, 10);
 	wait_fields(6);
 	if (!lace) begin $display("FAIL: 640x400 before the game leaves"); errors = errors + 1; end
+	if (hs_period != 872 || mem[15][7:0] != 109) begin $display("FAIL: horizontal size for the game"); errors = errors + 1; end
 	mem[0][31:0] = 0;
 	wait_fields(4);
 	checked = 0;
@@ -762,7 +766,8 @@ initial begin
 	check_enable = 0;
 	check_wall = 0;
 	$display("game left: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d", checked, errors, field_rows, hs_period);
-	if (checked != 2 * 153600 || !lace || !hires || field_rows != 240 || hs_period != 800 || mem[9][15:12] != 4 || mem[9][10] || mem[9][19]) begin
+	if (checked != 2 * 153600 || !lace || !hires || field_rows != 240 || hs_period != 800 || mem[15][7:0] != 100
+		|| mem[9][15:12] != 4 || mem[9][10] || mem[9][19]) begin
 		$display("FAIL: picture after the game left"); errors = errors + 1;
 	end
 	// it starts from black again, and stays black for 3 seconds (180 fields)
@@ -783,7 +788,10 @@ initial begin
 	if (field_rows != 480 || hs_period != 800 || lace || !fast || mem[9][15:12] != 4) begin $display("FAIL: picture at 31kHz"); errors = errors + 1; end
 	vga31 = 0;
 	wait_fields(4);
-	if (field_rows != 240 || hs_period != 800 || !lace || mem[9][15:12] != 4) begin $display("FAIL: 640x480 interlaced without a game"); errors = errors + 1; end
+	if (field_rows != 240 || hs_period != 800 || !lace || mem[9][15:12] != 4 || mem[15][7:0] != 100) begin
+		$display("FAIL: 640x480 interlaced without a game"); errors = errors + 1;
+	end
+	crt_hsize = 0;
 
 	// A game that attaches while the intro runs waits for its end, then the
 	// picture goes out in 43 fields and the game has the screen: from field
