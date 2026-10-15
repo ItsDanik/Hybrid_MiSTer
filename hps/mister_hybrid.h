@@ -188,6 +188,13 @@ void MH_SetMenuMask(int mask);
 // Input
 void MH_ReadInput(mh_input* input);
 uint64_t MH_OSDStatus(void);
+// OSD triggers: lines "T[56],<label>;" .. "T[59],<label>;" of the core's
+// CONF_STR, which do something once each time the player selects them (a
+// cheat, "next level"). Bit n set: trigger 56 + n was selected since the
+// last call (host version 13: the core turns the trigger's short pulse into
+// a toggle in bits 56..59 of MH_OSDStatus(), which this follows). 0 without
+// such a core. Call it from one place, every frame.
+int MH_OSDTriggers(void);
 // OSD status bits [127:64]: the core's CRT Options page (host version 13; 0
 // with an older core)
 uint64_t MH_OSDStatusHigh(void);

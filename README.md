@@ -227,6 +227,7 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 "V,v",`BUILD_DATE
 ```
 
+- **Triggers**, lines that do something once each time they are selected (a cheat, "next level"): `T[56]` to `T[59]` only, which the game reads with `MH_OSDTriggers()` (host version 13; Main_MiSTer sets a trigger's bit for microseconds, so the core flips it instead and the game sees the change).
 - Status bits 0..23 mean the same in every core (`MH_OSD_*` in `mister_hybrid.h`), bits 24..63 belong to the game, bits 64 and up are the *CRT Options* page, the same in every core; the game reads them with `MH_OSDStatusHigh()` (host version 13), for the HUD margins. Bit 15 is the *FPS Counter*: the library draws the frames shown in the last second into the top left corner of every frame it hands to the core (`MH_Present()`, so SDL games too), and the game does nothing for it. Bit 1 is free.
 - *HDMI Only* and *CRT Options* are the same lines in every core, whether or not its game has a mode they matter for: see [Video modes](#video-modes). *HDMI Only* is bit 1 since host version 13. Bit 0 is never an option: Main_MiSTer holds it as the core's reset while it loads the core and clears it after, so *HDMI Only*, which was there, was off after every load. The menu mask bits 4 and 5 that hide them are the core's; a game has bits 0..3 (`MH_SetMenuMask()`).
 - The first entry of every option is its default, so a fresh install needs no settings.

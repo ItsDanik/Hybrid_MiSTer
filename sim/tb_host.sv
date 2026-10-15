@@ -56,6 +56,7 @@ reg  [24:0] ps2_mouse = 0;
 wire clk_vid, ce_pix, hsync, vsync, hblank, vblank, hires, fast, f1;
 wire [3:0] menumask;
 reg  vga31 = 0;
+reg  [3:0] trig = 0;      // OSD triggers, status bits 56..59
 reg  [5:0] crt_hsize = 0;
 reg  [3:0] crt_hpos = 0, crt_vpos = 0;
 wire [15:0] audio_l, audio_r;
@@ -70,7 +71,7 @@ hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex")
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(joystick_0), .joystick_1(joystick_1),
 	.joy_l_analog_0(16'h1122), .joy_r_analog_0(16'h3344), .joy_l_analog_1(16'h5566), .joy_r_analog_1(16'h7788),
-	.osd_status({64'h0012_3456_789A_BCDE, 64'hCAFE}), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
+	.osd_status({64'h0012_3456_789A_BCDE, 4'h0, trig, 56'hCAFE}), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(vga31), .crt_hsize(crt_hsize), .crt_hpos(crt_hpos), .crt_vpos(crt_vpos),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(menumask),
@@ -528,6 +529,17 @@ initial begin
 	if (mem[12] != 64'hCAFE) begin $display("FAIL: status osd %h", mem[12]); $finish; end
 	// OSD status [127:64] at 0xC8, next to the audio fetch pointer (checked below)
 	if (mem[25] != 64'h0012_3456_789A_BCDE) begin $display("FAIL: status osd high %h", mem[25]); $finish; end
+	// an OSD trigger: a pulse of a few clocks flips its bit in the status
+	trig = 4'b0010;
+	repeat (3) @(posedge clk);
+	trig = 0;
+	wait_fields(2);
+	if (mem[12] != {4'h0, 4'b0010, 56'hCAFE}) begin $display("FAIL: OSD trigger %h", mem[12]); errors = errors + 1; end
+	trig = 4'b0010;
+	repeat (3) @(posedge clk);
+	trig = 0;
+	wait_fields(2);
+	if (mem[12] != 64'hCAFE) begin $display("FAIL: OSD trigger again %h", mem[12]); errors = errors + 1; end
 	if (!mem[8 + 8 + (9'h175 / 64)][9'h175 % 64]) begin $display("FAIL: key bitmap"); $finish; end
 	$display("status: frame counter %0d, writes %0d", mem[8][63:32], stat_writes);
 

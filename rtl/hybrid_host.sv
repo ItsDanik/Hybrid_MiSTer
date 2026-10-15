@@ -61,7 +61,11 @@
 //                   (the mode is 640x480 until then).
 //              w2  {joystick_1, joystick_0}
 //              w3  {r_analog_1, l_analog_1, r_analog_0, l_analog_0}
-//              w4  OSD status[63:0]
+//              w4  OSD status[63:0], but bits 59..56: a trigger's toggle
+//                  (host version 13): an OSD trigger ("T[56]".."T[59]") is
+//                  a pulse of microseconds, which a game reading the status
+//                  once a field would miss; the core flips the bit at each
+//                  one instead
 //              w5  {mouse y accumulator, mouse x accumulator}
 //              w6  {wheel accumulator[15:0], 13'b0, mouse buttons[2:0]}
 //              w7  {FM ring entries read so far[31:0], 3'b0, video clock
@@ -1002,6 +1006,8 @@ hybrid_fm fm
 // Input state
 
 reg [511:0] keys = 0;
+// OSD triggers, bits 56..59: flipped at each pulse
+reg   [3:0] trig_toggle = 0, trig_prev = 0;
 reg         old_key_stb = 0;
 reg  [31:0] mouse_x = 0, mouse_y = 0;
 reg  [15:0] mouse_wheel = 0;
@@ -1009,6 +1015,8 @@ reg   [2:0] mouse_btn = 0;
 reg         old_mouse_stb = 0;
 
 always @(posedge clk) begin
+	trig_prev   <= osd_status[59:56];
+	trig_toggle <= trig_toggle ^ (osd_status[59:56] & ~trig_prev);
 	old_key_stb <= ps2_key[10];
 	if (old_key_stb != ps2_key[10]) keys[{ps2_key[8], ps2_key[7:0]}] <= ps2_key[9];
 
@@ -1079,7 +1087,7 @@ always @(*) begin
 		4'd1:  stat_word = {VERSION, 10'd0, msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
-		4'd4:  stat_word = osd_status[63:0];
+		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:0]};
 		4'd5:  stat_word = {mouse_y, mouse_x};
 		4'd6:  stat_word = {32'd0, mouse_wheel, 13'd0, mouse_btn};
 		4'd7:  stat_word = {fm_fetch, 3'd0, vclk_count, 8'd0, vclk_code};

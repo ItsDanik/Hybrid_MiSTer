@@ -19,6 +19,8 @@
 //   analog <x> <y> [rx ry]  left (and right) stick of joystick 1, -128..127
 //   mouse <dx> <dy> <btn>   move the mouse (y up) and set its buttons
 //   osd <hex>               OSD status bits
+//   trigger <0..3>          an OSD trigger, T[56]..T[59], selected (the core
+//                           flips status bit 56 + n)
 //   hud <top> <bottom>      the HUD margins of the CRT Options page, 0..24
 //                           pixels (OSD status bits 77..86; 10 at the start)
 //   shot <file.ppm>         save the picture the core would show, in the
@@ -281,6 +283,8 @@ int main(int argc, char** argv) {
             status[10] += a;
             status[11] += b;
             status[12] = (status[12] & ~7u) | (c & 7);
+        } else if (sscanf(line, "trigger %d", &a) == 1 && a >= 0 && a < 4) {
+            status[9] ^= 1u << (24 + a);
         } else if (sscanf(line, "hud %d %d", &a, &b) == 2) {
             // OSD status bits 64..95 are status[34]; entry n is (n + 10) % 25 pixels
             status[34] = (status[34] & ~(0x3ffu << 13)) | ((uint32_t)((a + 15) % 25) << 13) | ((uint32_t)((b + 15) % 25) << 18);

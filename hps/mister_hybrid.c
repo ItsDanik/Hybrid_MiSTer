@@ -1044,6 +1044,19 @@ void MH_ReadInput(mh_input* input) {
     }
 }
 
+int MH_OSDTriggers(void) {
+    static int last = -1;
+    int now, changed;
+
+    if (!MH_IsOpen() || status[3] < 13) {
+        return 0;
+    }
+    now = (int)(status[9] >> 24) & 15;   // OSD status bits 56..59
+    changed = last < 0 ? 0 : (now ^ last);
+    last = now;
+    return changed;
+}
+
 uint64_t MH_OSDStatusHigh(void) {
     // status[34..35]: the word at 0xC8, written by host version 13 and later
     if (!MH_IsOpen() || status[3] < 13) {
