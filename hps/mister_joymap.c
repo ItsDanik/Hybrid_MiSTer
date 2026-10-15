@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #ifndef CONFIG_DIR
@@ -82,6 +83,54 @@ static int last_ok = -1, last_back = -1;
 static time_t last_scan;
 static uint32_t ok_result, back_result;
 
+// What the last resolve() was made from. Reading the mapping files every two
+// seconds (and, for a controller without one, the whole of config/inputs/)
+// stopped the game for 10 to 20ms on the SD card each time: it is only done
+// again when the controllers, the folders or the files it read have changed.
+// Main_MiSTer writes a mapping file in place ("Define buttons"), which
+// changes the file's time; a new one changes the folder's.
+#define MAX_READ 32
+static tDevice seen_devices[MAX_DEVICES];
+static int seen_count = -1;
+static struct {
+    char path[384];
+    time_t mtime;
+} files_read[MAX_READ];
+static int files_count;
+static time_t dir_mtime[2];
+
+static time_t mtime_of(const char* path) {
+    struct stat st;
+
+    return stat(path, &st) == 0 ? st.st_mtime : (time_t)-1;
+}
+
+static void note_file(const char* path) {
+    if (files_count < MAX_READ) {
+        snprintf(files_read[files_count].path, sizeof(files_read[0].path), "%s", path);
+        files_read[files_count].mtime = mtime_of(path);
+        files_count++;
+    }
+}
+
+// 1 if what resolve() was made from is no longer what there is
+static int inputs_changed(const tDevice* devices, int count) {
+    int i;
+
+    if (count != seen_count || memcmp(devices, seen_devices, count * sizeof(tDevice)) != 0) {
+        return 1;
+    }
+    if (mtime_of(INPUTS_DIR) != dir_mtime[0] || mtime_of(CONFIG_DIR) != dir_mtime[1]) {
+        return 1;
+    }
+    for (i = 0; i < files_count; i++) {
+        if (mtime_of(files_read[i].path) != files_read[i].mtime) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Connected joysticks from /proc/bus/input/devices (entries with a js handler)
 static int list_joysticks(tDevice* devices, int max) {
     FILE* f = fopen("/proc/bus/input/devices", "r");
@@ -122,6 +171,7 @@ static int read_map(const char* path, uint32_t map[MAP_ENTRIES]) {
     if (f == NULL) {
         return 0;
     }
+    note_file(path);
     memset(map, 0, MAP_ENTRIES * sizeof(uint32_t));
     n = fread(map, 1, MAP_ENTRIES * sizeof(uint32_t), f);
     fclose(f);
@@ -193,7 +243,7 @@ static uint32_t selected_code(const uint32_t menu[MAP_ENTRIES], int select, int 
     return func ? func : menu[back ? SYS_BTN_B : SYS_BTN_A] & 0xFFFF;
 }
 
-static void resolve(int ok_select, int back_select) {
+static void resolve(int ok_select, int back_select, int selection_changed) {
     tDevice devices[MAX_DEVICES];
     uint32_t menu[MAX_DEVICES][MAP_ENTRIES];
     uint32_t core[MAX_DEVICES][MAP_ENTRIES];
@@ -205,10 +255,19 @@ static void resolve(int ok_select, int back_select) {
     if (!core_default_loaded) {
         load_core_default();
     }
+    count = list_joysticks(devices, MAX_DEVICES);
+    if (!selection_changed && !inputs_changed(devices, count)) {
+        return;
+    }
+    memset(seen_devices, 0, sizeof(seen_devices));
+    memcpy(seen_devices, devices, count * sizeof(tDevice));
+    seen_count = count;
+    dir_mtime[0] = mtime_of(INPUTS_DIR);
+    dir_mtime[1] = mtime_of(CONFIG_DIR);
+    files_count = 0;
     snprintf(prefix, sizeof(prefix), "%s_", MH_CoreName());
     ok_result = 0;
     back_result = 0;
-    count = list_joysticks(devices, MAX_DEVICES);
     for (i = 0; i < count; i++) {
         int has_menu = load_map("", &devices[i], menu[i]);
         int has_core = load_map(prefix, &devices[i], core[i]);
@@ -259,13 +318,15 @@ void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits)
     time_t now = time(NULL);
 
     if (ok_select != last_ok || back_select != last_back || now - last_scan >= RESCAN_SECONDS) {
-        if (ok_select != last_ok || back_select != last_back) {
+        int selection_changed = ok_select != last_ok || back_select != last_back;
+
+        if (selection_changed) {
             printf("mister: menu buttons OK %d, Back %d\n", ok_select, back_select);
         }
         last_ok = ok_select;
         last_back = back_select;
         last_scan = now;
-        resolve(ok_select, back_select);
+        resolve(ok_select, back_select, selection_changed);
     }
     *ok_bits = ok_result;
     *back_bits = back_result;
