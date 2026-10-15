@@ -15,7 +15,11 @@ Disclaimer: AI is being used to speed up development of this project.
 
 ## Installation
 
-With `update_all`: run **danik_hybrid_ports** from the `Scripts` menu, tick *In update_all* and the games you want, and press *X: Apply*.
+With `update_all` (Downloader 2.4 or newer, which update_all keeps up to date):
+
+1. Copy [`downloader_danik_hybrid_ports.ini`](https://raw.githubusercontent.com/ItsDanik/Hybrid_MiSTer/main/launcher/downloader_danik_hybrid_ports.ini) to the root of your SD card (`/media/fat`).
+2. Run `update_all`. That installs the launcher, **danik_hybrid_ports**, in `Scripts`.
+3. Run **danik_hybrid_ports** from the `Scripts` menu, tick the games you want and press *X: Apply*. They are installed, and update_all keeps them up to date.
 
 By hand:
 
@@ -24,6 +28,7 @@ By hand:
    - `_Other/dnk/dnk-@NAME@_YYYYMMDD.rbf`, the FPGA core
    - `games/dnk/@NAME@/`, the game binary and its launch script
    - `Scripts/danik_hybrid_ports.sh`, the launcher (from [Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer))
+   - `downloader_danik_hybrid_ports.ini`, with which `update_all` keeps the ports up to date from then on
 2. Copy the game data to `/media/fat/games/dnk/@NAME@/`: TODO which files, where.
 3. Run **danik_hybrid_ports** from the `Scripts` menu, if you have not done so before (see Requirements).
 4. Load **dnk-@TITLE@** from the `Other` menu.

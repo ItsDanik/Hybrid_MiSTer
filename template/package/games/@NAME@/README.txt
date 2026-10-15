@@ -19,8 +19,13 @@ Requirements
   - Game data. It is not included: TODO which copy of the game.
 
 Install
+  With update_all (Downloader 2.4 or newer): copy
+  downloader_danik_hybrid_ports.ini to /media/fat/, run update_all, run
+  danik_hybrid_ports from the Scripts menu, tick the games, X: Apply.
+  By hand:
   1. Extract the zip to the root of the SD card (/media/fat): _Other/,
-     games/dnk/@NAME@/ and Scripts/.
+     games/dnk/@NAME@/, Scripts/ and downloader_danik_hybrid_ports.ini
+     (with which update_all keeps the ports up to date from then on).
   2. Copy the game data to /media/fat/games/dnk/@NAME@/
        TODO which files, where
   3. Run danik_hybrid_ports from the Scripts menu, if you have not done so

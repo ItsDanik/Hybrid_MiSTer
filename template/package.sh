@@ -7,6 +7,8 @@
 #   Scripts/danik_hybrid_ports.sh       the launcher, and its screen in
 #   Scripts/.danik_hybrid_ports/        (copies of both with the game: the
 #                                       newest one installed is the one used)
+#   downloader_danik_hybrid_ports.ini   the database for update_all, which
+#                                       keeps the ports up to date from then on
 set -e
 cd "$(dirname "$0")"
 DATE=$(date +%Y%m%d)
@@ -20,6 +22,7 @@ sh hybrid/launcher/ui/build.sh > /dev/null
 cp hybrid/launcher/danik_hybrid_ports.sh "$OUT/Scripts/danik_hybrid_ports.sh"
 cp hybrid/launcher/ui/danik_hybrid_ports_ui "$OUT/Scripts/.danik_hybrid_ports/danik_hybrid_ports_ui"
 cp hybrid/launcher/danik_hybrid_ports.sh hybrid/launcher/ui/danik_hybrid_ports_ui "$G/"
+cp hybrid/launcher/downloader_danik_hybrid_ports.ini "$OUT/"
 
 # the core, and a menu entry for each game: package/games.txt, a line each,
 # <id>|<title>. With several games each entry loads the core with the set
@@ -53,6 +56,6 @@ chmod +x "$G/@NAME@" "$G/mh_message" "$G"/*.sh "$G/danik_hybrid_ports_ui" \
 cp build/sdl/src/SDL2-*/LICENSE.txt "$G/LICENSE-sdl.txt"
 cp LICENSE "$G/LICENSE-gpl3.txt"
 rm -f "dist/@NAME@_$DATE.zip"
-(cd "$OUT" && python3 -m zipfile -c "../@NAME@_$DATE.zip" _Other games Scripts)
+(cd "$OUT" && python3 -m zipfile -c "../@NAME@_$DATE.zip" _Other games Scripts downloader_danik_hybrid_ports.ini)
 find "$OUT" -type f | sort
 ls -la "dist/@NAME@_$DATE.zip"

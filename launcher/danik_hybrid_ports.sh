@@ -38,14 +38,17 @@
 #        danik_hybrid_ports.sh status
 #
 # Choosing the ports: a screen with a tickbox for each port and each of its
-# games (the catalogue below), the launcher on or off, and whether update_all
-# keeps them (the [danik_hybrid_ports] section of downloader.ini, whose filter
-# says which). Apply writes that section and runs Downloader for it alone
-# (update.sh --run-only danik_hybrid_ports): what is ticked is installed, what
-# is not is removed (the player's own files stay). The screen is
-# danik_hybrid_ports_ui, next to this file in .danik_hybrid_ports/; over SSH,
-# or without it, dialog does the same. downloader.ini is only ever written
-# when the player applies.
+# games (the catalogue below), and the launcher on or off. The ports come
+# through update_all, from the database danik_hybrid_ports, whose section is
+# a drop-in file of Downloader (2.4 and later): /media/fat/
+# downloader_danik_hybrid_ports.ini, which the player copies there to begin
+# with (filter = launcher: the launcher alone). Apply writes its filter, which
+# says what is ticked, and runs Downloader for this database alone (update.sh
+# --run-only danik_hybrid_ports): what is ticked is installed, what is not is
+# removed (the player's own files stay). That file is the only one written;
+# a section of ours in downloader.ini itself, which would win over it, is
+# moved into it. The screen is danik_hybrid_ports_ui, next to this file in
+# .danik_hybrid_ports/; over SSH, or without it, dialog does the same.
 #
 # For a danik_hybrid_launch.sh:
 #   - it is run with bash in its own session; its output goes to the log below
@@ -93,6 +96,7 @@ MARK="danik_hybrid_ports.sh"
 DB_ID=danik_hybrid_ports
 DB_URL=https://raw.githubusercontent.com/ItsDanik/dnk_Distribution_MiSTer/db/db.json.zip
 DOWNLOADER_INI=$ROOT/downloader.ini
+DROP_IN=$ROOT/downloader_$DB_ID.ini
 UI=$(dirname "$SELF")/.danik_hybrid_ports/danik_hybrid_ports_ui
 # DANIK_HYBRID_UI_ARGS: more for it, for testing (--fb FILE --geometry WxHxBPP)
 UI_ARGS=${DANIK_HYBRID_UI_ARGS:-}
@@ -441,40 +445,53 @@ norm() {
     echo "$1" | tr 'A-Z' 'a-z' | tr -d '_-'
 }
 
-# our section of downloader.ini, its filter (empty: no section)
+# Our section's filter (empty: none, or no filter): the drop-in file's, or
+# one in downloader.ini (which Downloader prefers, when both are there)
 section_filter() {
-    awk -v id="[$DB_ID]" '
-        /^[ \t]*\[/ { line = tolower($0); sub(/^[ \t]+/, "", line); inside = (index(line, tolower(id)) == 1); if (inside) found = 1; next }
-        inside && /^[ \t]*filter[ \t]*=/ { sub(/^[ \t]*filter[ \t]*=[ \t]*/, ""); print; exit }
-        END { if (!found) exit 1 }' "$DOWNLOADER_INI" 2>/dev/null
+    local f
+    for f in "$DOWNLOADER_INI" "$DROP_IN"; do
+        awk -v id="[$DB_ID]" '
+            /^[ \t]*\[/ { line = tolower($0); sub(/^[ \t]+/, "", line); inside = (index(line, tolower(id)) == 1); if (inside) found = 1; next }
+            inside && /^[ \t]*filter[ \t]*=/ { sub(/^[ \t]*filter[ \t]*=[ \t]*/, ""); print; exit }
+            END { if (!found) exit 1 }' "$f" 2>/dev/null && return 0
+    done
+    return 1
 }
-has_section() {
+in_main_ini() {
     grep -qiF "[$DB_ID]" "$DOWNLOADER_INI" 2>/dev/null
 }
+has_section() {
+    in_main_ini || grep -qiF "[$DB_ID]" "$DROP_IN" 2>/dev/null
+}
 
-# downloader.ini without our section; with it again when $1 is a filter
+# The drop-in file with the filter $1; a section of ours in downloader.ini
+# moves out of it (the rest of that file is left as it is)
 write_section() {
     local tmp="$DOWNLOADER_INI.danik_hybrid_ports.tmp"
-    awk -v id="[$DB_ID]" '
-        /^[ \t]*\[/ { line = tolower($0); sub(/^[ \t]+/, "", line); skip = (index(line, tolower(id)) == 1) }
-        !skip' "$DOWNLOADER_INI" 2>/dev/null > "$tmp"
-    # no empty lines left at the end
-    sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$tmp"
-    if [ -n "$1" ]; then
-        printf '\n[%s]\ndb_url = %s\nfilter = %s\n' "$DB_ID" "$DB_URL" "$1" >> "$tmp"
+    printf '%s (Scripts menu): its screen writes the filter\n[%s]\ndb_url = %s\nfilter = %s\n' \
+        "$CHOSEN" "$DB_ID" "$DB_URL" "$1" > "$DROP_IN.tmp" && mv -f "$DROP_IN.tmp" "$DROP_IN"
+    if in_main_ini; then
+        awk -v id="[$DB_ID]" '
+            /^[ \t]*\[/ { line = tolower($0); sub(/^[ \t]+/, "", line); skip = (index(line, tolower(id)) == 1) }
+            !skip' "$DOWNLOADER_INI" > "$tmp"
+        # no empty lines left at the end
+        sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$tmp"
+        mv -f "$tmp" "$DOWNLOADER_INI"
+        note "moved [$DB_ID] from downloader.ini into $(basename "$DROP_IN")"
     fi
-    mv -f "$tmp" "$DOWNLOADER_INI"
 }
 
 # What to show: the settings, then every game of the catalogue, ticked as the
-# filter has it; with no section yet, the ports there are (either layout).
+# filter has it once the player has chosen (CHOSEN in the drop-in file, which
+# the file as it is shipped does not have); before, the ports there are
+# (either layout).
+CHOSEN="# chosen with danik_hybrid_ports.sh"
 make_table() {
     local filter terms engine game title t found
     filter=$(section_filter)
-    has_section && found=1
+    { grep -qsF "$CHOSEN" "$DROP_IN" || in_main_ini; } && found=1
     terms=" $(for t in $filter; do norm "$t"; done | tr '\n' ' ') "
     printf 'S\tlauncher\t%d\tLauncher\n' "$(grep -qsF "$MARK" "$STARTUP" && echo 1 || echo 0)"
-    printf 'S\tdb\t%d\tIn update_all\n' "$([ -n "$found" ] && echo 1 || echo 0)"
     echo "$CATALOGUE" | while IFS='|' read -r engine game title; do
         [ -n "$engine" ] || continue
         t=0
@@ -544,8 +561,8 @@ choose_dialog() {
     done < "$table"
 }
 
-# What the player chose: the launcher on or off, the section written (or
-# taken out), and Downloader run for it
+# What the player chose: the launcher on or off, the filter written, and
+# Downloader run for it
 apply() {
     local out=$1 filter updater ui=$TMP/danik_hybrid_ports_ui
     if [ "$(setting_of "$out" launcher)" = 1 ]; then
@@ -555,14 +572,9 @@ apply() {
         stop_daemon
         unregister
     fi
-    if [ "$(setting_of "$out" db)" != 1 ]; then
-        has_section && write_section "" && note "took [$DB_ID] out of downloader.ini"
-        [ -x "$ui" ] && "$ui" release $UI_ARGS
-        return 0
-    fi
     filter=$(filter_of "$out")
     write_section "$filter"
-    note "downloader.ini: [$DB_ID] filter = $filter"
+    note "$(basename "$DROP_IN"): filter = $filter"
     updater=$ROOT/Scripts/update.sh
     if [ ! -f "$updater" ]; then
         updater=

@@ -11,9 +11,9 @@
 //   danik_hybrid_ports_ui probe | release
 //   all: [--keep] [--fb DEVICE] [--geometry WxHxBPP] [--no-mouse] [--debug]
 //
-// main: the ports and their games with tickboxes, and two settings. The
-// table, a line a record, tab separated:
-//   S <key> <0|1> <label>                 a setting (the first two lines)
+// main: the ports and their games with tickboxes, and settings above them
+// (one or two). The table, a line a record, tab separated:
+//   S <key> <0|1> <label>                 a setting
 //   G <engine> <game> <0|1> <label>       a game of a port (shown under it,
 //                                         also when it is the only one)
 // Out: the same lines, with what is ticked when the player chose. Exit 0:
@@ -460,12 +460,13 @@ static int set_tick[2], nsets = 0;
 static Row rows[MAX_ROWS];
 static int nrows = 0;
 
-#define LIST_TOP 60
-#define LIST_ROWS 8
+#define BUTTONS_Y (CH - 20)
 #define SB_X (CW - 20)            // the scroll bar, 9 wide
+// the list: below the settings and their line, as many rows as fit above the buttons
+static int LIST_TOP = 60, LIST_ROWS = 8;
+#define SEP_Y (LIST_TOP - 4)
 #define SB_Y0 (LIST_TOP - 1)
 #define SB_Y1 (LIST_TOP + LIST_ROWS * ROW - 2)
-#define BUTTONS_Y (CH - 20)
 
 static int engine_state(const Row *r) {
   int on = 0;
@@ -501,6 +502,8 @@ static int read_table(const char *path) {
     }
   }
   fclose(f);
+  LIST_TOP = 26 + nsets * ROW + 6;
+  LIST_ROWS = (BUTTONS_Y - 6 - LIST_TOP) / ROW;
   // the rows: a port, then its games, also the only one (what it is)
   for (int i = 0; i < ngames && nrows < MAX_ROWS - 1; ) {
     int j = i;
@@ -540,7 +543,7 @@ static void draw_main(int focus_list, int sel_set, int sel, int top, int drag) {
     tickbox(12, y, set_tick[i] ? 2 : 0, C_WHITE);
     text(26, y, set_label[i], C_WHITE);
   }
-  fill(12, 56, CW - 24, 1, C_DARK);
+  fill(12, SEP_Y, CW - 24, 1, C_DARK);
   for (int i = 0; i < LIST_ROWS && top + i < nrows; i++) {
     const Row *r = &rows[top + i];
     int y = LIST_TOP + i * ROW, x0 = r->is_engine ? 12 : 26;
