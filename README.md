@@ -137,7 +137,7 @@ The game says which one to start with `MH_PickGame()` (`MiSTer_PickGame()` of `t
 
 The list (`MH_UI_Menu()`, host version 13) is on the core's picture, in the place of a message: 4 games at a time, the selected one on a pink bar, a dimmed `^` / `v` in the last column where there are more; the dots stand still. Up/Down, A or Enter to start, B or Esc to leave; the picked game's "Loading ..." message takes its place (`MiSTer_PickGame()`). Names are cut at 69 characters.
 
-Files are found in any case and with `*` and `?` (`*.SOD`, `addons/WT.GRP`). `%s` in a message is the game's folder as the player sees it (`games/dnk/ECWolf`, `MH_GamePath()`): messages never name a folder of their own.
+A port that finds its games by itself (jfSW knows its GRP files by their checksum, whatever their name) gives the games it found `files` NULL (always there) and the others `MH_NOT_THERE` (never there), with their message. Files are found in any case and with `*` and `?` (`*.SOD`, `addons/WT.GRP`). `%s` in a message is the game's folder as the player sees it (`games/dnk/ECWolf`, `MH_GamePath()`): messages never name a folder of their own.
 
 ## Messages
 

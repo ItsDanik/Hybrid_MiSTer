@@ -303,6 +303,10 @@ typedef struct mh_game {
     const char* missing;      // the message (4 lines of 71) when its menu entry was started and
                               // it is not there: which files to copy where, %s for the folder
 } mh_game;
+// `files` of a game the port looks for by itself (by checksum, as jfSW does)
+// and did not find: never there, whatever is in the folder. (NULL is always
+// there: one it did find.)
+extern const char* const MH_NOT_THERE[];
 // The game's folder as the player sees it on the SD card ("games/dnk/ECWolf"):
 // the current one, for messages
 const char* MH_GamePath(void);

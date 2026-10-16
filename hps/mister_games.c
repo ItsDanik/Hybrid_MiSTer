@@ -71,9 +71,14 @@ static void message(const char* core, const char* text) {
     MH_UI_Message(core, buf, MH_UI_WAIT | MH_UI_ERROR);
 }
 
+const char* const MH_NOT_THERE[] = { "", NULL };
+
 int MH_GameFound(const mh_game* game, const char* dir) {
     int i;
 
+    if (game->files == MH_NOT_THERE) {
+        return 0;
+    }
     for (i = 0; game->files != NULL && game->files[i] != NULL; i++) {
         if (!exists(dir ? dir : ".", game->files[i])) {
             return 0;
