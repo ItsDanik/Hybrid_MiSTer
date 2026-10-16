@@ -69,8 +69,8 @@ $NAME is set up in $ROOT. Next:
     MISTER_HYBRID build option; hybrid/template/game/ has a starting point.
   - build.sh, package.sh, package/games/$NAME/danik_hybrid_launch.sh: the lines
     marked GAME:
-  - package/games.txt: the games (one line each), and the same lines in the
-    catalogue of hybrid/launcher/danik_hybrid_ports.sh (with its VERSION up)
+  - package/games.txt: the games (one line each); the launcher's screen
+    offers them once the port is in the database
   - core/$NAME.sv: the game's options, "J1" and "jn" in CONF_STR. Repeat "jn"
     in danik_hybrid_launch.sh (MISTER_HYBRID_JN).
   - README.md and package/games/$NAME/README.txt: every TODO

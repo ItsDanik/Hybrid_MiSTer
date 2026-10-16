@@ -15,7 +15,10 @@
 #   reboot. Running it again is harmless.
 #
 #   It takes over from danik_hybrid_cores.sh, the launcher before it (version
-#   2): stops it, takes it out of user-startup.sh and deletes it.
+#   2): stops it, takes it out of user-startup.sh and deletes it. A running
+#   version 2 does not wait for that: it finds version 3 of itself, which
+#   comes with the ports as games/dnk/danik_hybrid_cores.sh, and that one runs
+#   "danik_hybrid_ports.sh takeover", so Scripts never keeps both.
 #
 #   A port's files: _Other/dnk-<Game>.mgl (its menu entries, which load the
 #   engine's core with a set name, <engine>_<game>, for games of a core with
@@ -35,10 +38,12 @@
 #        danik_hybrid_ports.sh stop       stop the daemon and the running game
 #        danik_hybrid_ports.sh remove     stop it and take it out of user-startup.sh
 #        danik_hybrid_ports.sh migrate    move ports of the old layout now
+#        danik_hybrid_ports.sh takeover   set up without the screen (what version 3 of
+#                                         danik_hybrid_cores.sh runs when it hands over)
 #        danik_hybrid_ports.sh status
 #
 # Choosing the ports: a screen with a tickbox for each port and each of its
-# games (the catalogue below), and the launcher on or off. The ports come
+# games the database has (the catalogue below), and the launcher on or off. The ports come
 # through update_all, from the database danik_hybrid_ports, whose section is
 # a drop-in file of Downloader (2.4 and later): /media/fat/
 # downloader_danik_hybrid_ports.ini, which the player copies there to begin
@@ -101,35 +106,19 @@ UI=$(dirname "$SELF")/.danik_hybrid_ports/danik_hybrid_ports_ui
 # DANIK_HYBRID_UI_ARGS: more for it, for testing (--fb FILE --geometry WxHxBPP)
 UI_ARGS=${DANIK_HYBRID_UI_ARGS:-}
 
-# The catalogue: every port and its games that have a menu entry,
-# engine|game|title. A game's id is its menu entry's set name after
-# "<engine>_" (dnk-<title>.mgl); a port with one game has one line. A game
-# a core plays without an entry (ECWolf's Super 3-D Noah's Ark) is not here:
-# it is only in that core's own list, when it is started by itself. The database's tags: the engine's name for all its
+# The catalogue: the games of the ports in the database, those that have a
+# menu entry, a line each: engine|game|title. A game's id is its menu entry's
+# set name after "<engine>_" (dnk-<title>.mgl); a port with one game has one
+# line. It is not written here: it comes with the launcher, from the database
+# (tag launcher), made by launcher/distribution.py from the games.txt of
+# every published port (a port's package/games.txt, in its zip as
+# games/dnk/<engine>/games.txt). So the screen offers what the database
+# has, no more, and a new port or game needs no new launcher. Without it (a launcher from a zip, before update_all
+# ran), the ports on the SD card: their games.txt, or one line for a port
+# of the old layout. The database's tags: the engine's name for all its
 # files, <engine>_<game> for a game's (lower case; Downloader ignores - and
-# _, so these must differ without them). A new port or game: a line here,
-# and VERSION up.
-CATALOGUE="
-Dethrace|CARMA|Carmageddon
-Dethrace|SPLAT|Carmageddon: Splat Pack
-DXXRebirth|D1|Descent
-DXXRebirth|D2|Descent II
-ECWolf|WL|Wolfenstein 3D
-ECWolf|SOD|Spear of Destiny
-ECWolf|SD2|SoD: Return to Danger
-ECWolf|SD3|SoD: Ultimate Challenge
-jfSW|SW|Shadow Warrior
-jfSW|WT|SW: Wanton Destruction
-jfSW|TD|SW: Twin Dragon
-KeeperFX|DK|Dungeon Keeper
-OpenScreamer|Screamer|Screamer
-VanillaConquer|TD|Tiberian Dawn
-VanillaConquer|RA|Red Alert
-Xash3D|HL|Half-Life
-YQuake2|Q2|Quake II
-YQuake2|XATRIX|Q2: The Reckoning
-YQuake2|ROGUE|Q2: Ground Zero
-"
+# _, so these must differ without them).
+CATALOGUE=$ROOT/Scripts/.danik_hybrid_ports/catalogue.txt
 # version 2, which this one takes over from
 OLD_MARK="danik_hybrid_cores.sh"
 OLD_PIDFILE=$TMP/danik_hybrid_cores.pid
@@ -483,6 +472,28 @@ write_section() {
     fi
 }
 
+# The games to offer, engine|game|title: the catalogue, or without it the
+# ports there are
+catalogue() {
+    local f engine
+    if [ -s "$CATALOGUE" ]; then
+        grep -v '^#' "$CATALOGUE" | grep '|'
+        return
+    fi
+    for f in "$DNK"/*/games.txt; do
+        [ -f "$f" ] || continue
+        engine=$(basename "$(dirname "$f")")
+        grep -v '^#' "$f" | grep '|' | sed "s/^/$engine|/"
+    done
+    for f in "$DNK"/*/"$LAUNCHER" "$GAMES"/*/"$LAUNCHER"; do
+        [ -f "$f" ] || continue
+        engine=$(basename "$(dirname "$f")")
+        [ -f "$DNK/$engine/games.txt" ] && continue
+        [ "$f" = "$GAMES/$engine/$LAUNCHER" ] && [ -f "$DNK/$engine/$LAUNCHER" ] && continue
+        echo "$engine|$engine|$engine"
+    done
+}
+
 # What to show: the settings, then every game of the catalogue, ticked as the
 # filter has it once the player has chosen (CHOSEN in the drop-in file, which
 # the file as it is shipped does not have); before, the ports there are
@@ -494,7 +505,7 @@ make_table() {
     { grep -qsF "$CHOSEN" "$DROP_IN" || in_main_ini; } && found=1
     terms=" $(for t in $filter; do norm "$t"; done | tr '\n' ' ') "
     printf 'S\tlauncher\t%d\tLauncher\n' "$(grep -qsF "$MARK" "$STARTUP" && echo 1 || echo 0)"
-    echo "$CATALOGUE" | while IFS='|' read -r engine game title; do
+    catalogue | tr -d '\r' | while IFS='|' read -r engine game title; do
         [ -n "$engine" ] || continue
         t=0
         if [ -n "$found" ]; then
@@ -728,8 +739,20 @@ main() {
         config)
             configure
             ;;
+        takeover)
+            # as the first run, without the screen
+            take_over
+            register
+            if [ -n "$(daemon_pid)" ] && launcher_of "$(cat "$CORENAME" 2>/dev/null)"; then
+                :
+            else
+                stop_daemon
+                migrate_all
+            fi
+            start_daemon
+            ;;
         *)
-            echo "usage: $0 [start|stop|restart|remove|migrate|status|config]"
+            echo "usage: $0 [start|stop|restart|remove|migrate|status|config|takeover]"
             return 1
             ;;
     esac

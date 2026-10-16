@@ -19,6 +19,16 @@
 #   itself, so an older core installed later doesn't bring an old launcher
 #   back and nothing has to be run again after an update.
 #
+#   Version 3 is the last. The hybrid ports have a new launcher,
+#   danik_hybrid_ports.sh (Scripts/, and a copy in each port's games/dnk/
+#   <engine>/), and bring this version along as games/dnk/danik_hybrid_cores.sh,
+#   where a running version 2 finds it (games/*/) and installs it over itself.
+#   As soon as the new launcher is there it hands over to it: run from the
+#   Scripts menu it runs it instead; as the daemon, or started with the
+#   MiSTer, it starts "danik_hybrid_ports.sh takeover" and leaves. That one
+#   takes this script out of user-startup.sh and Scripts and puts itself in.
+#   Without the new launcher it works as version 2 did.
+#
 # usage: danik_hybrid_cores.sh            set up (as from the Scripts menu)
 #        danik_hybrid_cores.sh start      start the daemon (what user-startup.sh calls)
 #        danik_hybrid_cores.sh stop       stop the daemon and the running game
@@ -47,15 +57,20 @@
 # under the terms of the GNU General Public License as published by the Free
 # Software Foundation, version 3 of the License.
 
-VERSION=2
+VERSION=3
 SELF=$(readlink -f "$0")
-GAMES=/media/fat/games
+# DANIK_HYBRID_ROOT and DANIK_HYBRID_TMP: another SD card and /tmp, for testing
+ROOT=${DANIK_HYBRID_ROOT:-/media/fat}
+TMP=${DANIK_HYBRID_TMP:-/tmp}
+GAMES=$ROOT/games
 LAUNCHER=danik_hybrid_launch.sh
-CORENAME=/tmp/CORENAME
-STARTUP=/media/fat/linux/user-startup.sh
-PIDFILE=/tmp/danik_hybrid_cores.pid
-LOG=/tmp/danik_hybrid_cores.log
+CORENAME=$TMP/CORENAME
+STARTUP=$ROOT/linux/user-startup.sh
+PIDFILE=$TMP/danik_hybrid_cores.pid
+LOG=$TMP/danik_hybrid_cores.log
 MARK="danik_hybrid_cores.sh"
+# the launcher that takes over from this one
+NEW=$ROOT/Scripts/danik_hybrid_ports.sh
 
 log() {
     echo "$(date '+%H:%M:%S') $*" >> "$LOG"
@@ -99,6 +114,28 @@ adopt_newest() {
     bash -n "$best" 2>/dev/null || return 1
     cp -f "$best" "$SELF.new" && chmod +x "$SELF.new" && mv -f "$SELF.new" "$SELF" || return 1
     log "installed version $bestv from $best"
+}
+
+# The new launcher, from a port's copy if Scripts has none yet; true if it
+# is there
+new_launcher() {
+    local f
+    if [ ! -f "$NEW" ]; then
+        for f in "$GAMES"/dnk/*/danik_hybrid_ports.sh; do
+            [ -f "$f" ] && bash -n "$f" 2>/dev/null || continue
+            cp -f "$f" "$NEW.new" && chmod +x "$NEW.new" && mv -f "$NEW.new" "$NEW" && break
+        done
+    fi
+    [ -f "$NEW" ] && bash -n "$NEW" 2>/dev/null
+}
+
+# Hands over to the new launcher, if it is there: true if this one is to leave
+hand_over() {
+    new_launcher || return 1
+    log "handing over to $NEW"
+    rm -f "$PIDFILE"
+    setsid bash "$NEW" takeover > /dev/null 2>&1 < /dev/null &
+    return 0
 }
 
 installed_cores() {
@@ -180,6 +217,7 @@ run_daemon() {
             [ "$(stat -c %Y "$SELF" 2>/dev/null)" != "$self_stamp" ] && changed=1
             if [ -n "$changed" ] || [ $((tick % 20)) -eq 0 ]; then
                 adopt_newest && changed=1
+                [ -z "$changed" ] && hand_over && exit 0
             fi
             if [ -n "$changed" ] && [ -f "$SELF" ]; then
                 log "restarting with the new $SELF"
@@ -235,6 +273,15 @@ status() {
 }
 
 main() {
+    # the new launcher is there: it takes over
+    case "$1" in
+        "")
+            new_launcher && exec bash "$NEW"
+            ;;
+        start | restart | daemon)
+            hand_over && exit 0
+            ;;
+    esac
     # a core brought a newer version: install it and let it do the rest
     case "$1" in
         "" | start | restart)
