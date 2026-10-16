@@ -347,6 +347,32 @@ int MH_Rumble(int strong, int weak) {
     return any;
 }
 
+// 1 while the button with Linux code `code` (BTN_*) is pressed on any
+// controller, read from Linux as the stick buttons are (mister_joymap.c)
+int mh_pad_key_down(uint32_t code) {
+    unsigned long keys[KEY_MAX / (8 * sizeof(long)) + 1];
+    int down = 0;
+    int i;
+
+    if (code == 0 || code >= KEY_MAX) {
+        return 0;
+    }
+    refresh();
+    for (i = 0; i < MAX_PADS && !down; i++) {
+        pad* p = &pads[i];
+
+        if (p->fd < 0) {
+            continue;
+        }
+        memset(keys, 0, sizeof keys);
+        if (ioctl(p->fd, EVIOCGKEY(sizeof keys), keys) < 0) {
+            continue;
+        }
+        down = has_bit(keys, code);
+    }
+    return down;
+}
+
 int MH_ReadStickButtons(int* left, int* right) {
     const char* fixed = getenv("MISTER_HYBRID_STICKBUTTONS"); // "left,right": for tests without a controller
     unsigned long keys[KEY_MAX / (8 * sizeof(long)) + 1];

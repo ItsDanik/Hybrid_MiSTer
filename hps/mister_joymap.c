@@ -9,7 +9,7 @@
 // mapping (input_<vid>_<pid>_v3.map) and its mapping for this core
 // (<core>_input_<vid>_<pid>_v3.map, or the core's default "jn" mapping when
 // there is none). Started from a menu entry with a set name (an MGL), Main
-// names the mapping after that (<set>_input_...): MH_SetName().
+// names the mapping after that (<set>_input_...): MH_MappingName().
 
 #include "mister_hybrid.h"
 
@@ -244,6 +244,11 @@ static uint32_t selected_code(const uint32_t menu[MAP_ENTRIES], int select, int 
     return func ? func : menu[back ? SYS_BTN_B : SYS_BTN_A] & 0xFFFF;
 }
 
+// the Linux codes of the physical OK and Back buttons (of the controllers in
+// use): for MH_MenuButtonsPressed(), which also reads them from Linux
+static uint32_t ok_code, back_code;
+int mh_pad_key_down(uint32_t code); // mister_triggers.c
+
 static void resolve(int ok_select, int back_select, int selection_changed) {
     tDevice devices[MAX_DEVICES];
     uint32_t menu[MAX_DEVICES][MAP_ENTRIES];
@@ -266,9 +271,11 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
     dir_mtime[0] = mtime_of(INPUTS_DIR);
     dir_mtime[1] = mtime_of(CONFIG_DIR);
     files_count = 0;
-    snprintf(prefix, sizeof(prefix), "%s_", MH_SetName());
+    snprintf(prefix, sizeof(prefix), "%s_", MH_MappingName());
     ok_result = 0;
     back_result = 0;
+    ok_code = 0;
+    back_code = 0;
     for (i = 0; i < count; i++) {
         int has_menu = load_map("", &devices[i], menu[i]);
         int has_core = load_map(prefix, &devices[i], core[i]);
@@ -309,6 +316,10 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
         if (score[i] == best) {
             ok_result |= core_bits_for_code(core[i], selected_code(menu[i], ok_select, 0));
             back_result |= core_bits_for_code(core[i], selected_code(menu[i], back_select, 1));
+            if (ok_code == 0) {
+                ok_code = selected_code(menu[i], ok_select, 0);
+                back_code = selected_code(menu[i], back_select, 1);
+            }
         }
     }
 }
@@ -331,4 +342,15 @@ void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits)
     }
     *ok_bits = ok_result;
     *back_bits = back_result;
+}
+
+void MH_MenuButtonsPressed(uint64_t osd_status, uint32_t joystick, int* ok, int* back) {
+    uint32_t ok_bits, back_bits;
+
+    MH_MenuButtons(osd_status, &ok_bits, &back_bits);
+    // through a core button the player gave the physical one, or the physical
+    // button itself: one without a function in this core is passed to no
+    // core button at all
+    *ok = (joystick & ok_bits) != 0 || mh_pad_key_down(ok_code);
+    *back = (joystick & back_bits) != 0 || mh_pad_key_down(back_code);
 }

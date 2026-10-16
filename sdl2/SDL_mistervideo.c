@@ -120,7 +120,8 @@ static void SDLCALL MISTER_JoystickUpdate(void *userdata)
     const int player = (int)(intptr_t)userdata;
     SDL_Joystick *joystick = joysticks[player];
     mh_input input;
-    Uint32 joy, ok_bits = 0, back_bits = 0;
+    Uint32 joy;
+    int menu_ok = 0, menu_back = 0;
     Uint8 hat = SDL_HAT_CENTERED;
     int i;
 
@@ -160,10 +161,10 @@ static void SDLCALL MISTER_JoystickUpdate(void *userdata)
         SDL_JoystickSetVirtualButton(joystick, i, (joy & MH_JOY_BUTTON(i)) ? SDL_PRESSED : SDL_RELEASED);
     }
     if (player == 0) {
-        MH_MenuButtons(input.osd_status, &ok_bits, &back_bits);
+        MH_MenuButtonsPressed(input.osd_status, joy, &menu_ok, &menu_back);
     }
-    SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_OK, (joy & ok_bits) ? SDL_PRESSED : SDL_RELEASED);
-    SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_BACK, (joy & back_bits) ? SDL_PRESSED : SDL_RELEASED);
+    SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_OK, menu_ok ? SDL_PRESSED : SDL_RELEASED);
+    SDL_JoystickSetVirtualButton(joystick, MISTER_BUTTON_MENU_BACK, menu_back ? SDL_PRESSED : SDL_RELEASED);
     if (player == 0) {
         int l3 = 0, r3 = 0;
 

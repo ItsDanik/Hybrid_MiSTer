@@ -110,7 +110,8 @@ UI_ARGS=${DANIK_HYBRID_UI_ARGS:-}
 # _, so these must differ without them). A new port or game: a line here,
 # and VERSION up.
 CATALOGUE="
-Dethrace|Carmageddon|Carmageddon
+Dethrace|CARMA|Carmageddon
+Dethrace|SPLAT|Carmageddon: Splat Pack
 DXXRebirth|D1|Descent
 DXXRebirth|D2|Descent II
 ECWolf|WL|Wolfenstein 3D

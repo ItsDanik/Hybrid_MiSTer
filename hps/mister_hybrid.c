@@ -328,6 +328,36 @@ const char* MH_CoreName(void) {
     return core_name;
 }
 
+// The set name in /tmp/CORENAME when it is ours (the core's name or
+// <core>_<game>), else "": what Main_MiSTer names the core's files after
+static void corename_set(char* out, size_t size) {
+    const char* core = getenv("MISTER_HYBRID_CORE");
+    char name[64] = { 0 };
+    size_t len;
+    FILE* f;
+
+    out[0] = 0;
+    core = core ? core : "";
+    len = strlen(core);
+    if (len == 0 || (f = fopen("/tmp/CORENAME", "r")) == NULL) {
+        return;
+    }
+    if (fgets(name, sizeof(name), f) != NULL) {
+        name[strcspn(name, "\r\n")] = 0;
+        if (strncmp(name, core, len) == 0 && (name[len] == 0 || name[len] == '_')) {
+            snprintf(out, size, "%s", name);
+        }
+    }
+    fclose(f);
+}
+
+const char* MH_MappingName(void) {
+    static char name[64];
+
+    corename_set(name, sizeof(name));
+    return name[0] != 0 ? name : MH_SetName();
+}
+
 const char* MH_SetName(void) {
     static char set_name[64];
     const char* core = getenv("MISTER_HYBRID_CORE");

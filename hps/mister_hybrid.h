@@ -122,6 +122,11 @@ const char* MH_CoreName(void);
 // or the core's name (MISTER_HYBRID_CORE). From /tmp/CORENAME, or
 // MISTER_HYBRID_SET in the environment. Read once.
 const char* MH_SetName(void);
+// The name Main_MiSTer has saved the button mappings under: the set name in
+// /tmp/CORENAME (what was loaded), else MH_SetName(). Read anew each call.
+// Not MISTER_HYBRID_SET, which says which game to start and can differ
+// (tools/test_on_mister.sh loads <Engine>_TEST and starts <Engine>_<game>).
+const char* MH_MappingName(void);
 // The host version of the core (hybrid_host.sv), 0 without one
 int MH_HostVersion(void);
 
@@ -214,6 +219,12 @@ void MH_HudMargins(int* top, int* bottom);
 // two core buttons, so this is how a button with a game function can also
 // confirm and cancel in menus. Cheap to call every frame.
 void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits);
+// Whether Menu OK / Menu Back are pressed now, `joystick` the core's buttons
+// of player 1: through the core buttons of MH_MenuButtons(), or the physical
+// button read from Linux, for one that drives no core button (a button
+// without a function in this core: MiSTer passes it to the core not at all).
+// Cheap to call every frame.
+void MH_MenuButtonsPressed(uint64_t osd_status, uint32_t joystick, int* ok, int* back);
 // The gamepad's analog triggers (L2, R2), 0 = released .. 255 = fully pressed.
 // MiSTer does not pass them to a core, so they are read from Linux directly
 // (mister_triggers.c) and are those of whichever controller is pressed
