@@ -942,6 +942,9 @@ end
 integer aud_next = -1, aud_samples = 0, aud_errors = 0;
 time    aud_first_tick_time = 0, aud_last_tick_time = 0;
 reg     aud_check = 0;
+// Audio off (a game left): the core starts the ring from its beginning when
+// the next one switches it on, the checker anew
+always @(posedge clk) if (!dut.audio_en) aud_next = -1;
 always @(posedge clk) if (dut.aud_tick2 && dut.audio_en) begin
 	// outputs update on this edge, look at them one clock later
 	@(posedge clk);
