@@ -19,6 +19,16 @@
 // Main_MiSTer decides which controller is which player, and that cannot be
 // seen from here: the values are the furthest-pressed of all controllers.
 //
+// RACING WHEELS: Main_MiSTer knows a list of wheels (input.cpp, setup_wheels:
+// Logitech, Fanatec, Thrustmaster and others) and hands a core their pedals
+// itself, whatever the model's axes are and whichever way they run: the gas on
+// the left stick's up-down axis and the brake on the right stick's, 0 let go to
+// -127 pressed (and the wheel on the left stick's across). So for a wheel of
+// that list the pedals are taken from the core's sticks, as the triggers: gas
+// the right one, brake the left; its own axes are not looked at. The list is
+// Main_MiSTer's (2026-10-16), by vendor and product. While such a wheel is
+// connected, a gamepad's sticks pushed up count as pedals too.
+//
 // Rumble is Linux force feedback on the same devices: one effect a
 // controller, stored again and started whenever the strength changes. It is
 // given two seconds to run, so that the motors of a game that has gone away
@@ -52,6 +62,7 @@ typedef struct {
     int seen;        // in the directory at the last scan
     int left, right; // axis codes, -1 until they are known
     struct input_absinfo left_info, right_info;
+    int wheel;   // a wheel Main_MiSTer hands the pedals of (is_wheel)
     int rumbles; // it can, and was opened for writing
     int effect;  // the stored effect, -1 = none yet
 } pad;
@@ -113,6 +124,35 @@ static const int pairs[][2] = {
 
 static int has_bit(const unsigned long* bits, int n) {
     return (bits[n / (8 * sizeof(long))] >> (n % (8 * sizeof(long)))) & 1;
+}
+
+// One of the wheels whose pedals Main_MiSTer hands on (input.cpp, setup_wheels)
+static int is_wheel(int fd) {
+    struct input_id id;
+    char name[256] = "";
+
+    if (ioctl(fd, EVIOCGID, &id) < 0) {
+        return 0;
+    }
+    ioctl(fd, EVIOCGNAME(sizeof name - 1), name);
+    switch (id.vendor) {
+    case 0x046d: // Logitech: G25, G27, G29, Driving Force, Driving Force Pro, Driving Force GT
+        return id.product == 0xc299 || id.product == 0xc29b || id.product == 0xc24f || id.product == 0xc294 ||
+               id.product == 0xc298 || id.product == 0xc29a;
+    case 0x0eb7: // Fanatec: ClubSport V2.5, Podium DD1, DD2
+        return id.product == 0x0004 || id.product == 0x0006 || id.product == 0x0007;
+    case 0x06f8: // Guillemot (Thrustmaster): Force Feedback Racing Wheel
+        return id.product == 0x0004;
+    case 0x044f: // Thrustmaster: FGT Rumble 3-in-1, F430 Cockpit Wireless, T300RS
+        return id.product == 0xb655 || id.product == 0xb65b || id.product == 0xb66e;
+    case 0x2341: // a NeGcon through an Arduino / RetroZord
+        return strstr(name, "RZordPsWheel") != NULL;
+    case 0x1209:
+        return id.product == 0x595a && strstr(name, "RZordPsWheel") != NULL;
+    case 0x16d0: // ... or a Reflex Adapt
+        return id.product == 0x127e && strstr(name, "ReflexPSWheel") != NULL;
+    }
+    return 0;
 }
 
 // A gamepad or joystick: it has buttons of one, and axes
@@ -195,6 +235,7 @@ static void scan(void) {
         snprintf(pads[free_slot].name, sizeof pads[free_slot].name, "%s", e->d_name);
         pads[free_slot].seen = 1;
         pads[free_slot].left = pads[free_slot].right = -1;
+        pads[free_slot].wheel = is_wheel(fd);
     }
     if (dir != NULL) {
         closedir(dir);
@@ -410,7 +451,7 @@ int MH_ReadStickButtons(int* left, int* right) {
 
 int MH_ReadTriggers(int* left, int* right) {
     const char* fixed = getenv("MISTER_HYBRID_TRIGGERS"); // "left,right": for tests without a controller
-    int l = 0, r = 0, found = 0;
+    int l = 0, r = 0, found = 0, wheel = 0;
     int i;
 
     if (fixed != NULL) {
@@ -426,6 +467,10 @@ int MH_ReadTriggers(int* left, int* right) {
         pad* p = &pads[i];
         int v;
 
+        if (p->fd >= 0 && p->wheel) { // its pedals: from the core's sticks, below
+            wheel = 1;
+            continue;
+        }
         if (p->fd < 0 || (p->left < 0 && !find_axes(p))) {
             continue;
         }
@@ -445,6 +490,24 @@ int MH_ReadTriggers(int* left, int* right) {
         if (v > r) {
             r = v;
         }
+    }
+    if (wheel && MH_IsOpen()) {
+        // a wheel's pedals as Main_MiSTer hands them to the core: the gas on the
+        // left stick's up-down axis, the brake on the right one's, 0 to -127
+        mh_input in;
+
+        MH_ReadInput(&in);
+        for (i = 0; i < 2; i++) {
+            const int gas = in.analog_ly[i] < 0 ? -2 * in.analog_ly[i] : 0, brake = in.analog_ry[i] < 0 ? -2 * in.analog_ry[i] : 0;
+
+            if (gas > r) {
+                r = gas > 255 ? 255 : gas;
+            }
+            if (brake > l) {
+                l = brake > 255 ? 255 : brake;
+            }
+        }
+        found = 1;
     }
     *left = l;
     *right = r;

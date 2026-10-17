@@ -228,8 +228,11 @@ void MH_MenuButtonsPressed(uint64_t osd_status, uint32_t joystick, int* ok, int*
 // The gamepad's analog triggers (L2, R2), 0 = released .. 255 = fully pressed.
 // MiSTer does not pass them to a core, so they are read from Linux directly
 // (mister_triggers.c) and are those of whichever controller is pressed
-// furthest: for player 1 of a game one plays alone. Returns 0 while no
-// controller with triggers is connected. Cheap to call every frame.
+// furthest: for player 1 of a game one plays alone. A racing wheel Main_MiSTer
+// knows gives its pedals here: the gas as the right trigger, the brake as the
+// left (taken from the core's sticks, where Main_MiSTer puts them). Returns 0
+// while no controller with triggers (or such a wheel) is connected. Cheap to
+// call every frame.
 int MH_ReadTriggers(int* left, int* right);
 // The clicks of the left and right stick (L3, R3), 1 while pressed, which
 // MiSTer's default map does not pass on either: read the same way, from the

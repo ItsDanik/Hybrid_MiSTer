@@ -12,6 +12,9 @@
 #     set name @NAME@_TEST: the OSD settings are config/@NAME@_TEST.CFG, at
 #     first a copy of the installed port's, and the game is told which game
 #     it is through MISTER_HYBRID_SET
+#   - the buttons are the core's defaults (its "jn"): the installed port's
+#     mappings are not copied, and one made in an earlier test is removed at
+#     every start (Danik, 2026-10-17: to test with the default mappings)
 #   - /tmp/@name@_nolaunch keeps a launcher from starting the installed port
 # No launcher is involved and none is touched. "stop" removes all of it.
 # usage: MISTER=root@<address> tools/test_on_mister.sh <what>
@@ -98,9 +101,6 @@ if ! remote "[ -d $T ]"; then
         cd /media/fat/config
         [ -f $NAME.CFG ] && [ ! -f ${NAME}_TEST.CFG ] && cp $NAME.CFG ${NAME}_TEST.CFG
         [ -f ${NAME}_volume.cfg ] && [ ! -f ${NAME}_TEST_volume.cfg ] && cp ${NAME}_volume.cfg ${NAME}_TEST_volume.cfg
-        for f in inputs/${NAME}_input_* inputs/${NAME}_advanced_input_*; do
-            [ -f \"\$f\" ] && cp \"\$f\" \"inputs/${NAME}_TEST\${f#inputs/$NAME}\"
-        done
         true"
 fi
 # the package, every time: over the copy, and alone in the folder without data
@@ -119,6 +119,7 @@ remote "cd $DIR && sed -e 's|^GAMEDIR=.*|GAMEDIR=\"$DIR\"|' -e 's|^LOGDIR=.*|LOG
         -e '/_nolaunch/d' danik_hybrid_launch.sh > .test_launch.sh
     grep -q '^GAMEDIR=\"$DIR\"' .test_launch.sh && grep -q '^RUNLOG=$T.runlog' .test_launch.sh ||
         { echo 'danik_hybrid_launch.sh is not like the template one: GAMEDIR= / RUNLOG= lines' >&2; exit 1; }
+    rm -f /media/fat/config/inputs/${NAME}_TEST_*
     touch /tmp/${LOWER}_nolaunch
     echo 'load_core $T.mgl' > /dev/MiSTer_cmd
     sleep 4
