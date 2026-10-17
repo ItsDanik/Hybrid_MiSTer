@@ -11,7 +11,8 @@
 #               port's release zip extracted (its menu entries, core, games/
 #               dnk/<Engine>/), the launcher and its screen in Scripts/, and
 #               the catalogue, Scripts/.danik_hybrid_ports/catalogue.txt.
-#   README.md   for players
+#   README.md   for players, with where each game's files go: made again
+#               with every publish and remove
 #
 # and, on its branch "db", db.json.zip, the database itself (the db_url of the
 # drop-in file), whose files are served from the commit of main they are in.
@@ -78,8 +79,13 @@ controls.
 2. Run update_all. It installs the launcher, danik_hybrid_ports, in Scripts.
 3. Run danik_hybrid_ports from the Scripts menu, tick the games you want and press X: Apply.
 
-The game data is not included: each port's README says which files of your own copy go where.
+The game data is not included: copy the files from your own copy of each game into its port's folder on
+the SD card. Each port's README.txt, which comes with it into that folder, says which files go where;
+without them, the game says so when it is loaded.
 
+| Games | Your game files go in | Which files |
+|---|---|---|
+%s
 `ports.txt` lists the ports in the database; `files/` is what it installs. Published with
 `launcher/distribution.py` of Hybrid_MiSTer; the database itself is on the `db` branch.
 """
@@ -263,6 +269,24 @@ def catalogue_text(files, ports):
     return "\n".join(lines) + "\n"
 
 
+def readme_text(files, ports):
+    """README.md: what is said to players, with a line for each published
+    port: its games, where their files go and the README.txt that says which"""
+    rows = []
+    for engine, _ in sorted(ports, key=lambda p: p[0].lower()):
+        folder = "games/dnk/%s/" % engine
+        if not os.path.isfile(os.path.join(files, folder, "README.txt")):
+            die("%s has no %sREADME.txt" % (engine, folder))
+        rows.append("| %s | `/media/fat/%s` | [README.txt](files/%sREADME.txt) |\n"
+                    % (", ".join(t for _, t in games_of(files, engine)), folder, urllib.parse.quote(folder)))
+    return README % "".join(rows)
+
+
+def write_readme(checkout, ports):
+    with open(os.path.join(checkout, "README.md"), "w", encoding="utf-8") as f:
+        f.write(readme_text(os.path.join(checkout, "files"), ports))
+
+
 def write_catalogue(files, ports):
     os.makedirs(os.path.join(files, LAUNCHER_DIR), exist_ok=True)
     with open(os.path.join(files, CATALOGUE), "w", encoding="utf-8") as f:
@@ -282,6 +306,9 @@ def check(checkout):
     with open(os.path.join(files, CATALOGUE), encoding="utf-8") as f:
         if f.read() != catalogue_text(files, ports):
             die("%s is not that of ports.txt" % CATALOGUE)
+    with open(os.path.join(checkout, "README.md"), encoding="utf-8") as f:
+        if f.read() != readme_text(files, ports):
+            die("README.md is not that of ports.txt")
     return tags
 
 
@@ -347,11 +374,10 @@ def cmd_init(checkout):
     os.makedirs(os.path.join(checkout, "files"), exist_ok=True)
     if not os.path.isdir(os.path.join(checkout, ".git")):
         subprocess.run(["git", "init", "-q", "-b", "main", checkout], check=True)
-    if not os.path.exists(os.path.join(checkout, "README.md")):
-        with open(os.path.join(checkout, "README.md"), "w", encoding="utf-8") as f:
-            f.write(README)
     if not os.path.exists(os.path.join(checkout, "ports.txt")):
         write_ports(checkout, [])
+    if not os.path.exists(os.path.join(checkout, "README.md")):
+        write_readme(checkout, read_ports(checkout))
 
 
 def cmd_publish(checkout, zips):
@@ -401,6 +427,7 @@ def cmd_publish(checkout, zips):
     put_launcher(files)
     write_ports(checkout, list(ports.items()))
     write_catalogue(files, list(ports.items()))
+    write_readme(checkout, list(ports.items()))
     commit(checkout, "Publish " + (", ".join(os.path.basename(z) for z in zips) or
                                    "the launcher, version %d" % launcher_version(launcher)))
 
@@ -416,6 +443,7 @@ def cmd_remove(checkout, engines):
     put_launcher(files)
     write_ports(checkout, list(ports.items()))
     write_catalogue(files, list(ports.items()))
+    write_readme(checkout, list(ports.items()))
     commit(checkout, "Remove " + ", ".join(engines))
 
 
