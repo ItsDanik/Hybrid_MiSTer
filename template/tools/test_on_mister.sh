@@ -5,8 +5,9 @@
 #   - the game's folder is /tmp/@name@_test (gone after a reboot): the
 #     installed game's folder (games/dnk/@NAME@/, or games/@NAME@/ of the old
 #     layout) mirrored, its folders made anew and its files links to the
-#     installed ones, but those under 1MB (settings, saved games) copies, so
-#     that what the game writes stays in /tmp; and the package over it
+#     installed ones, but those under 1MB (settings, saved games; COPY below)
+#     copies, so that what the game writes stays in /tmp; and the package
+#     over it
 #   - the core is in a hidden folder, _Other/.@name@_test/, loaded with the
 #     set name @NAME@_TEST: the OSD settings are config/@NAME@_TEST.CFG, at
 #     first a copy of the installed port's, and the game is told which game
@@ -29,6 +30,11 @@ HOST=${MISTER:?set MISTER=root@<address of the MiSTer>}
 USAGE="usage: tools/test_on_mister.sh <id of package/games.txt>|list|nodata|log|stop"
 WHAT=${1:?$USAGE}
 T=/tmp/${LOWER}_test
+# GAME: which of the installed game's files under 1MB are copies, not links
+# (shell patterns of their paths in the game's folder; "*" is all of them).
+# All, unless they do not fit in /tmp (246MB, with the package): then the
+# files the game writes, its settings and saved games.
+COPY="*"
 
 remote() {
     ssh -o LogLevel=ERROR "$HOST" "$@"
@@ -78,10 +84,15 @@ if ! remote "[ -d $T ]"; then
         for d in /media/fat/games/dnk/$NAME /media/fat/games/$NAME; do
             [ -d \$d ] || continue
             cp -rs \$d/. $T/
+            set -f
             find $T -type l | while IFS= read -r f; do
                 t=\$(readlink \"\$f\")
-                [ -f \"\$t\" ] && [ \$(stat -c %s \"\$t\") -lt 1048576 ] && cp --remove-destination \"\$t\" \"\$f\"
+                [ -f \"\$t\" ] && [ \$(stat -c %s \"\$t\") -lt 1048576 ] || continue
+                for p in $COPY; do
+                    case \"\${f#$T/}\" in \$p) cp --remove-destination \"\$t\" \"\$f\"; break ;; esac
+                done
             done
+            set +f
             break
         done
         cd /media/fat/config
