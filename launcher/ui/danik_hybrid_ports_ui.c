@@ -66,6 +66,15 @@
 
 #include "cozette.h"
 
+// The launcher's VERSION, shown at the top right: build.sh takes it from
+// danik_hybrid_ports.sh, which this screen always comes with.
+#ifndef LAUNCHER_VERSION
+#error "LAUNCHER_VERSION: build with launcher/ui/build.sh"
+#endif
+#define STR_(x) #x
+#define STR(x) STR_(x)
+#define VERSION_TEXT "v" STR(LAUNCHER_VERSION)
+
 // ---------------------------------------------------------------------------
 // The canvas: 320x200, a colour index a pixel.
 // ---------------------------------------------------------------------------
@@ -536,7 +545,7 @@ static void handle_of(int top, int *hy, int *hh) {
 static void draw_main(int focus_list, int sel_set, int sel, int top, int drag) {
   memset(cv, C_BG, sizeof cv);
   header("by danik");
-  text(CW - 12 - text_w("v3"), 6, "v3", C_DIM);
+  text(CW - 12 - text_w(VERSION_TEXT), 6, VERSION_TEXT, C_DIM);
   for (int i = 0; i < nsets; i++) {
     int y = 26 + i * ROW;
     if (!focus_list && sel_set == i) fill(8, y - 1, CW - 16, 15, C_BAR);
