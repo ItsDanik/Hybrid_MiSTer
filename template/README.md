@@ -29,7 +29,7 @@ By hand:
    - `games/dnk/@NAME@/`, the game binary and its launch script
    - `Scripts/danik_hybrid_ports.sh`, the launcher (from [Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer))
    - `downloader_danik_hybrid_ports.ini`, with which `update_all` keeps the ports up to date from then on
-2. Copy the game data to `/media/fat/games/dnk/@NAME@/`: TODO which files, where.
+2. Copy the game data to `/media/fat/games/dnk/@NAME@/`: TODO which folders, copied whole (everything in the game's folder; never files that can be left out: `hybrid/README.md`, "Conventions").
 3. Run **danik_hybrid_ports** from the `Scripts` menu, if you have not done so before (see Requirements).
 4. Load **dnk-@TITLE@** from the `Other` menu.
 

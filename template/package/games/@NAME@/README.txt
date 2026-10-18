@@ -27,7 +27,8 @@ Install
      games/dnk/@NAME@/, Scripts/ and downloader_danik_hybrid_ports.ini
      (with which update_all keeps the ports up to date from then on).
   2. Copy the game data to /media/fat/games/dnk/@NAME@/
-       TODO which files, where
+       TODO which folders, copied whole (everything in the game's folder;
+       never files that can be left out)
   3. Run danik_hybrid_ports from the Scripts menu, if you have not done so
      before (see Requirements).
   4. Load dnk-@TITLE@ from the Other menu.
