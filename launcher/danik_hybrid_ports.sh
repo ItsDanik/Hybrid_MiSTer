@@ -664,7 +664,8 @@ apply() {
 download() {
     local updater=$ROOT/Scripts/update.sh code engine titles said=
     if [ ! -f "$updater" ]; then
-        echo "Scripts/update.sh is not there. Run update_all to install and remove the ports."
+        echo "Scripts/update.sh is not there. Run update_all"
+        echo "to install and remove the ports."
         return 1
     fi
     bash "$updater" --run-only "$DB_ID"
@@ -674,7 +675,7 @@ download() {
         # its games that have a menu entry now (a port of one game: its one),
         # in the 22 columns the screen has left: else the first, +how many more
         titles=$(catalogue | tr -d '\r' | awk -F '|' -v e="$engine" -v sets=" $(sets_of "$engine" | tr '\n' ' ') " '
-            $1 == e { if (first == "") first = $3; if (index(sets, " " e "_" $2 " ")) { t[++n] = $3; out = out (n > 1 ? ", " : "") $3 } }
+            $1 == e { if (first == "") first = $3; if (index(sets, " " e "_" $2 " ")) { t[++n] = $3; sep = n > 1 ? ", " : ""; out = out sep $3 } }
             END { if (n == 0) print first; else if (length(out) <= 22) print out; else print t[1] " +" (n - 1) }')
         if [ -z "$said" ]; then
             echo
@@ -684,8 +685,8 @@ download() {
         printf '  %-24s%s\n' "games/dnk/$engine/" "${titles:-$engine}"
     done
     # the ports look for that folder on a USB drive first (launch scripts of
-    # host version 14)
-    [ -n "$said" ] && echo "on the SD card, or the same folders on a USB drive."
+    # host version 14); the screen cuts lines at 48 columns
+    [ -n "$said" ] && echo "on the SD card, or the same on a USB drive."
     return $code
 }
 

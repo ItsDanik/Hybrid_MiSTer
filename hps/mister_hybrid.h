@@ -246,6 +246,11 @@ void MH_MenuButtonsPressed(uint64_t osd_status, uint32_t joystick, int* ok, int*
 // while no controller with triggers (or such a wheel) is connected. Cheap to
 // call every frame.
 int MH_ReadTriggers(int* left, int* right);
+// 1 while a racing wheel Main_MiSTer knows (as above) is connected. Main_MiSTer
+// makes it whichever player it comes as, often player 2 next to a gamepad, so
+// a game played alone takes both players' controllers together then (the SDL
+// driver does, for its joystick 1). Cheap to call every frame.
+int MH_WheelConnected(void);
 // The clicks of the left and right stick (L3, R3), 1 while pressed, which
 // MiSTer's default map does not pass on either: read the same way, from the
 // gamepads' BTN_THUMBL and BTN_THUMBR (the standard gamepad buttons; a

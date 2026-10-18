@@ -27,7 +27,9 @@
 // that list the pedals are taken from the core's sticks, as the triggers: gas
 // the right one, brake the left; its own axes are not looked at. The list is
 // Main_MiSTer's (2026-10-16), by vendor and product. While such a wheel is
-// connected, a gamepad's sticks pushed up count as pedals too.
+// connected, a gamepad's sticks pushed up count as pedals too, and the SDL
+// driver's joystick 1 is both players' controllers (MH_WheelConnected()), so
+// that the wheel steers whichever player Main_MiSTer made it.
 //
 // Rumble is Linux force feedback on the same devices: one effect a
 // controller, stored again and started whenever the strength changes. It is
@@ -456,6 +458,18 @@ int MH_ReadStickButtons(int* left, int* right) {
     *left = mh_osd_hold(&left_held, *left);
     *right = mh_osd_hold(&right_held, *right);
     return found;
+}
+
+int MH_WheelConnected(void) {
+    int i;
+
+    refresh();
+    for (i = 0; i < MAX_PADS; i++) {
+        if (pads[i].fd >= 0 && pads[i].wheel) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int MH_ReadTriggers(int* left, int* right) {

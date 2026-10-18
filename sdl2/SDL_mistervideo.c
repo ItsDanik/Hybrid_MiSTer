@@ -37,6 +37,8 @@
   buttons in the order of its "J1," list; buttons 28 and 29 of player 1 are
   "Menu OK" and "Menu Back", see MH_MenuButtons(); 30 and 31 of player 1
   the clicks of the left and right stick (L3, R3: MH_ReadStickButtons()).
+  While a racing wheel is connected (MH_WheelConnected()), joystick 1 is both
+  players' controllers: a wheel steers whichever player Main_MiSTer made it.
 
   This software is provided 'as-is' under the zlib license, like SDL itself.
 */
@@ -130,6 +132,22 @@ static void SDLCALL MISTER_JoystickUpdate(void *userdata)
     }
     MH_ReadInput(&input);
     joy = input.joystick[player];
+    if (player == 0 && MH_WheelConnected()) {
+        /* A racing wheel is often player 2, next to a gamepad: joystick 1 is
+           then both players' controllers, each stick axis the one further out,
+           the buttons and the d-pad of either */
+        int8_t *const axes[4][2] = {
+            { &input.analog_lx[0], &input.analog_lx[1] }, { &input.analog_ly[0], &input.analog_ly[1] },
+            { &input.analog_rx[0], &input.analog_rx[1] }, { &input.analog_ry[0], &input.analog_ry[1] }
+        };
+
+        joy |= input.joystick[1];
+        for (i = 0; i < 4; i++) {
+            if (SDL_abs(*axes[i][1]) > SDL_abs(*axes[i][0])) {
+                *axes[i][0] = *axes[i][1];
+            }
+        }
+    }
 
     SDL_JoystickSetVirtualAxis(joystick, 0, (Sint16)(input.analog_lx[player] * 256));
     SDL_JoystickSetVirtualAxis(joystick, 1, (Sint16)(input.analog_ly[player] * 256));

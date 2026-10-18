@@ -17,6 +17,7 @@
 //                           +100 for E0-prefixed codes (5A Enter, 76 Esc, 175 up)
 //   joy <hex>               joystick 1 bits (1 right, 2 left, 4 down, 8 up, 10.. buttons)
 //   analog <x> <y> [rx ry]  left (and right) stick of joystick 1, -128..127
+//   joy2 <hex>, analog2 <x> <y> [rx ry]   the same of joystick 2
 //   mouse <dx> <dy> <btn>   move the mouse (y up) and set its buttons
 //   osd <hex>               OSD status bits
 //   osdopen <0|1>           the OSD menu closed / open (Main_MiSTer passes
@@ -278,6 +279,10 @@ int main(int argc, char** argv) {
             } else {
                 status[16 + ((a & 0x1ff) >> 5)] &= ~(1u << (a & 0x1f));
             }
+        } else if (sscanf(line, "joy2 %x", &a) == 1) {
+            status[5] = a;
+        } else if (sscanf(line, "analog2 %d %d %d %d", &a, &b, &c, &d) >= 2) {
+            status[7] = (a & 0xff) | ((b & 0xff) << 8) | ((c & 0xff) << 16) | ((d & 0xff) << 24);
         } else if (sscanf(line, "joy %x", &a) == 1) {
             status[4] = a;
         } else if (sscanf(line, "analog %d %d %d %d", &a, &b, &c, &d) >= 2) {
