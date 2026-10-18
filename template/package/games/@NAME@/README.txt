@@ -32,6 +32,10 @@ Install
   3. Run danik_hybrid_ports from the Scripts menu, if you have not done so
      before (see Requirements).
   4. Load dnk-@TITLE@ from the Other menu.
+  The game data can go on a USB drive instead, into the same folder there
+  (/media/usb0/games/dnk/@NAME@/): the game looks for it there first, and
+  then keeps its settings and saved games there as well. Everything else
+  stays on the SD card.
 
 OSD options
   Aspect ratio, Scale, Scandoubler Fx, Stereo Mix as in other cores.
@@ -48,10 +52,6 @@ OSD options
                 picture: the core's own, with its messages, keeps its
                 width. Not there with forced_scandoubler=1.
   TODO game options
-  Menu OK, Menu Back
-                the gamepad button that confirms / goes back in the game's
-                menus, whatever it does in the game. MiSTer (default) uses
-                the OK/Back buttons of your MiSTer menu.
 
 Controls
   Keyboard and mouse:
@@ -67,11 +67,14 @@ Controls
     R (RB / R1)                         TODO
     Select                              TODO
     Start                               Menu
+  In the game's menus the buttons that confirm and go back are the ones of
+  your MiSTer menu, whatever they do in the game: its Menu OK / Menu Back if
+  you set them in "Define joystick buttons", else its A / B. A controller
+  never set up in MiSTer confirms and goes back as on its console: Cross /
+  Circle on PlayStation, A / B on Xbox and on Nintendo.
   Change the buttons in the OSD under "Define @NAME@ buttons". "Menu OK" and
-  "Menu Back" there are only needed for a button without a game function;
-  MiSTer doesn't let you assign a button twice, so to confirm with a button
-  that also has a game function, pick it in the OSD's Menu OK/Menu Back
-  options instead.
+  "Menu Back" there are only needed for a spare button without a game
+  function. While the OSD is open, the game gets no input.
 
 Files
   TODO settings and saved games

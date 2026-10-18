@@ -90,7 +90,7 @@ hybrid_host #(.WALL(WALL), .WALL_PAL(WALL_PAL), .WALL_DOTS(WALL_DOTS), .WALL_EAS
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(32'd0), .joystick_1(32'd0),
 	.joy_l_analog_0(16'd0), .joy_r_analog_0(16'd0), .joy_l_analog_1(16'd0), .joy_r_analog_1(16'd0),
-	.osd_status(128'd0), .ps2_key(11'd0), .ps2_mouse(25'd0), .ps2_mouse_ext(16'd0),
+	.osd_status(128'd0), .osd_open(1'b0), .ps2_key(11'd0), .ps2_mouse(25'd0), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(VGA31 != 0), .crt_hsize(6'd0), .crt_hpos(4'd0), .crt_vpos(4'd0),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(),

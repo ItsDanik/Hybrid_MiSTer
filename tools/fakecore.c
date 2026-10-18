@@ -19,6 +19,9 @@
 //   analog <x> <y> [rx ry]  left (and right) stick of joystick 1, -128..127
 //   mouse <dx> <dy> <btn>   move the mouse (y up) and set its buttons
 //   osd <hex>               OSD status bits
+//   osdopen <0|1>           the OSD menu closed / open (Main_MiSTer passes
+//                           the core no buttons and keys while it is: the
+//                           script's joy and key lines still do)
 //   trigger <0..3>          an OSD trigger, T[56]..T[59], selected (the core
 //                           flips status bit 56 + n)
 //   hud <top> <bottom>      the HUD margins of the CRT Options page, 0..24
@@ -56,7 +59,7 @@ static volatile uint32_t* status;
 static uint32_t field;
 static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
-static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown;
+static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown, osd_open;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
@@ -183,8 +186,8 @@ static void tick(void) {
     field++;
     // the game has the screen (bit 19) at once: nothing fades here
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
-        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20);
-    status[3] = 13;
+        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22);
+    status[3] = 14;
     status[15] = fm_fetch;
     status[0] = STATUS_MAGIC;
     status[1] = field;
@@ -293,6 +296,8 @@ int main(int argc, char** argv) {
             status[9] = (uint32_t)(osd >> 32);
         } else if (sscanf(line, "shot %199s", arg) == 1) {
             screenshot(arg);
+        } else if (sscanf(line, "osdopen %d", &a) == 1) {
+            osd_open = a != 0;
         } else if (sscanf(line, "vga31 %d", &a) == 1) {
             vga31 = a != 0;
         } else if (strncmp(line, "reload", 6) == 0) {

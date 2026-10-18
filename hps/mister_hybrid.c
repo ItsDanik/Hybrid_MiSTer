@@ -1047,13 +1047,41 @@ int MH_CoreReloaded(void) {
     return detached && (reloaded || (core_name[0] != 0 && !shm_is_file && corename_matches()));
 }
 
+int MH_OSDOpen(void) {
+    // bit 22 of the status word 1, host version 14
+    return MH_IsOpen() && status[3] >= 14 && (status[2] >> 22 & 1);
+}
+
+int mh_osd_hold(int* held, int pressed) {
+    if (MH_OSDOpen()) {
+        *held = 1;
+        return 0;
+    }
+    if (!pressed) {
+        *held = 0;
+    }
+    return *held ? 0 : pressed;
+}
+
+// How far from the middle a stick is still let go
+#define STICK_REST 24
+
 void MH_ReadInput(mh_input* input) {
-    int i;
+    // What was held when the OSD closed, until it is let go; the mouse's
+    // movement while it was open, taken off its accumulators for good
+    static uint32_t held_joy[2], held_keys[16];
+    static int held_mouse, held_axis[2][4];
+    static int32_t mouse_off[2], last_mouse[2];
+    static int16_t wheel_off, last_wheel;
+    int8_t* axes[4];
+    int open;
+    int i, k;
 
     memset(input, 0, sizeof(*input));
     if (!MH_IsOpen()) {
         return;
     }
+    open = MH_OSDOpen();
     input->frame = status[1];
     input->joystick[0] = status[4];
     input->joystick[1] = status[5];
@@ -1071,6 +1099,43 @@ void MH_ReadInput(mh_input* input) {
     input->mouse_wheel = (int16_t)(status[12] >> 16);
     for (i = 0; i < 16; i++) {
         input->keys[i] = status[16 + i];
+    }
+
+    // The OSD menu is open: Main_MiSTer passes the core no buttons and keys
+    // then, and nothing else reaches the game either, nor what was held when
+    // it closed (the button that closed it), until it is let go
+    if (open) {
+        mouse_off[0] += input->mouse_x - last_mouse[0];
+        mouse_off[1] += input->mouse_y - last_mouse[1];
+        wheel_off += input->mouse_wheel - last_wheel;
+    }
+    last_mouse[0] = input->mouse_x;
+    last_mouse[1] = input->mouse_y;
+    last_wheel = input->mouse_wheel;
+    input->mouse_x -= mouse_off[0];
+    input->mouse_y -= mouse_off[1];
+    input->mouse_wheel -= wheel_off;
+    held_mouse = open ? 7 : held_mouse & input->mouse_buttons;
+    input->mouse_buttons &= ~held_mouse;
+    for (i = 0; i < 16; i++) {
+        held_keys[i] = open ? ~0u : held_keys[i] & input->keys[i];
+        input->keys[i] &= ~held_keys[i];
+    }
+    for (i = 0; i < 2; i++) {
+        held_joy[i] = open ? ~0u : held_joy[i] & input->joystick[i];
+        input->joystick[i] &= ~held_joy[i];
+        axes[0] = &input->analog_lx[i];
+        axes[1] = &input->analog_ly[i];
+        axes[2] = &input->analog_rx[i];
+        axes[3] = &input->analog_ry[i];
+        for (k = 0; k < 4; k++) {
+            if (open || (held_axis[i][k] && *axes[k] > -STICK_REST && *axes[k] < STICK_REST)) {
+                held_axis[i][k] = open;
+            }
+            if (held_axis[i][k]) {
+                *axes[k] = 0;
+            }
+        }
     }
 }
 

@@ -40,7 +40,7 @@
 //              w1[63:32] number of entries written to the FM ring so far
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
-//              w1  {version, 12'b0, game, fast, running, vga31, mode[3:0],
+//              w1  {version, 9'b0, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
 //                   field, ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
 //                   lace: the mode is shown interlaced.
 //                   field: the field that was on the screen had the even
@@ -51,6 +51,12 @@
 //                   1024x768 are available, which no core has any more).
 //                   bit 20: a message (0x001800) is shown; bit 21: the
 //                   core's own, that no game came (host version 13).
+//                   bit 22: the OSD menu is open (host version 14).
+//                   Main_MiSTer passes no buttons and keys to the core
+//                   while it is, and the HPS side holds back what it reads
+//                   from Linux itself (triggers, stick clicks, the physical
+//                   Menu OK / Back) too. 0 for its info boxes (volume, a
+//                   controller connected).
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -148,6 +154,7 @@ module hybrid_host
 	input      [15:0] joy_l_analog_1,
 	input      [15:0] joy_r_analog_1,
 	input     [127:0] osd_status,
+	input             osd_open,     // the OSD menu is shown (OSD_STATUS of the framework)
 	input      [10:0] ps2_key,
 	input      [24:0] ps2_mouse,
 	input      [15:0] ps2_mouse_ext,
@@ -193,7 +200,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd13;
+localparam [31:0] VERSION      = 32'd14;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -1011,6 +1018,8 @@ hybrid_fm fm
 reg [511:0] keys = 0;
 // OSD triggers, bits 56..59: flipped at each pulse
 reg   [3:0] trig_toggle = 0, trig_prev = 0;
+// OSD_STATUS comes from the framework's clock
+reg   [1:0] osd_open_s = 0;
 reg         old_key_stb = 0;
 reg  [31:0] mouse_x = 0, mouse_y = 0;
 reg  [15:0] mouse_wheel = 0;
@@ -1020,6 +1029,7 @@ reg         old_mouse_stb = 0;
 always @(posedge clk) begin
 	trig_prev   <= osd_status[59:56];
 	trig_toggle <= trig_toggle ^ (osd_status[59:56] & ~trig_prev);
+	osd_open_s  <= {osd_open_s[0], osd_open};
 	old_key_stb <= ps2_key[10];
 	if (old_key_stb != ps2_key[10]) keys[{ps2_key[8], ps2_key[7:0]}] <= ps2_key[9];
 
@@ -1087,7 +1097,7 @@ reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 10'd0, msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 9'd0, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:0]};

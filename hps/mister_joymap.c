@@ -2,14 +2,17 @@
 // mapping files, for MH_MenuButtons() (mister_hybrid.h).
 //
 // Main_MiSTer refuses to map one physical button to two core buttons, so a
-// button with a game function cannot also be the core's "confirm" button. The
-// OSD's Menu OK / Menu Back options name a button instead (A, B, X, Y, L, R,
-// Select, Start, or "MiSTer" for the MiSTer menu's own OK/Back) and this
-// module finds the core buttons it drives by reading the controller's menu
-// mapping (input_<vid>_<pid>_v3.map) and its mapping for this core
+// button with a game function cannot also be the core's "confirm" button.
+// Menus confirm and go back with the MiSTer menu's own OK / Back instead, and
+// this module finds the core buttons they drive by reading the controller's
+// menu mapping (input_<vid>_<pid>_v3.map: its Menu OK / Menu Back, else its
+// A / B, as Main_MiSTer does) and its mapping for this core
 // (<core>_input_<vid>_<pid>_v3.map, or the core's default "jn" mapping when
-// there is none). Started from a menu entry with a set name (an MGL), Main
-// names the mapping after that (<set>_input_...): MH_MappingName().
+// there is none). A controller without a menu mapping gets the buttons its
+// own console confirms and goes back with (convention_codes()). Started from
+// a menu entry with a set name (an MGL), Main names the mapping after that
+// (<set>_input_...): MH_MappingName(). Up to host version 13 the OSD had
+// options for other buttons (status bits 16..23); they are gone.
 
 #include "mister_hybrid.h"
 
@@ -69,18 +72,32 @@ static void load_core_default(void) {
     core_default_loaded = 1;
 }
 
-// Linux gamepad codes of A, B, X, Y, L, R, Select, Start (MiSTer's names are
-// SNES positions: A east, B south, X north, Y west), used when a controller
-// has no menu mapping file
-static const uint16_t standard_codes[NUM_NAMED] = { 0x131, 0x130, 0x133, 0x134, 0x136, 0x137, 0x13a, 0x13b };
-
 #define MAX_DEVICES 8
 
 typedef struct {
     unsigned vid, pid;
+    int virt; // made by a program (Zaparoo, a launcher), not plugged in
 } tDevice;
 
-static int last_ok = -1, last_back = -1;
+// Linux gamepad codes of A, B, X, Y, L, R, Select, Start (MiSTer's names are
+// SNES positions: A east, B south, X north, Y west), used when a controller
+// has no menu mapping file
+static const uint16_t standard_codes[NUM_NAMED] = { 0x131, 0x130, 0x133, 0x134, 0x136, 0x137, 0x13a, 0x13b };
+#define CODE_SOUTH 0x130
+#define CODE_EAST 0x131
+#define VENDOR_NINTENDO 0x057e
+
+// Menu OK / Menu Back (SYS_BTN_MENU_FUNC: OK low, Back high) of a controller
+// without a menu mapping, after its console: on Nintendo's the right button
+// (A) confirms and the bottom one (B) goes back, as in the MiSTer menu; on
+// every other (PlayStation, Xbox and most others) the bottom one (Cross, A)
+// confirms and the right one (Circle, B) goes back. Linux names the buttons
+// by place (BTN_SOUTH is the bottom one), whatever is printed on them. 8BitDo
+// pads in their Switch mode are Nintendo's here.
+static uint32_t convention_codes(const tDevice* dev) {
+    return dev->vid == VENDOR_NINTENDO ? CODE_EAST | CODE_SOUTH << 16 : CODE_SOUTH | CODE_EAST << 16;
+}
+
 static time_t last_scan;
 static uint32_t ok_result, back_result;
 
@@ -137,6 +154,7 @@ static int list_joysticks(tDevice* devices, int max) {
     FILE* f = fopen("/proc/bus/input/devices", "r");
     char line[512];
     unsigned vid = 0, pid = 0;
+    int virt = 0;
     int count = 0;
     int i, dup;
 
@@ -149,14 +167,19 @@ static int list_joysticks(tDevice* devices, int max) {
             char* p = strstr(line, "Product=");
             vid = v ? (unsigned)strtoul(v + 7, NULL, 16) : 0;
             pid = p ? (unsigned)strtoul(p + 8, NULL, 16) : 0;
+            virt = 0;
+        } else if (strncmp(line, "S: Sysfs=/devices/virtual/", 26) == 0) {
+            virt = 1;
         } else if (strncmp(line, "H:", 2) == 0 && (strstr(line, "=js") != NULL || strstr(line, " js") != NULL) && count < max) {
             dup = 0;
             for (i = 0; i < count; i++) {
                 dup |= devices[i].vid == vid && devices[i].pid == pid;
             }
             if (!dup) {
+                memset(&devices[count], 0, sizeof(devices[count]));
                 devices[count].vid = vid;
                 devices[count].pid = pid;
+                devices[count].virt = virt;
                 count++;
             }
         }
@@ -233,14 +256,10 @@ static uint32_t core_bits_for_code(const uint32_t core[MAP_ENTRIES], uint32_t co
     return bits;
 }
 
-static uint32_t selected_code(const uint32_t menu[MAP_ENTRIES], int select, int back) {
-    uint32_t func;
+// The menu's OK or Back button, A or B when not set (as Main_MiSTer does)
+static uint32_t menu_code(const uint32_t menu[MAP_ENTRIES], int back) {
+    uint32_t func = back ? menu[SYS_BTN_MENU_FUNC] >> 16 : menu[SYS_BTN_MENU_FUNC] & 0xFFFF;
 
-    if (select > 0 && select <= NUM_NAMED) {
-        return menu[SYS_BTN_A + select - 1] & 0xFFFF;
-    }
-    // MiSTer: the menu's OK/Back buttons, A/B when not set (as Main_MiSTer does)
-    func = back ? menu[SYS_BTN_MENU_FUNC] >> 16 : menu[SYS_BTN_MENU_FUNC] & 0xFFFF;
     return func ? func : menu[back ? SYS_BTN_B : SYS_BTN_A] & 0xFFFF;
 }
 
@@ -248,8 +267,9 @@ static uint32_t selected_code(const uint32_t menu[MAP_ENTRIES], int select, int 
 // use): for MH_MenuButtonsPressed(), which also reads them from Linux
 static uint32_t ok_code, back_code;
 int mh_pad_key_down(uint32_t code); // mister_triggers.c
+int mh_osd_hold(int* held, int pressed); // mister_hybrid.c
 
-static void resolve(int ok_select, int back_select, int selection_changed) {
+static void resolve(void) {
     tDevice devices[MAX_DEVICES];
     uint32_t menu[MAX_DEVICES][MAP_ENTRIES];
     uint32_t core[MAX_DEVICES][MAP_ENTRIES];
@@ -262,7 +282,7 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
         load_core_default();
     }
     count = list_joysticks(devices, MAX_DEVICES);
-    if (!selection_changed && !inputs_changed(devices, count)) {
+    if (!inputs_changed(devices, count)) {
         return;
     }
     memset(seen_devices, 0, sizeof(seen_devices));
@@ -285,6 +305,7 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
             for (k = 0; k < NUM_NAMED; k++) {
                 menu[i][SYS_BTN_A + k] = standard_codes[k];
             }
+            menu[i][SYS_BTN_MENU_FUNC] = convention_codes(&devices[i]);
         }
         if (!has_core) {
             // what Main_MiSTer derives from the core's default ("jn") mapping
@@ -296,8 +317,11 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
             }
         }
         // Controllers set up for this core or the menu are the ones in use,
-        // not e.g. virtual joysticks of other tools
-        score[i] = has_core * 2 + has_menu;
+        // and of those, or of none set up, the ones plugged in, not the
+        // virtual joysticks of other tools (Zaparoo has a gamepad's buttons):
+        // without a mapping each has its own buttons (convention_codes()), and
+        // those of all the controllers taken are put together
+        score[i] = has_core * 4 + has_menu * 2 + !devices[i].virt;
         if (score[i] > best) {
             best = score[i];
         }
@@ -305,52 +329,46 @@ static void resolve(int ok_select, int back_select, int selection_changed) {
     if (count == 0) {
         // No controller to look up (keyboard as joystick, a device that is not
         // listed): assume the default mapping, OK on A and Back on B
-        int ok = ok_select > 0 && ok_select <= NUM_NAMED ? ok_select - 1 : 0;
-        int back = back_select > 0 && back_select <= NUM_NAMED ? back_select - 1 : 1;
         for (k = CORE_FIRST; k <= CORE_LAST; k++) {
-            ok_result |= core_default[k - CORE_FIRST] == ok ? 1u << k : 0;
-            back_result |= core_default[k - CORE_FIRST] == back ? 1u << k : 0;
+            ok_result |= core_default[k - CORE_FIRST] == 0 ? 1u << k : 0;
+            back_result |= core_default[k - CORE_FIRST] == 1 ? 1u << k : 0;
         }
     }
     for (i = 0; i < count; i++) {
         if (score[i] == best) {
-            ok_result |= core_bits_for_code(core[i], selected_code(menu[i], ok_select, 0));
-            back_result |= core_bits_for_code(core[i], selected_code(menu[i], back_select, 1));
+            ok_result |= core_bits_for_code(core[i], menu_code(menu[i], 0));
+            back_result |= core_bits_for_code(core[i], menu_code(menu[i], 1));
             if (ok_code == 0) {
-                ok_code = selected_code(menu[i], ok_select, 0);
-                back_code = selected_code(menu[i], back_select, 1);
+                ok_code = menu_code(menu[i], 0);
+                back_code = menu_code(menu[i], 1);
+                printf("mister: menu buttons of %04x:%04x%s: OK 0x%x, Back 0x%x\n", devices[i].vid, devices[i].pid,
+                    score[i] & 2 ? "" : " (no mapping)", ok_code, back_code);
             }
         }
     }
 }
 
 void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits) {
-    int ok_select = MH_OSD_MENU_OK(osd_status);
-    int back_select = MH_OSD_MENU_BACK(osd_status);
     time_t now = time(NULL);
 
-    if (ok_select != last_ok || back_select != last_back || now - last_scan >= RESCAN_SECONDS) {
-        int selection_changed = ok_select != last_ok || back_select != last_back;
-
-        if (selection_changed) {
-            printf("mister: menu buttons OK %d, Back %d\n", ok_select, back_select);
-        }
-        last_ok = ok_select;
-        last_back = back_select;
+    (void)osd_status;
+    if (seen_count < 0 || now - last_scan >= RESCAN_SECONDS) {
         last_scan = now;
-        resolve(ok_select, back_select, selection_changed);
+        resolve();
     }
     *ok_bits = ok_result;
     *back_bits = back_result;
 }
 
 void MH_MenuButtonsPressed(uint64_t osd_status, uint32_t joystick, int* ok, int* back) {
+    static int ok_held, back_held;
     uint32_t ok_bits, back_bits;
 
     MH_MenuButtons(osd_status, &ok_bits, &back_bits);
     // through a core button the player gave the physical one, or the physical
     // button itself: one without a function in this core is passed to no
-    // core button at all
-    *ok = (joystick & ok_bits) != 0 || mh_pad_key_down(ok_code);
-    *back = (joystick & back_bits) != 0 || mh_pad_key_down(back_code);
+    // core button at all. Main_MiSTer holds back the core's buttons while its
+    // OSD is open, Linux does not: mh_osd_hold().
+    *ok = mh_osd_hold(&ok_held, (joystick & ok_bits) != 0 || mh_pad_key_down(ok_code));
+    *back = mh_osd_hold(&back_held, (joystick & back_bits) != 0 || mh_pad_key_down(back_code));
 }

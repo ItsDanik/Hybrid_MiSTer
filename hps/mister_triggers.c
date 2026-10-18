@@ -414,7 +414,13 @@ int mh_pad_key_down(uint32_t code) {
     return down;
 }
 
+int mh_osd_hold(int* held, int pressed); // mister_hybrid.c
+
+// How far a trigger is still let go, of 255
+#define TRIGGER_REST 16
+
 int MH_ReadStickButtons(int* left, int* right) {
+    static int left_held, right_held;
     const char* fixed = getenv("MISTER_HYBRID_STICKBUTTONS"); // "left,right": for tests without a controller
     unsigned long keys[KEY_MAX / (8 * sizeof(long)) + 1];
     int found = 0;
@@ -446,10 +452,14 @@ int MH_ReadStickButtons(int* left, int* right) {
         *left |= has_bit(keys, BTN_THUMBL);
         *right |= has_bit(keys, BTN_THUMBR);
     }
+    // Linux knows nothing of Main_MiSTer's OSD: nothing while it is open
+    *left = mh_osd_hold(&left_held, *left);
+    *right = mh_osd_hold(&right_held, *right);
     return found;
 }
 
 int MH_ReadTriggers(int* left, int* right) {
+    static int left_held, right_held;
     const char* fixed = getenv("MISTER_HYBRID_TRIGGERS"); // "left,right": for tests without a controller
     int l = 0, r = 0, found = 0, wheel = 0;
     int i;
@@ -509,7 +519,9 @@ int MH_ReadTriggers(int* left, int* right) {
         }
         found = 1;
     }
-    *left = l;
-    *right = r;
+    // nothing while the OSD is open (Linux knows nothing of it), nor once it
+    // has closed until the trigger is let go
+    *left = mh_osd_hold(&left_held, l > TRIGGER_REST) ? l : 0;
+    *right = mh_osd_hold(&right_held, r > TRIGGER_REST) ? r : 0;
     return found;
 }

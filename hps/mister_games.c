@@ -58,7 +58,10 @@ const char* MH_GamePath(void) {
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         snprintf(path, sizeof(path), "the game's folder");
     } else {
-        snprintf(path, sizeof(path), "%s", strncmp(cwd, "/media/fat/", 11) == 0 ? cwd + 11 : cwd);
+        // from where the game runs: games/dnk/<Engine> on the SD card,
+        // usb0/games/dnk/<Engine> on a USB drive
+        snprintf(path, sizeof(path), "%s",
+            strncmp(cwd, "/media/fat/", 11) == 0 ? cwd + 11 : strncmp(cwd, "/media/", 7) == 0 ? cwd + 7 : cwd);
     }
     return path;
 }

@@ -82,7 +82,7 @@
 # under the terms of the GNU General Public License as published by the Free
 # Software Foundation, version 3 of the License.
 
-VERSION=5
+VERSION=6
 SELF=$(readlink -f "$0")
 # DANIK_HYBRID_ROOT and DANIK_HYBRID_TMP: another SD card and /tmp, for testing
 ROOT=${DANIK_HYBRID_ROOT:-/media/fat}
@@ -683,6 +683,9 @@ download() {
         fi
         printf '  %-24s%s\n' "games/dnk/$engine/" "${titles:-$engine}"
     done
+    # the ports look for that folder on a USB drive first (launch scripts of
+    # host version 14)
+    [ -n "$said" ] && echo "on the SD card, or the same folders on a USB drive."
     return $code
 }
 

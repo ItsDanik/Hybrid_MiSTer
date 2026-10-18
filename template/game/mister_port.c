@@ -79,7 +79,7 @@ static int PickedFromList = 0;
 // game's folder, MH_GamePath())
 // GAME: the message when no game's files are there: name them (by name or
 // pattern) and where they go, %s (hybrid/CLAUDE.md, "missing game files")
-#define NO_GAME "No game data found. Copy TODO (the files, by name) to %s/ on the SD card."
+#define NO_GAME "No game data found. Copy TODO (the files, by name) to %s/."
 
 int MiSTer_PickGame(const struct mh_game *games, int count)
 {

@@ -79,9 +79,8 @@ extern "C" {
 // option is 0 and so is the default.
 #define MH_OSD_SOUND_VOLUME(s) ((int)(((s) >> 7) & 0xF))  // 0 = 100%, 10 = 0%
 #define MH_OSD_MUSIC_VOLUME(s) ((int)(((s) >> 11) & 0xF)) // 0 = 100%, 10 = 0%
-// 0 = the MiSTer menu's OK/Back buttons, 1.. = A, B, X, Y, L, R, Select, Start
-#define MH_OSD_MENU_OK(s) ((int)(((s) >> 16) & 0xF))
-#define MH_OSD_MENU_BACK(s) ((int)(((s) >> 20) & 0xF))
+// Bits 16..23 were the options Menu OK / Menu Back up to host version 13:
+// unused (a saved setting may still have them set)
 // "O[15],FPS Counter,Off,On;": the library draws the number of frames shown in
 // the last second in the top left corner of every frame, the game does nothing
 #define MH_OSD_FPS(s) ((int)(((s) >> 15) & 1))
@@ -190,8 +189,16 @@ int MH_Interlaced(void);
 // its CONF_STR): for options the game cannot honour with the data it has
 void MH_SetMenuMask(int mask);
 
-// Input
+// Input. While the OSD menu is open the game gets none: Main_MiSTer passes
+// the core no buttons and keys then, and the library holds back the rest
+// (sticks, mouse, and what it reads from Linux: triggers, stick clicks, the
+// physical Menu OK / Back). What is held when the OSD closes (the button that
+// closed it) stays released until it is let go.
 void MH_ReadInput(mh_input* input);
+// 1 while the OSD menu is open (host version 14; always 0 with an older core),
+// not for its info boxes (volume, a controller connected). For a game that
+// wants to pause meanwhile; nothing else needs it.
+int MH_OSDOpen(void);
 uint64_t MH_OSDStatus(void);
 // OSD triggers: lines "T[56],<label>;" .. "T[59],<label>;" of the core's
 // CONF_STR, which do something once each time the player selects them (a
@@ -214,10 +221,15 @@ uint64_t MH_OSDStatusHigh(void);
 #define MH_HUD_DEFAULT 10
 #define MH_HUD_MAX 24
 void MH_HudMargins(int* top, int* bottom);
-// Core buttons (MH_JOY_BUTTON bits) driven by the physical buttons the OSD's
-// Menu OK / Menu Back options name. MiSTer cannot map one physical button to
-// two core buttons, so this is how a button with a game function can also
-// confirm and cancel in menus. Cheap to call every frame.
+// Core buttons (MH_JOY_BUTTON bits) driven by the physical buttons of the
+// MiSTer menu's OK and Back: the controller's Menu OK / Menu Back of "Define
+// buttons", else its A / B; without a mapping the buttons its console
+// confirms and goes back with (Nintendo: A right, B bottom; PlayStation,
+// Xbox and the others: the bottom one confirms, the right one goes back).
+// MiSTer cannot map one physical button to two core buttons, so this is how a
+// button with a game function can also confirm and cancel in menus.
+// `osd_status` is not used any more (it held the options up to host version
+// 13). Cheap to call every frame.
 void MH_MenuButtons(uint64_t osd_status, uint32_t* ok_bits, uint32_t* back_bits);
 // Whether Menu OK / Menu Back are pressed now, `joystick` the core's buttons
 // of player 1: through the core buttons of MH_MenuButtons(), or the physical
@@ -321,8 +333,8 @@ typedef struct mh_game {
 // and did not find: never there, whatever is in the folder. (NULL is always
 // there: one it did find.)
 extern const char* const MH_NOT_THERE[];
-// The game's folder as the player sees it on the SD card ("games/dnk/ECWolf"):
-// the current one, for messages
+// The game's folder as the player sees it ("games/dnk/ECWolf" on the SD card,
+// "usb0/games/dnk/ECWolf" on a USB drive): the current one, for messages
 const char* MH_GamePath(void);
 // 1 if the game's files are in `dir` (NULL: the current folder)
 int MH_GameFound(const mh_game* game, const char* dir);
