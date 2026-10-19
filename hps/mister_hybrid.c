@@ -299,8 +299,25 @@ static void stop_present_thread(void) {
     staging_direct = -1;
 }
 
+// MH_Close() while the audio was on: done when the audio goes off
+static int close_pending = 0;
+
 void MH_Close(void) {
     stop_present_thread();
+    if (shm != NULL && audio_enabled) {
+        // The audio thread may be in MH_AudioWrite(), in the memory: it is
+        // unmapped once the audio is closed, MH_AudioEnable(0) (SDL closes
+        // the video before the audio; a game quitting after another core was
+        // loaded crashed in the audio thread, CrispyDoom 2026-10-19). The
+        // core's own picture comes back now.
+        if (!detached && corename_matches()) {
+            ctrl_enabled = 0;
+            write_ctrl();
+        }
+        close_pending = 1;
+        return;
+    }
+    close_pending = 0;
     if (shm != NULL) {
         if (!detached && corename_matches()) {
             // back to the core's own picture, audio off. Not once another
@@ -1192,6 +1209,14 @@ void MH_AudioEnable(int enabled) {
     volatile uint32_t* ring;
     int i;
 
+    if (!enabled && close_pending) {
+        // the audio thread is done: MH_Close() can unmap the memory
+        audio_enabled = 0;
+        fm_enabled = 0;
+        fm_wr = 0;
+        MH_Close();
+        return;
+    }
     if (!MH_IsOpen() || enabled == audio_enabled) {
         return;
     }
