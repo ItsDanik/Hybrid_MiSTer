@@ -169,8 +169,13 @@ static void tick(void) {
     }
     fm_on = fm_en;
     if (midi_out && !(midi_en && mt32 && !(status[35] & 1)) && midi_log) {
+        // the core tells the Pi to stop all its sound: logged as All Sound
+        // Off on every channel
+        int ch;
         fprintf(midi_log, "# off\n");
-        fflush(midi_log);
+        for (ch = 0; ch < 16; ch++) {
+            fprintf(midi_log, "%u %02x 78 00\n", audio_fetch, 0xb0 | ch);
+        }
     }
     midi_out = midi_en && mt32 && !(status[35] & 1);
     if (!ctrl_valid) {
