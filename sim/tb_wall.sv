@@ -94,6 +94,7 @@ hybrid_host #(.WALL(WALL), .WALL_PAL(WALL_PAL), .WALL_DOTS(WALL_DOTS), .WALL_EAS
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(VGA31 != 0), .crt_hsize(6'd0), .crt_hpos(4'd0), .crt_vpos(4'd0),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(),
+	.clk_audio(1'b0), .user_in(7'h7F), .user_out(), .mt32_on(), .info_req(), .info(),
 	.audio_l(), .audio_r()
 );
 
