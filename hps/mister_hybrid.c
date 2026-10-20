@@ -49,6 +49,7 @@
 // a message is shown; the core's own (host version 13)
 #define STATUS_MSG (1u << 20)
 #define STATUS_ALONE (1u << 21)
+#define STATUS_MT32 (1u << 23)
 
 static const struct {
     short width, height;
@@ -106,11 +107,19 @@ static struct timespec alive_time;
 static uint32_t audio_wr;
 
 // FM chip: ring of register writes at FM_RING_OFFSET, 64 bits each
-// {16'b0, reg, value, audio frame}
+// {16'b0, reg, value, audio frame}. Since host version 15 it also carries
+// MIDI messages for the MT32-pi: {6'b0, n, byte 2, byte 1, byte 0, audio
+// frame}, n = 1..3 bytes. It is read while the chip or MIDI is enabled.
 #define FM_RING_OFFSET 0x20000
 static int fm_enabled;
 static int fm_volume = 32;
 static uint32_t fm_wr;
+// the ring's writers: the audio thread and, with ahead 0, any other
+static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// MIDI (host version 15): to the MT32-pi on the user port
+static int midi_enabled;
+static int midi_volume = 32;
 
 static void write_ctrl(void) {
     // Palette/framebuffer writes must land before the FPGA can see the new control block
@@ -118,6 +127,8 @@ static void write_ctrl(void) {
     __sync_synchronize();
     ctrl[2] = palette_seq;
     ctrl[3] = fm_wr;
+    ctrl[4] = 0;
+    ctrl[5] = (uint32_t)midi_volume | ((uint32_t)(midi_enabled && audio_enabled) << 7);
     ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24)
         | ((uint32_t)fm_volume << 17) | ((uint32_t)(fm_enabled && audio_enabled) << 25) | ((uint32_t)menu_mask << 28);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
@@ -244,6 +255,7 @@ int MH_Open(void) {
     audio_enabled = 0;
     fm_enabled = 0;
     fm_wr = 0;
+    midi_enabled = 0;
     fb_mode = MH_MODE_320x200;
     // The core reloads the palette when its sequence number changes, and it
     // may know the number an earlier program ended with: count on from there
@@ -326,6 +338,7 @@ void MH_Close(void) {
             audio_enabled = 0;
             fm_enabled = 0;
             fm_wr = 0;
+            midi_enabled = 0;
             write_ctrl();
         }
         munmap((void*)shm, SHM_SIZE);
@@ -1214,6 +1227,7 @@ void MH_AudioEnable(int enabled) {
         audio_enabled = 0;
         fm_enabled = 0;
         fm_wr = 0;
+        midi_enabled = 0;
         MH_Close();
         return;
     }
@@ -1230,9 +1244,11 @@ void MH_AudioEnable(int enabled) {
         audio_wr = 0;
     }
     if (!enabled) {
-        // the chip goes with the audio
+        // the chip and MIDI go with the audio (the core tells the MT32-pi
+        // to stop its notes)
         fm_enabled = 0;
         fm_wr = 0;
+        midi_enabled = 0;
     }
     audio_enabled = enabled;
     write_ctrl();
@@ -1321,26 +1337,70 @@ void MH_FMVolume(int volume) {
     }
 }
 
-void MH_FMWrite(int reg, int value, int ahead) {
+// An entry into the FM ring, made at audio frame `ahead` of the next block;
+// 0 if the ring is full
+static int ring_put(int ahead, uint32_t entry) {
     volatile uint32_t* ring;
     uint32_t at;
 
-    if (!MH_IsOpen() || !fm_enabled || !audio_enabled) {
-        return;
-    }
-    // status[15]: the number of writes the core has read
+    pthread_mutex_lock(&ring_lock);
+    // status[15]: the number of entries the core has read
     if (fm_wr - status[15] >= MH_FM_RING_WRITES - 1) {
-        return;
+        pthread_mutex_unlock(&ring_lock);
+        return 0;
     }
     ring = (volatile uint32_t*)(shm + FM_RING_OFFSET);
     at = fm_wr % MH_FM_RING_WRITES;
     ring[at * 2] = audio_wr + (uint32_t)(ahead < 0 ? 0 : ahead);
-    ring[at * 2 + 1] = ((uint32_t)(reg & 0xff) << 8) | (uint32_t)(value & 0xff);
+    ring[at * 2 + 1] = entry;
     __sync_synchronize();
     // the core reads the count at its next vblank; a count is one word, so
     // this needs no lock against write_ctrl(), which writes the same number
     fm_wr++;
     ctrl[3] = fm_wr;
+    pthread_mutex_unlock(&ring_lock);
+    return 1;
+}
+
+// The ring is read while the chip or MIDI is enabled. The core starts its
+// read count from 0 only when it has seen both off, at a vblank.
+static int ring_on(void) {
+    return audio_enabled && (fm_enabled || midi_enabled);
+}
+
+// before the first of the two is enabled. If the ring was on a moment ago
+// (the audio was closed and opened again inside one field) the core has not
+// seen it off: wait for that, or it would take everything between its old
+// count and the new one for entries.
+static void ring_start(void) {
+    int i;
+
+    if (ring_on()) {
+        return;
+    }
+    fm_wr = 0;
+    write_ctrl();
+    for (i = 0; i < 100 && status[15] != 0; i++) {
+        sleep_ms(2);
+    }
+}
+
+// after one of the two was disabled
+static void ring_stop(void) {
+    write_ctrl();
+    if (ring_on()) {
+        return;
+    }
+    sleep_ms(40);
+    fm_wr = 0;
+    write_ctrl();
+}
+
+void MH_FMWrite(int reg, int value, int ahead) {
+    if (!MH_IsOpen() || !fm_enabled || !audio_enabled) {
+        return;
+    }
+    ring_put(ahead, ((uint32_t)(reg & 0xff) << 8) | (uint32_t)(value & 0xff));
 }
 
 void MH_FMEnable(int enabled) {
@@ -1351,25 +1411,12 @@ void MH_FMEnable(int enabled) {
         return;
     }
     if (!enabled) {
-        // the core holds the chip in reset and starts its read count from 0
-        // once it has seen this, at a vblank
+        // the core holds the chip in reset
         fm_enabled = 0;
-        write_ctrl();
-        sleep_ms(40);
-        fm_wr = 0;
-        write_ctrl();
+        ring_stop();
         return;
     }
-    // The core starts its read count from 0 only when it has seen the chip
-    // switched off, at a vblank. If it was on a moment ago (the audio was
-    // closed and opened again inside one field) it has not: wait for that,
-    // or it would take everything between its old count and the new one
-    // for writes.
-    fm_wr = 0;
-    write_ctrl();
-    for (reg = 0; reg < 100 && status[15] != 0; reg++) {
-        sleep_ms(2);
-    }
+    ring_start();
     fm_enabled = 1;
     write_ctrl();
     // The chip's reset does not reach the registers of its channels and
@@ -1377,6 +1424,114 @@ void MH_FMEnable(int enabled) {
     // 0x40..0x55 are the operators' levels, where 0x3F is silence.
     for (reg = 0x01; reg <= 0xF5; reg++) {
         MH_FMWrite(reg, reg >= 0x40 && reg <= 0x55 ? 0x3F : 0, 0);
+    }
+}
+
+int MH_MidiAvailable(void) {
+    return MH_IsOpen() && status[3] >= 15;
+}
+
+void MH_MidiEnable(int enabled) {
+    int i;
+
+    enabled = enabled != 0;
+    if (!MH_MidiAvailable() || !audio_enabled || enabled == midi_enabled) {
+        return;
+    }
+    if (!enabled) {
+        // the notes off, then the core tells the MT32-pi to stop all its
+        // notes as well when it sees MIDI off
+        MH_MidiReset(0);
+        for (i = 0; i < 50 && status[15] != fm_wr; i++) {
+            sleep_ms(2);
+        }
+        midi_enabled = 0;
+        ring_stop();
+        return;
+    }
+    ring_start();
+    midi_enabled = 1;
+    write_ctrl();
+}
+
+int MH_MidiWanted(void) {
+    static int was = -1;
+    int there, wanted;
+
+    if (!MH_MidiAvailable()) {
+        return 0;
+    }
+    there = (status[2] & STATUS_MT32) != 0;
+    // OSD status bit 96, "MT32-pi: Off" (status[35] holds bits 96..127)
+    wanted = there && !(status[35] & 1);
+    if (there * 2 + wanted != was) {
+        printf("mister: MT32-pi %s\n", !there ? "not connected" : wanted ? "connected, the music goes to it" : "connected, off in the OSD");
+        was = there * 2 + wanted;
+    }
+    return wanted && midi_enabled && audio_enabled;
+}
+
+int MH_MidiReady(void) {
+    return MH_MidiWanted();
+}
+
+void MH_MidiVolume(int volume) {
+    midi_volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
+    if (MH_IsOpen()) {
+        write_ctrl();
+    }
+}
+
+// n bytes of MIDI (1..3) in one entry of the ring
+static void midi_put(int ahead, const uint8_t* b, int n) {
+    ring_put(ahead, (uint32_t)b[0] | (n > 1 ? (uint32_t)b[1] << 8 : 0) | (n > 2 ? (uint32_t)b[2] << 16 : 0)
+        | ((uint32_t)n << 24));
+}
+
+void MH_MidiEvent(int ahead, int status_byte, int data1, int data2) {
+    uint8_t b[3];
+
+    if (!MH_IsOpen() || !midi_enabled || !audio_enabled || status_byte < 0x80 || status_byte >= 0xF0) {
+        return;
+    }
+    b[0] = (uint8_t)status_byte;
+    b[1] = (uint8_t)(data1 & 0x7f);
+    b[2] = (uint8_t)(data2 & 0x7f);
+    // program change and channel pressure have one data byte
+    midi_put(ahead, b, (status_byte & 0xe0) == 0xc0 ? 2 : 3);
+}
+
+void MH_MidiSysEx(int ahead, const uint8_t* data, int length) {
+    uint8_t b[3];
+    int i, n;
+
+    if (!MH_IsOpen() || !midi_enabled || !audio_enabled || length < 0) {
+        return;
+    }
+    b[0] = 0xf0;
+    n = 1;
+    for (i = 0; i <= length; i++) {
+        b[n++] = i < length ? (data[i] & 0x7f) : 0xf7;
+        if (n == 3 || i == length) {
+            midi_put(ahead, b, n);
+            n = 0;
+        }
+    }
+}
+
+void MH_MidiReset(int ahead) {
+    uint8_t b[3];
+    int ch;
+
+    for (ch = 0; ch < 16; ch++) {
+        b[0] = (uint8_t)(0xb0 | ch);
+        b[2] = 0;
+        b[1] = 120; // all sound off
+        MH_MidiEvent(ahead, b[0], b[1], b[2]);
+        b[1] = 123; // all notes off (an MT-32 knows only this one)
+        MH_MidiEvent(ahead, b[0], b[1], b[2]);
+        b[1] = 121; // reset all controllers
+        MH_MidiEvent(ahead, b[0], b[1], b[2]);
     }
 }
 

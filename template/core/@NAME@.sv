@@ -22,7 +22,6 @@ module emu
 ///////// Default values for ports not used in this core /////////
 
 assign ADC_BUS  = 'Z;
-assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
@@ -83,6 +82,14 @@ localparam CONF_STR = {
 	// followed by "-;". The first entry of an option is its default.
 	// Bits 16..23 were Menu OK / Menu Back up to host version 13: unused, a
 	// saved setting may still have them set.
+	// GAME: in a core whose games play MIDI music (MH_MidiWanted(),
+	// hybrid/README.md "MIDI and the MT32-pi"), the MT32-pi's lines, after
+	// the game's music option; a core without leaves them out, and the "I"
+	// line below. Shown only while an MT32-pi is connected (menu mask bit 6).
+	"h6O[96],MT32-pi,On,Off;",
+	"h6O[97],MT32-pi Synth,SoundFont,MT-32;",
+	"h6O[99:98],MT32-pi ROM,MT-32 v1,MT-32 v2,CM-32L;",
+	"h6O[102:100],MT32-pi SoundFont,0,1,2,3,4,5,6,7;",
 	// MiSTer's default map only knows the SNES-style pad. Main refuses to map a
 	// button twice, so Menu OK/Back here are for spare buttons without a game
 	// function and unmapped by default; menus also confirm and go back with
@@ -94,12 +101,21 @@ localparam CONF_STR = {
 	// (package/games/@NAME@/danik_hybrid_launch.sh).
 	"J1,Action 1,Action 2,Action 3,Action 4,Action 5,Action 6,Action 7,Menu,Menu OK,Menu Back;",
 	"jn,A,B,X,Y,L,R,Select,Start;",
+	// GAME: a core whose games play MIDI keeps this line, for the lines
+	// of the MT32-pi above; one without leaves both out. Main_MiSTer's info
+	// box shows text n when hybrid_host asks for it (`info`).
+	"I,MT32-pi: SoundFont 0,MT32-pi: SoundFont 1,MT32-pi: SoundFont 2,MT32-pi: SoundFont 3,",
+	"MT32-pi: SoundFont 4,MT32-pi: SoundFont 5,MT32-pi: SoundFont 6,MT32-pi: SoundFont 7,",
+	"MT32-pi: MT-32 v1,MT32-pi: MT-32 v2,MT32-pi: CM-32L,MT32-pi: unknown synth;",
 	"V,v",`BUILD_DATE
 };
 
 wire         forced_scandoubler;
 wire         direct_video;
 wire   [3:0] menumask;
+wire         mt32_on;
+wire         info_req;
+wire   [7:0] info;
 wire   [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
@@ -121,7 +137,10 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({10'd0, direct_video, forced_scandoubler, menumask}),
+	// bit 6: an MT32-pi is connected ("h6": its lines)
+	.status_menumask({9'd0, mt32_on, direct_video, forced_scandoubler, menumask}),
+	.info_req(info_req),
+	.info(info),
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -218,7 +237,15 @@ hybrid_host host
 	.menumask(menumask),
 
 	.audio_l(AUDIO_L),
-	.audio_r(AUDIO_R)
+	.audio_r(AUDIO_R),
+
+	// an MT32-pi on the user port (MIDI music, host version 15)
+	.clk_audio(CLK_AUDIO),
+	.user_in(USER_IN),
+	.user_out(USER_OUT),
+	.mt32_on(mt32_on),
+	.info_req(info_req),
+	.info(info)
 );
 
 assign DDRAM_CLK = clk_sys;

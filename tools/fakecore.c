@@ -9,6 +9,12 @@
 // (tools/nuked/, LGPL): the register writes the game queues are made at their
 // audio frames and the chip's sound is in audio.raw with the game's own.
 //
+// An MT32-pi (host version 15) is there with FAKECORE_MT32=1, and the OSD's
+// MT32-pi line (status bit 96, the script's osd2 line) not off: the game's
+// MIDI bytes are then "sent" at their audio frames, and with
+// FAKECORE_MIDILOG=<file> written there, "<audio frame> <bytes in hex>" a
+// line (tools/midilog2mid.py makes a MIDI file of it, to play on the PC).
+//
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
 // Script, one command per line (# starts a comment):
@@ -20,6 +26,7 @@
 //   joy2 <hex>, analog2 <x> <y> [rx ry]   the same of joystick 2
 //   mouse <dx> <dy> <btn>   move the mouse (y up) and set its buttons
 //   osd <hex>               OSD status bits
+//   osd2 <hex>              OSD status bits 96..127 (the MT32-pi's lines)
 //   osdopen <0|1>           the OSD menu closed / open (Main_MiSTer passes
 //                           the core no buttons and keys while it is: the
 //                           script's joy and key lines still do)
@@ -65,27 +72,44 @@ static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
 static opl3_chip fm_chip;
-static int fm_on;
+static int fm_on, midi_out, mt32;
 static uint32_t fm_fetch;
 static FILE* fm_log;
+static FILE* midi_log;
 
-// one audio frame of the FM chip, after the writes that are due at `frame`
-static int fm_frame(uint32_t frame, uint32_t wcount, int volume) {
-    int16_t out[2];
-    int v;
-
+// the entries of the FM ring that are due at `frame`: register writes for
+// the chip, MIDI bytes for the MT32-pi; skipped when that is off
+static void ring_frame(uint32_t frame, uint32_t wcount) {
     while (fm_fetch != wcount) {
         volatile uint32_t* e = (volatile uint32_t*)(shm + 0x20000 + (fm_fetch % 4096) * 8);
+        uint32_t n = (e[1] >> 24) & 3;
         if ((int32_t)(frame - e[0]) < 0) {
             break;
         }
-        OPL3_WriteReg(&fm_chip, (e[1] >> 8) & 0xff, e[1] & 0xff);
-        if (fm_log) {
-            // FAKECORE_FMLOG=<file>: every write, "<audio frame> <register> <value>"
-            fprintf(fm_log, "%u %u %u\n", frame, (e[1] >> 8) & 0xff, e[1] & 0xff);
+        if (n != 0 && midi_out && midi_log) {
+            uint32_t i;
+            fprintf(midi_log, "%u", frame);
+            for (i = 0; i < n; i++) {
+                fprintf(midi_log, " %02x", (e[1] >> (8 * i)) & 0xff);
+            }
+            fprintf(midi_log, "\n");
+        }
+        if (n == 0 && fm_on) {
+            OPL3_WriteReg(&fm_chip, (e[1] >> 8) & 0xff, e[1] & 0xff);
+            if (fm_log) {
+                // FAKECORE_FMLOG=<file>: every write, "<audio frame> <register> <value>"
+                fprintf(fm_log, "%u %u %u\n", frame, (e[1] >> 8) & 0xff, e[1] & 0xff);
+            }
         }
         fm_fetch++;
     }
+}
+
+// one audio frame of the FM chip
+static int fm_frame(int volume) {
+    int16_t out[2];
+    int v;
+
     OPL3_GenerateResampled(&fm_chip, out);
     v = out[0] * volume / 32;
     return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
@@ -93,8 +117,8 @@ static int fm_frame(uint32_t frame, uint32_t wcount, int volume) {
 
 static void tick(void) {
     static struct timespec next;
-    uint32_t c0, c1, c2, c3;
-    int audio_en, fm_en;
+    uint32_t c0, c1, c2, c3, c5;
+    int audio_en, fm_en, midi_en;
 
     if (next.tv_sec == 0) {
         clock_gettime(CLOCK_MONOTONIC, &next);
@@ -111,6 +135,7 @@ static void tick(void) {
     c1 = ctrl[1];
     c2 = ctrl[2];
     c3 = ctrl[3];
+    c5 = ctrl[5];
     ctrl_valid = c0 == CTRL_MAGIC;
     // a message (0x1800, host version 13): printed when it changes, as the
     // core would show it under its logo
@@ -135,13 +160,19 @@ static void tick(void) {
     }
     audio_en = ctrl_valid && ((c1 >> 24) & 1);
     fm_en = audio_en && ((c1 >> 25) & 1);
+    midi_en = audio_en && ((c5 >> 7) & 1);
     if (fm_en && !fm_on) {
         OPL3_Reset(&fm_chip, 44100);
     }
-    if (!fm_en) {
+    if (!fm_en && !midi_en) {
         fm_fetch = 0;
     }
     fm_on = fm_en;
+    if (midi_out && !(midi_en && mt32 && !(status[35] & 1)) && midi_log) {
+        fprintf(midi_log, "# off\n");
+        fflush(midi_log);
+    }
+    midi_out = midi_en && mt32 && !(status[35] & 1);
     if (!ctrl_valid) {
         // no game: the core's own picture, 640x480
         fb_mode = 4;
@@ -171,9 +202,15 @@ static void tick(void) {
             int16_t block[64];
             int i;
             memcpy(block, (void*)(shm + 0x10000 + (audio_fetch % 16384) * 4), sizeof(block));
-            for (i = 0; fm_on && i < 32; i++) {
-                int fm = fm_frame(audio_fetch + i, c3, (c1 >> 17) & 127);
-                int l = block[i * 2] + fm, r = block[i * 2 + 1] + fm;
+            for (i = 0; (fm_on || midi_en) && i < 32; i++) {
+                int fm, l, r;
+                ring_frame(audio_fetch + i, c3);
+                if (!fm_on) {
+                    continue;
+                }
+                fm = fm_frame((c1 >> 17) & 127);
+                l = block[i * 2] + fm;
+                r = block[i * 2 + 1] + fm;
                 block[i * 2] = l > 32767 ? 32767 : l < -32768 ? -32768 : l;
                 block[i * 2 + 1] = r > 32767 ? 32767 : r < -32768 ? -32768 : r;
             }
@@ -187,8 +224,9 @@ static void tick(void) {
     field++;
     // the game has the screen (bit 19) at once: nothing fades here
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
-        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22);
-    status[3] = 14;
+        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22)
+        | (mt32 << 23);
+    status[3] = 15;
     status[15] = fm_fetch;
     status[0] = STATUS_MAGIC;
     status[1] = field;
@@ -263,6 +301,11 @@ int main(int argc, char** argv) {
     if (getenv("FAKECORE_FMLOG")) {
         fm_log = fopen(getenv("FAKECORE_FMLOG"), "w");
     }
+    mt32 = getenv("FAKECORE_MT32") != NULL && atoi(getenv("FAKECORE_MT32")) != 0;
+    if (getenv("FAKECORE_MIDILOG")) {
+        midi_log = fopen(getenv("FAKECORE_MIDILOG"), "w");
+        setvbuf(midi_log, NULL, _IOLBF, 0);
+    }
 
     while (script != NULL && fgets(line, sizeof(line), script) != NULL) {
         char arg[200];
@@ -296,6 +339,8 @@ int main(int argc, char** argv) {
         } else if (sscanf(line, "hud %d %d", &a, &b) == 2) {
             // OSD status bits 64..95 are status[34]; entry n is (n + 10) % 25 pixels
             status[34] = (status[34] & ~(0x3ffu << 13)) | ((uint32_t)((a + 15) % 25) << 13) | ((uint32_t)((b + 15) % 25) << 18);
+        } else if (sscanf(line, "osd2 %llx", &osd) == 1) {
+            status[35] = (uint32_t)osd;
         } else if (sscanf(line, "osd %llx", &osd) == 1) {
             status[8] = (uint32_t)osd;
             status[9] = (uint32_t)(osd >> 32);

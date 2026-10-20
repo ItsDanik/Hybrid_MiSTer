@@ -296,6 +296,41 @@ void MH_FMVolume(int volume);
 // waiting (more than a second of the densest music), the write is dropped.
 void MH_FMWrite(int reg, int value, int ahead);
 
+// MIDI music, played outside the ARM (host version 15): for now on an
+// MT32-pi on the core's user port, a MIDI synthesizer on a Raspberry Pi
+// (github.com/dwhinham/mt32-pi: FluidSynth with SoundFonts, Munt for the
+// MT-32), which MiSTer players connect for ao486. The game sends MIDI
+// messages, each at its audio frame as MH_FMWrite()'s (they go through the
+// same ring); the core sends them to the Pi and mixes its sound in. Whether
+// the music goes there is the player's, in the framework's OSD lines of the
+// MT32-pi, shown only while one is connected (status bits 96..102; the
+// template's CONF_STR has them for a core whose games play MIDI). With an
+// older core MH_MidiAvailable() is 0 and the calls below do nothing; without
+// a Pi, or with it off in the OSD, MH_MidiWanted() is 0: the game plays its
+// FM music then.
+int MH_MidiAvailable(void);
+// Needs MH_AudioEnable(1) first. Disabling stops the notes; MH_AudioEnable(0)
+// does too. A game enables it once and asks MH_MidiWanted() for where its
+// music goes.
+void MH_MidiEnable(int enabled);
+// 1 while the game should play its MIDI music: MIDI is enabled, an MT32-pi
+// is connected and the OSD has it on. Ask it when a song starts, or every
+// frame to follow the OSD. Its changes are logged.
+int MH_MidiWanted(void);
+// 1 once notes sound: with the MT32-pi, as MH_MidiWanted()
+int MH_MidiReady(void);
+// 0..127: 32 is the MT32-pi's sound as it comes, 127 nearly four times that
+void MH_MidiVolume(int volume);
+// A MIDI message (status byte 0x80..0xEF, its data bytes; the second is not
+// sent for a program change or channel pressure), made at audio frame
+// `ahead` of the block the game will queue next, as MH_FMWrite(). Never
+// blocks; dropped when the ring is full.
+void MH_MidiEvent(int ahead, int status, int data1, int data2);
+// A system exclusive message, without its F0 and F7
+void MH_MidiSysEx(int ahead, const uint8_t* data, int length);
+// All sound and notes off, controllers reset, on all 16 channels
+void MH_MidiReset(int ahead);
+
 // Messages: shown by the core under its logo, on its own picture (the purple
 // screen), host version 13. MH_MSG_ROWS lines of MH_MSG_COLS characters
 // (32..126; others are shown as '?') is all there is room for: write

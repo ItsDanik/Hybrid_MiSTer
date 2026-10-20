@@ -21,8 +21,11 @@
 //  Two clocks: `clk` (50MHz) for the DDR3 side, audio and input, and
 //  `clk_vid` for the video output, made here by hybrid_vclk.sv.
 //
+//  An MT32-pi (an external MIDI synthesizer on a Raspberry Pi, through the
+//  user port, host version 15) is handled here as well: see "MT32-pi" below.
+//
 //  Shared memory layout (physical address 0x30000000 + offset):
-//    0x000000  control (HPS -> FPGA), 2 x 64-bit words
+//    0x000000  control (HPS -> FPGA), 3 x 64-bit words
 //              w0[31:0]  magic "MHYB" (0x4259484D)
 //              w0[39:32] framebuffer index to display (0..2)
 //              w0[40]    pixel format: 0 = 8bpp paletted, 1 = RGB565
@@ -34,13 +37,23 @@
 //              w0[56]    audio enable
 //              w0[57]    FM chip enable (the chip is in reset without it,
 //                        and without audio enable)
+//              w0[59:58] 0
 //              w0[63:60] OSD menu mask: bits a game sets to hide or grey out
 //                        lines of the core's CONF_STR (H/h/D/d 0..3)
 //              w1[31:0]  palette sequence number (reload when changed)
 //              w1[63:32] number of entries written to the FM ring so far
+//              w2 (host version 15; the core clears it when it starts, so a
+//              game built before, which never writes it, leaves it 0)
+//                  [31:0]  0
+//                  [38:32] MIDI volume: the MT32-pi's sound, 32 = as it
+//                          comes, 127 = four times
+//                  [39]    MIDI enable (with audio enable): MIDI messages of
+//                          the FM ring go to the MT32-pi, and its sound is
+//                          in the mix
+//                  [63:40] 0
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
-//              w1  {version, 9'b0, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
+//              w1  {version, 8'b0, mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
 //                   field, ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
 //                   lace: the mode is shown interlaced.
 //                   field: the field that was on the screen had the even
@@ -57,6 +70,8 @@
 //                   from Linux itself (triggers, stick clicks, the physical
 //                   Menu OK / Back) too. 0 for its info boxes (volume, a
 //                   controller connected).
+//                   bit 23: an MT32-pi answers on the user port (host
+//                   version 15).
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -101,6 +116,12 @@
 //              64 bits each: [31:0] the audio frame to make it at, counted
 //              as the audio fetch pointer counts, [39:32] value, [47:40]
 //              register. The chip's sound is added to the audio ring's.
+//              The ring also carries MIDI messages (host version 15): an
+//              entry with [57:56] = n, 1..3, is n bytes of MIDI for the
+//              MT32-pi, [39:32], [47:40] and [55:48] in that order, sent at
+//              its audio frame. A register write has [63:48] 0. Entries of a
+//              kind that is not enabled are skipped. The ring is read while
+//              audio is enabled with the FM chip or MIDI or both.
 //    0x100000  framebuffer 0 (row stride = width of the video mode in pixels;
 //              an interlaced mode has all its rows here, as a progressive one)
 //    0x200000  framebuffer 1
@@ -194,13 +215,24 @@ module hybrid_host
 
 	// audio, 44.1kHz signed
 	output reg [15:0] audio_l,
-	output reg [15:0] audio_r
+	output reg [15:0] audio_r,
+
+	// MT32-pi on the user port (MiSTer's sys/mt32pi.sv)
+	input             clk_audio,    // CLK_AUDIO of the framework
+	input       [6:0] user_in,
+	output      [6:0] user_out,
+	// an MT32-pi answers: its OSD lines are shown (a bit of status_menumask)
+	output            mt32_on,
+	// Main_MiSTer's info box (hps_io's info_req / info): text `info` of the
+	// CONF_STR's "I" line, the MT32-pi's synth when it has changed
+	output reg        info_req,
+	output reg  [7:0] info
 );
 
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd14;
+localparam [31:0] VERSION      = 32'd15;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -454,7 +486,7 @@ reg [31:0] pal_seq = 0;
 reg        pal_loaded = 0;
 reg [31:0] frame_cnt = 0;
 
-reg [63:0] ctrl_w0, ctrl_w1;
+reg [63:0] ctrl_w0, ctrl_w1, ctrl_w2;
 
 //////////////////////////////////////////////////////////////////
 // Memories
@@ -931,8 +963,9 @@ reg        aud_tick3 = 0;
 reg [31:0] aud_play = 0;      // frames played
 reg signed [15:0] pcm_l = 0, pcm_r = 0;
 wire signed [15:0] fm_snd;
-wire signed [16:0] mix_l = pcm_l + fm_snd;
-wire signed [16:0] mix_r = pcm_r + fm_snd;
+wire signed [18:0] mt32_snd_l, mt32_snd_r;
+wire signed [19:0] mix_l = pcm_l + fm_snd + mt32_snd_l;
+wire signed [19:0] mix_r = pcm_r + fm_snd + mt32_snd_r;
 
 wire [6:0] afifo_level = afifo_wr - afifo_rd;
 
@@ -969,12 +1002,12 @@ always @(posedge clk) begin
 		// on underrun the last sample is held
 	end
 
-	// the FM chip's sound on top (it is silent while not enabled), held at
-	// the limits
+	// the FM chip's sound and the MT32-pi's on top (silent while not
+	// enabled), held at the limits
 	aud_tick3 <= aud_tick2;
 	if (aud_tick3) begin
-		audio_l <= (mix_l[16] != mix_l[15]) ? {mix_l[16], {15{!mix_l[16]}}} : mix_l[15:0];
-		audio_r <= (mix_r[16] != mix_r[15]) ? {mix_r[16], {15{!mix_r[16]}}} : mix_r[15:0];
+		audio_l <= (mix_l > 20'sd32767) ? 16'sd32767 : (mix_l < -20'sd32768) ? -16'sd32768 : mix_l[15:0];
+		audio_r <= (mix_r > 20'sd32767) ? 16'sd32767 : (mix_r < -20'sd32768) ? -16'sd32768 : mix_r[15:0];
 	end
 
 	if (!audio_en) begin
@@ -988,7 +1021,8 @@ end
 //
 // The DDR engine below reads the FM ring one entry at a time into fm_ent,
 // whenever that is empty and the game has written more than was read; the
-// chip takes it when its audio frame is being played.
+// chip takes it when its audio frame is being played. An entry of MIDI bytes
+// goes to the MT32-pi instead (below).
 
 reg        fm_en = 0;
 reg  [6:0] fm_vol = 7'd64;
@@ -997,6 +1031,10 @@ reg [31:0] fm_fetch = 0;      // entries read
 reg [63:0] fm_ent = 0;
 reg        fm_ent_valid = 0;
 wire       fm_take;
+// the entry is MIDI bytes (their number), and its frame is being played
+wire [31:0] ent_late = aud_play - fm_ent[31:0];
+wire        ent_due  = !ent_late[31];
+wire        ent_midi = fm_ent[57:56] != 2'd0;
 
 hybrid_fm fm
 (
@@ -1004,13 +1042,168 @@ hybrid_fm fm
 	.en       (fm_en),
 	.volume   (fm_vol),
 	.frame    (aud_play),
-	.wr_valid (fm_ent_valid),
+	.wr_valid (fm_ent_valid && !ent_midi),
 	.wr_frame (fm_ent[31:0]),
 	.wr_reg   (fm_ent[47:40]),
 	.wr_data  (fm_ent[39:32]),
 	.wr_take  (fm_take),
 	.snd      (fm_snd)
 );
+
+//////////////////////////////////////////////////////////////////
+// MT32-pi
+//
+// An MT32-pi (github.com/dwhinham/mt32-pi, a MIDI synthesizer on a Raspberry
+// Pi: Munt for the Roland MT-32 and CM-32L, FluidSynth for SoundFonts) on
+// the user port, with MiSTer's own module for it, sys/mt32pi.sv, as ao486
+// has it: MIDI out on one pin, its sound back over I2S, and its settings
+// over I2C, which the Pi polls; it answers only when it is there
+// (mt32_available). The game's MIDI messages come through the FM ring and
+// are sent at their audio frame, at 31250 baud, from a queue of 1024 bytes.
+// What the Pi plays is the OSD's (status bits 96..102, the template's
+// CONF_STR): MT32-pi on / off, SoundFont or MT-32, the MT-32 ROM, the
+// SoundFont. Its sound is mixed in at the MIDI volume while the game has
+// MIDI enabled and the OSD has the Pi on. When either goes off it is told to
+// stop all its notes (mt32pi's reset: the "mute" request).
+
+reg        midi_en = 0;
+reg  [6:0] midi_vol = 7'd32;
+wire       ring_en = fm_en || midi_en;
+
+wire        mt32_available, mt32_newmode;
+wire  [7:0] mt32_mode, mt32_rom, mt32_sf;
+wire [15:0] mt32_i2s_l, mt32_i2s_r;
+reg   [2:0] mt32_avail_s = 0;
+assign      mt32_on = mt32_avail_s[2];
+wire        midi_want = midi_en && !osd_status[96];
+wire        midi_out  = midi_want && mt32_on;
+
+// the queue
+reg   [7:0] mq[0:1023];
+reg  [10:0] mq_wr = 0, mq_rd = 0;
+wire [10:0] mq_level = mq_wr - mq_rd;
+reg   [7:0] mq_q;
+reg         mq_put = 0;       // the DDR engine hands over fm_ent's bytes
+reg   [1:0] mq_left = 0;
+reg  [23:0] mq_bytes;
+reg   [1:0] mq_seen = 0;      // a byte is there, as the queue's output has it
+
+always @(posedge clk) begin
+	mq_q <= mq[mq_rd[9:0]];
+	if (mq_put) begin
+		mq_bytes <= fm_ent[55:32];
+		mq_left  <= fm_ent[57:56];
+	end
+	else if (mq_left != 0) begin
+		mq[mq_wr[9:0]] <= mq_bytes[7:0];
+		mq_wr    <= mq_wr + 1'd1;
+		mq_bytes <= mq_bytes >> 8;
+		mq_left  <= mq_left - 1'd1;
+	end
+end
+
+// the UART: 8N1, 1600 clocks of 50MHz a bit
+reg   [9:0] tx_sh = 10'h3FF;
+reg   [3:0] tx_bits = 0;
+reg  [10:0] tx_cnt = 0;
+always @(posedge clk) begin
+	mq_seen <= {mq_seen[0], mq_level != 0};
+	if (tx_bits != 0) begin
+		if (tx_cnt == 11'd1599) begin
+			tx_cnt  <= 0;
+			tx_sh   <= {1'b1, tx_sh[9:1]};
+			tx_bits <= tx_bits - 1'd1;
+		end
+		else tx_cnt <= tx_cnt + 1'd1;
+	end
+	else if (mq_seen[1] && midi_out) begin
+		tx_sh   <= {1'b1, mq_q, 1'b0};
+		tx_bits <= 4'd10;
+		tx_cnt  <= 0;
+		mq_rd   <= mq_rd + 1'd1;
+	end
+	// nobody to send them to: what is queued goes
+	if (!midi_out) mq_rd <= mq_wr;
+end
+
+// mute: when the game's MIDI or the OSD's MT32-pi goes off, and at a reset,
+// long enough for the Pi's clock
+reg        midi_want_d = 0;
+reg  [4:0] mute_t = 0;
+always @(posedge clk) begin
+	midi_want_d <= midi_want;
+	if (midi_want_d && !midi_want) mute_t <= 5'd31;
+	else if (mute_t != 0) mute_t <= mute_t - 1'd1;
+end
+
+mt32pi mt32pi
+(
+	.CLK_AUDIO      (clk_audio),
+	// no picture of its display here
+	.CLK_VIDEO      (clk_vid),
+	.CE_PIXEL       (1'b0),
+	.VGA_VS         (1'b0),
+	.VGA_DE         (1'b0),
+	.USER_IN        (user_in),
+	.USER_OUT       (user_out),
+	.reset          (reset || mute_t != 0),
+	.midi_tx        (tx_sh[0]),
+	.midi_rx        (),
+	.mt32_i2s_r     (mt32_i2s_r),
+	.mt32_i2s_l     (mt32_i2s_l),
+	.mt32_available (mt32_available),
+	// the OSD: SoundFont (its first value) or MT-32, ROM, SoundFont
+	.mt32_mode_req  (!osd_status[97]),
+	.mt32_rom_req   (osd_status[99:98]),
+	.mt32_sf_req    ({5'd0, osd_status[102:100]}),
+	.mt32_mode      (mt32_mode),
+	.mt32_rom       (mt32_rom),
+	.mt32_sf        (mt32_sf),
+	.mt32_newmode   (mt32_newmode),
+	.mt32_lcd_en    (),
+	.mt32_lcd_pix   (),
+	.mt32_lcd_update()
+);
+
+// From the Pi's clock: its sound taken when it was the same twice, the
+// settings it reports a few clocks after it says they changed
+reg  [15:0] i2s_l1, i2s_r1, i2s_l2, i2s_r2;
+reg  signed [15:0] mt32_l = 0, mt32_r = 0;
+reg   [3:0] newmode_s = 0;
+reg  [23:0] synth = 24'hFFFFFF;  // {mode, ROM, SoundFont} the Pi reported
+reg  [23:0] shown = 24'hFFFFFF;  // the one last named in the info box
+wire  [7:0] info_n = (synth[23:16] == 8'hA2) ? 8'd1 + synth[2:0]
+                   : (synth[23:16] == 8'hA1 && synth[15:8] <= 8'd2) ? 8'd9 + synth[15:8] : 8'd12;
+always @(posedge clk) begin
+	mt32_avail_s <= {mt32_avail_s[1:0], mt32_available};
+	i2s_l1 <= mt32_i2s_l;
+	i2s_r1 <= mt32_i2s_r;
+	i2s_l2 <= i2s_l1;
+	i2s_r2 <= i2s_r1;
+	if (i2s_l1 == i2s_l2) mt32_l <= i2s_l2;
+	if (i2s_r1 == i2s_r2) mt32_r <= i2s_r2;
+
+	// "MT32-pi: SoundFont 3" in the info box while the music goes to the Pi:
+	// when it starts to, and when the Pi reports another synth (it reports
+	// the same one again after a mute). A core whose game plays no MIDI has
+	// none, nor the CONF_STR's "I" line. hps_io takes `info` at the rising
+	// edge of info_req.
+	newmode_s <= {newmode_s[2:0], mt32_newmode};
+	if (newmode_s[3] != newmode_s[2]) synth <= {mt32_mode, mt32_rom, mt32_sf};
+	info_req <= 0;
+	if (!midi_out) shown <= 24'hFFFFFF;
+	else if (synth != 24'hFFFFFF && synth != shown && !info_req) begin
+		shown    <= synth;
+		info     <= info_n;
+		info_req <= 1;
+	end
+end
+
+// at the MIDI volume, 32 as it comes
+wire signed [23:0] mt32_l_v = mt32_l * $signed({1'b0, midi_vol});
+wire signed [23:0] mt32_r_v = mt32_r * $signed({1'b0, midi_vol});
+assign mt32_snd_l = midi_out ? mt32_l_v[23:5] : 19'sd0;
+assign mt32_snd_r = midi_out ? mt32_r_v[23:5] : 19'sd0;
 
 //////////////////////////////////////////////////////////////////
 // Input state
@@ -1097,7 +1290,7 @@ reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 9'd0, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 8'd0, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:0]};
@@ -1115,6 +1308,19 @@ always @(posedge clk) begin
 	afifo_we <= 0;
 	fade_start <= 0;
 	if (fm_take) fm_ent_valid <= 0;
+	// an entry nobody takes is skipped; MIDI bytes go into the MT32-pi's
+	// queue at their frame, when there is room for three
+	mq_put <= 0;
+	if (fm_ent_valid && !fm_take && !mq_put) begin
+		if (ent_midi) begin
+			if (!midi_out) fm_ent_valid <= 0;
+			else if (ent_due && mq_left == 0 && mq_level <= 11'd1021) begin
+				mq_put       <= 1;
+				fm_ent_valid <= 0;
+			end
+		end
+		else if (!fm_en) fm_ent_valid <= 0;
+	end
 
 	// requests from the video timing; what comes with them was set before
 	// the request and stays until the next one
@@ -1137,7 +1343,7 @@ always @(posedge clk) begin
 	if (ddr_dout_ready) begin
 		rd_cnt <= rd_cnt + 1'd1;
 		case (state)
-			S_CTRL_WAIT: if (rd_cnt == 0) ctrl_w0 <= ddr_dout; else ctrl_w1 <= ddr_dout;
+			S_CTRL_WAIT: if (rd_cnt == 0) ctrl_w0 <= ddr_dout; else if (rd_cnt == 1) ctrl_w1 <= ddr_dout; else ctrl_w2 <= ddr_dout;
 			S_MSG_HDR:   msg_hdr <= ddr_dout;
 			S_MSG_BODY: begin
 				msg_we    <= 1;
@@ -1191,7 +1397,7 @@ always @(posedge clk) begin
 					ddr_rd       <= 1;
 					state        <= S_AUD_WAIT;
 				end
-				else if (fm_en && !fm_ent_valid && !fm_take && fm_fetch != fm_wcount) begin
+				else if (ring_en && !fm_ent_valid && !fm_take && !mq_put && fm_fetch != fm_wcount) begin
 					rd_cnt       <= 0;
 					rd_len       <= 8'd1;
 					ddr_addr     <= FM_ADDR + {17'd0, fm_fetch[11:0]};
@@ -1206,9 +1412,9 @@ always @(posedge clk) begin
 				else if (vbl_req) begin
 					vbl_req      <= 0;
 					rd_cnt       <= 0;
-					rd_len       <= 8'd2;
+					rd_len       <= 8'd3;
 					ddr_addr     <= CTRL_ADDR;
-					ddr_burstcnt <= 8'd2;
+					ddr_burstcnt <= 8'd3;
 					ddr_rd       <= 1;
 					state        <= S_CTRL_WAIT;
 				end
@@ -1239,12 +1445,15 @@ always @(posedge clk) begin
 				end
 
 			S_CLEAR:
-				// single beat write, then the status as in every vblank
+				// the control block's 3 words, then the status as in every vblank
 				if (!ddr_we) begin
 					ddr_we       <= 1;
 					ddr_addr     <= CTRL_ADDR;
-					ddr_burstcnt <= 8'd1;
+					ddr_burstcnt <= 8'd3;
 					ddr_din      <= 64'd0;
+					wr_beat      <= 1;
+				end else if (wr_beat != 3) begin
+					wr_beat <= wr_beat + 1'd1;
 				end else begin
 					ddr_we     <= 0;
 					ctrl_clear <= ctrl_clear - 1'd1;
@@ -1318,6 +1527,8 @@ always @(posedge clk) begin
 				audio_en <= ctrl_magic && ctrl_w0[56];
 				fm_en    <= ctrl_magic && ctrl_w0[56] && ctrl_w0[57];
 				fm_vol   <= ctrl_w0[55:49];
+				midi_en  <= ctrl_magic && ctrl_w0[56] && ctrl_w2[39];
+				midi_vol <= ctrl_w2[38:32];
 				fm_wcount <= ctrl_w1[63:32];
 				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
 				game_on  <= game_take;
@@ -1450,10 +1661,11 @@ always @(posedge clk) begin
 		pal_loaded <= 0;
 		audio_en   <= 0;
 		fm_en      <= 0;
+		midi_en    <= 0;
 		menumask   <= 0;
 	end
 	if (!audio_en) aud_fetch <= 0;
-	if (!fm_en) begin
+	if (!ring_en) begin
 		fm_fetch     <= 0;
 		fm_ent_valid <= 0;
 	end
