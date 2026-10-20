@@ -320,6 +320,84 @@ endfunction
 // The intro: the fields of black it still has to wait, then 242 fields to
 // its end, counted; then the picture as it stays, all of it checked but the
 // dots, at the full level.
+// The MT32-pi. Before it answers: not there, and MIDI goes nowhere. Then
+// it writes its synth over I2C (SoundFont 3): there. The info box names
+// it once MIDI is enabled, once. MIDI messages in the FM ring between FM writes: the
+// bytes come out of the UART in order, the last message not before its
+// frame, the FM writes made. Its I2S sound is in the mix at the MIDI
+// volume, and not with the OSD's MT32-pi off, when nothing is sent.
+task test_mt32;
+	integer f0, n, aud_errors0;
+	aud_errors0 = aud_errors;
+	if (mt32_on || mem[9][23]) begin $display("FAIL: an MT32-pi before one answered"); errors = errors + 1; end
+	pi_write(8'hA2, 8'h00, 8'h03);
+	wait_fields(1);
+	// the status block is written a little after the field starts
+	repeat (5000) @(posedge clk);
+	$display("mt32: there %0d, status bit %0d, info boxes %0d", mt32_on, mem[9][23], info_reqs);
+	if (!mt32_on || !mem[9][23]) begin $display("FAIL: MT32-pi not seen"); errors = errors + 1; end
+	if (info_reqs != 0) begin $display("FAIL: MT32-pi info box without MIDI"); errors = errors + 1; end
+	cur_midi = 1;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(2);
+	pi_write(8'hA2, 8'h00, 8'h03);
+	wait_fields(1);
+	$display("mt32: MIDI on, info boxes %0d, last %0d", info_reqs, info_last);
+	if (info_reqs != 1 || info_last != 4) begin $display("FAIL: MT32-pi info box"); errors = errors + 1; end
+
+	f0 = dut.aud_play;
+	mem[29'h4000] = {6'd0, 2'd3, 8'h40, 8'h3C, 8'h90, 32'd0};          // note on
+	mem[29'h4001] = {16'd0, 8'hA0, 8'h55, 32'd0};                      // an FM write
+	mem[29'h4002] = {6'd0, 2'd2, 8'h00, 8'h05, 8'hC1, 32'd0};          // program change
+	mem[29'h4003] = {6'd0, 2'd1, 8'h00, 8'h00, 8'hF0, 32'd0};          // one byte
+	mem[29'h4004] = {6'd0, 2'd3, 8'h00, 8'h3C, 8'h80, f0[31:0] + 32'd8000}; // note off, later
+	cur_fmw = 5; cur_fm = 1; cur_midi = 1;
+	rx_n = 0;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(4);
+	$display("mt32: %0d bytes sent, FM writes %0d", rx_n, fm_takes);
+	if (rx_n != 6 || rx[0] != 8'h90 || rx[1] != 8'h3C || rx[2] != 8'h40 || rx[3] != 8'hC1 || rx[4] != 8'h05 || rx[5] != 8'hF0) begin
+		$display("FAIL: MIDI bytes %h %h %h %h %h %h", rx[0], rx[1], rx[2], rx[3], rx[4], rx[5]); errors = errors + 1;
+	end
+	if (fm_takes != 4 || fm_last != 16'hA055) begin $display("FAIL: FM write among MIDI"); errors = errors + 1; end
+	wait_fields(10);
+	$display("mt32: %0d bytes, the note off at frame %0d (asked for %0d)", rx_n, rx_frame, f0 + 8000);
+	if (rx_n != 9 || rx[6] != 8'h80 || rx_frame < f0 + 8000 || rx_frame > f0 + 8060) begin
+		$display("FAIL: MIDI message for a later frame"); errors = errors + 1;
+	end
+
+	// the sound: L 0x1000, R -0x0800, at volume 32 and 64
+	pi_left = 16'h1000; pi_right = 16'hF800;
+	wait_fields(1);
+	if (dut.mt32_snd_l != 19'sh1000 || dut.mt32_snd_r != -19'sh0800) begin
+		$display("FAIL: MT32-pi sound %h %h", dut.mt32_snd_l, dut.mt32_snd_r); errors = errors + 1;
+	end
+	cur_midi_vol = 64;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(2);
+	if (dut.mt32_snd_l != 19'sh2000) begin $display("FAIL: MT32-pi volume %h", dut.mt32_snd_l); errors = errors + 1; end
+
+	// the OSD's MT32-pi off: silent, nothing sent, the Pi told to stop
+	// (asked for "mute" when it reads)
+	osd_mt32[0] = 1;
+	mem[29'h4005] = {6'd0, 2'd3, 8'h40, 8'h3C, 8'h90, 32'd0};
+	cur_fmw = 6;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(3);
+	pi_read(n);
+	$display("mt32: OSD off, %0d bytes, sound %h, request %h", rx_n, dut.mt32_snd_l, n[7:0]);
+	if (rx_n != 9 || dut.mt32_snd_l != 0 || n[7:0] != 8'hA0) begin $display("FAIL: MT32-pi with the OSD's off"); errors = errors + 1; end
+	pi_read(n);
+	if (n[7:0] != 8'hA1) begin $display("FAIL: MT32-pi request %h after the mute", n[7:0]); errors = errors + 1; end
+	osd_mt32[0] = 0;
+	cur_fm = 0; cur_fmw = 0; cur_midi = 0; cur_midi_vol = 32;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(3);
+	// the Pi's sound in the mix (the audio checker adds it)
+	$display("mt32: %0d audio samples wrong", aud_errors - aud_errors0);
+	if (aud_errors != aud_errors0) errors = errors + 1;
+endtask
+
 task test_intro;
 	integer n, hold;
 	begin
@@ -493,6 +571,15 @@ initial begin
 	if (mem[0][31:0] != 0) begin $display("FAIL: magic of an earlier game not cleared: %h", mem[0]); errors = errors + 1; end
 	while (dut.ctrl_clear != 0) wait_fields(1);
 	wait_fields(1);
+	// +mt32only: the MT32-pi test alone, without the rest (it is near the end
+	// and the whole run takes long). fm_takes as the FM test leaves it.
+	if ($test$plusargs("mt32only")) begin
+		fm_takes = 3;
+		test_mt32;
+		if (errors != 0) $display("FAIL: %0d errors", errors);
+		else $display("PASS");
+		$finish;
+	end
 	// black for 16 fields in all, then it fades in
 	if (wall_lvl != 0) begin $display("FAIL: picture not black at first"); errors = errors + 1; end
 	test_intro;
@@ -771,77 +858,7 @@ initial begin
 		if (dut.fm_fetch != 0) begin $display("FAIL: FM ring after the enable went"); errors = errors + 1; end
 	end
 
-	// The MT32-pi. Before it answers: not there, and MIDI goes nowhere. Then
-	// it writes its synth over I2C (SoundFont 3): there. The info box names
-	// it once MIDI is enabled, once. MIDI messages in the FM ring between FM writes: the
-	// bytes come out of the UART in order, the last message not before its
-	// frame, the FM writes made. Its I2S sound is in the mix at the MIDI
-	// volume, and not with the OSD's MT32-pi off, when nothing is sent.
-	begin : mt32_test
-		integer f0, n;
-		if (mt32_on || mem[9][23]) begin $display("FAIL: an MT32-pi before one answered"); errors = errors + 1; end
-		pi_write(8'hA2, 8'h00, 8'h03);
-		wait_fields(1);
-		$display("mt32: there %0d, status bit %0d, info boxes %0d", mt32_on, mem[9][23], info_reqs);
-		if (!mt32_on || !mem[9][23]) begin $display("FAIL: MT32-pi not seen"); errors = errors + 1; end
-		if (info_reqs != 0) begin $display("FAIL: MT32-pi info box without MIDI"); errors = errors + 1; end
-		cur_midi = 1;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(2);
-		pi_write(8'hA2, 8'h00, 8'h03);
-		wait_fields(1);
-		$display("mt32: MIDI on, info boxes %0d, last %0d", info_reqs, info_last);
-		if (info_reqs != 1 || info_last != 4) begin $display("FAIL: MT32-pi info box"); errors = errors + 1; end
-
-		f0 = dut.aud_play;
-		mem[29'h4000] = {6'd0, 2'd3, 8'h40, 8'h3C, 8'h90, 32'd0};          // note on
-		mem[29'h4001] = {16'd0, 8'hA0, 8'h55, 32'd0};                      // an FM write
-		mem[29'h4002] = {6'd0, 2'd2, 8'h00, 8'h05, 8'hC1, 32'd0};          // program change
-		mem[29'h4003] = {6'd0, 2'd1, 8'h00, 8'h00, 8'hF0, 32'd0};          // one byte
-		mem[29'h4004] = {6'd0, 2'd3, 8'h00, 8'h3C, 8'h80, f0[31:0] + 32'd8000}; // note off, later
-		cur_fmw = 5; cur_fm = 1; cur_midi = 1;
-		rx_n = 0;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(4);
-		$display("mt32: %0d bytes sent, FM writes %0d", rx_n, fm_takes);
-		if (rx_n != 6 || rx[0] != 8'h90 || rx[1] != 8'h3C || rx[2] != 8'h40 || rx[3] != 8'hC1 || rx[4] != 8'h05 || rx[5] != 8'hF0) begin
-			$display("FAIL: MIDI bytes %h %h %h %h %h %h", rx[0], rx[1], rx[2], rx[3], rx[4], rx[5]); errors = errors + 1;
-		end
-		if (fm_takes != 4 || fm_last != 16'hA055) begin $display("FAIL: FM write among MIDI"); errors = errors + 1; end
-		wait_fields(10);
-		$display("mt32: %0d bytes, the note off at frame %0d (asked for %0d)", rx_n, rx_frame, f0 + 8000);
-		if (rx_n != 9 || rx[6] != 8'h80 || rx_frame < f0 + 8000 || rx_frame > f0 + 8060) begin
-			$display("FAIL: MIDI message for a later frame"); errors = errors + 1;
-		end
-
-		// the sound: L 0x1000, R -0x0800, at volume 32 and 64
-		pi_left = 16'h1000; pi_right = 16'hF800;
-		wait_fields(1);
-		if (dut.mt32_snd_l != 19'sh1000 || dut.mt32_snd_r != -19'sh0800) begin
-			$display("FAIL: MT32-pi sound %h %h", dut.mt32_snd_l, dut.mt32_snd_r); errors = errors + 1;
-		end
-		cur_midi_vol = 64;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(2);
-		if (dut.mt32_snd_l != 19'sh2000) begin $display("FAIL: MT32-pi volume %h", dut.mt32_snd_l); errors = errors + 1; end
-
-		// the OSD's MT32-pi off: silent, nothing sent, the Pi told to stop
-		// (asked for "mute" when it reads)
-		osd_mt32[0] = 1;
-		mem[29'h4005] = {6'd0, 2'd3, 8'h40, 8'h3C, 8'h90, 32'd0};
-		cur_fmw = 6;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(3);
-		pi_read(n);
-		$display("mt32: OSD off, %0d bytes, sound %h, request %h", rx_n, dut.mt32_snd_l, n[7:0]);
-		if (rx_n != 9 || dut.mt32_snd_l != 0 || n[7:0] != 8'hA0) begin $display("FAIL: MT32-pi with the OSD's off"); errors = errors + 1; end
-		pi_read(n);
-		if (n[7:0] != 8'hA1) begin $display("FAIL: MT32-pi request %h after the mute", n[7:0]); errors = errors + 1; end
-		osd_mt32[0] = 0;
-		cur_fm = 0; cur_fmw = 0; cur_midi = 0; cur_midi_vol = 32;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(3);
-	end
+	test_mt32;
 
 	// the game leaves in 640x400 interlaced: back to 640x480 and the core's
 	// picture. The CRT's horizontal size is the game's only: the core's
@@ -1036,6 +1053,11 @@ end
 // Audio checker: every output sample must be the next ring frame
 
 integer aud_next = -1, aud_samples = 0, aud_errors = 0;
+// the MT32-pi's sound is mixed in; not checked on the sample where its
+// level changes
+integer aud_exp_l, aud_exp_r;
+reg [15:0] aud_raw_l, aud_raw_r;
+reg signed [18:0] aud_pi_l = 0, aud_pi_r = 0;
 time    aud_first_tick_time = 0, aud_last_tick_time = 0;
 reg     aud_check = 0;
 // Audio off (a game left): the core starts the ring from its beginning when
@@ -1049,10 +1071,21 @@ always @(posedge clk) if (dut.aud_tick2 && dut.audio_en) begin
 			aud_next = audio_l / 3;
 			aud_first_tick_time = $time;
 		end
-		if (audio_l !== aud_next[15:0] * 16'd3 || audio_r !== ~aud_next[15:0]) begin
+		aud_raw_l = aud_next[15:0] * 16'd3;
+		aud_raw_r = ~aud_next[15:0];
+		aud_exp_l = $signed(aud_raw_l) + dut.mt32_snd_l;
+		aud_exp_r = $signed(aud_raw_r) + dut.mt32_snd_r;
+		if (aud_exp_l > 32767) aud_exp_l = 32767;
+		if (aud_exp_l < -32768) aud_exp_l = -32768;
+		if (aud_exp_r > 32767) aud_exp_r = 32767;
+		if (aud_exp_r < -32768) aud_exp_r = -32768;
+		if ((dut.mt32_snd_l == aud_pi_l && dut.mt32_snd_r == aud_pi_r)
+			&& (audio_l !== aud_exp_l[15:0] || audio_r !== aud_exp_r[15:0])) begin
 			if (aud_errors < 10) $display("FAIL: audio sample %0d got %h/%h", aud_next, audio_l, audio_r);
 			aud_errors = aud_errors + 1;
 		end
+		aud_pi_l = dut.mt32_snd_l;
+		aud_pi_r = dut.mt32_snd_r;
 		aud_next = (aud_next + 1) % 16384;
 		aud_samples = aud_samples + 1;
 		aud_last_tick_time = $time;
@@ -1107,6 +1140,21 @@ endtask
 // I2S, 16 bits a channel at 48kHz: 1.536MHz bit clock, word select 1 for
 // the right channel and changing a bit before the word
 reg [15:0] pi_left = 0, pi_right = 0;
+// MiSTer's mt32pi.sv leaves some registers without a start value; the FPGA
+// starts them at 0, the simulation with x (its I2C slave's divider would
+// never reach 0, so it never looked at its pins)
+initial begin
+	dut.mt32pi.i2c_slave.div = 0;
+	dut.mt32pi.clk_rate[0].clkr.cnt_tmp = 0;
+	dut.mt32pi.clk_rate[1].clkr.cnt_tmp = 0;
+	dut.mt32pi.clk_rate[0].cnt = 0;
+	dut.mt32pi.clk_rate[1].cnt = 0;
+	dut.mt32pi.mt32_newmode = 0;
+	dut.mt32pi.mt32_mode = 0;
+	dut.mt32pi.mt32_rom = 0;
+	dut.mt32pi.mt32_sf = 0;
+end
+
 initial begin : i2s
 	integer i;
 	reg [31:0] frame;
