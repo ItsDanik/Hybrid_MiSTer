@@ -63,8 +63,9 @@ reg  [5:0] crt_hsize = 0;
 reg  [3:0] crt_hpos = 0, crt_vpos = 0;
 wire [15:0] audio_l, audio_r;
 wire [7:0] r, g, b;
-// OSD status 96..102: the MT32-pi's lines (bit 96 set: off)
-reg  [6:0] osd_mt32 = 7'b011_00_1_0;   // SoundFont 3, MT-32 v1, MT-32 mode, on
+// OSD status 96..103: the MT32-pi's lines (bit 96 set: off)
+reg  [7:0] osd_mt32 = 8'b0000_00_1_0;  // the Pi's own SoundFont, MT-32 v1, MT-32 mode, on
+reg        notes_trig = 0;              // 104: Reset Hanging Notes
 // the Pi: SDA (with the core's, open drain), MIDI in, I2S word select, SCL,
 // bit clock, data
 reg        pi_sda = 1, pi_scl = 1, pi_ws = 0, pi_bclk = 0, pi_dat = 0;
@@ -84,7 +85,7 @@ hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex")
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(joystick_0), .joystick_1(joystick_1),
 	.joy_l_analog_0(16'h1122), .joy_r_analog_0(16'h3344), .joy_l_analog_1(16'h5566), .joy_r_analog_1(16'h7788),
-	.osd_status({25'h2468, osd_mt32, 32'h789A_BCDE, 4'h0, trig, 56'hCAFE}), .osd_open(osd_open), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
+	.osd_status({23'h091A, notes_trig, osd_mt32, 32'h789A_BCDE, 4'h0, trig, 56'hCAFE}), .osd_open(osd_open), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(vga31), .crt_hsize(crt_hsize), .crt_hpos(crt_hpos), .crt_vpos(crt_vpos),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(menumask),
@@ -327,7 +328,7 @@ endfunction
 // frame, the FM writes made. Its I2S sound is in the mix at the MIDI
 // volume, and not with the OSD's MT32-pi off, when nothing is sent.
 task test_mt32;
-	integer f0, n, aud_errors0;
+	integer f0, n, aud_errors0, n_reports, n_req;
 	aud_errors0 = aud_errors;
 	if (mt32_on || mem[9][23]) begin $display("FAIL: an MT32-pi before one answered"); errors = errors + 1; end
 	pi_write(8'hA2, 8'h00, 8'h03);
@@ -347,6 +348,47 @@ task test_mt32;
 	wait_fields(1);
 	$display("mt32: MIDI on, info boxes %0d, last %0d", info_reqs, info_last);
 	if (info_reqs != 1 || info_last != 4) begin $display("FAIL: MT32-pi info box"); errors = errors + 1; end
+
+	// the SoundFont: the Pi's own, as it reported it (3); the OSD's 5; the
+	// Pi's 44, which the OSD cannot list, kept and named
+	pi_stop;
+	pi_read(n);
+	$display("mt32: SoundFont asked for %0d (the Pi's own)", pi_rd_sf);
+	if (pi_rd_sf != 3) begin $display("FAIL: MT32-pi's own SoundFont"); errors = errors + 1; end
+	osd_mt32[7:4] = 6;
+	repeat (100) @(posedge clk);
+	pi_read(n);
+	$display("mt32: SoundFont asked for %0d (the OSD's 5)", pi_rd_sf);
+	if (pi_rd_sf != 5) begin $display("FAIL: the OSD's SoundFont"); errors = errors + 1; end
+	osd_mt32[7:4] = 0;
+	n_reports = mem[9][27:24];
+	pi_write(8'hA2, 8'h00, 8'd44);
+	wait_fields(1);
+	pi_read(n);
+	$display("mt32: SoundFont asked for %0d (the Pi's 44), info box %0d", pi_rd_sf, info_last);
+	if (pi_rd_sf != 44 || info_last != 13) begin $display("FAIL: MT32-pi's SoundFont 44"); errors = errors + 1; end
+	pi_write(8'hA2, 8'h00, 8'h03);
+	wait_fields(1);
+	repeat (5000) @(posedge clk);
+	// each report of the Pi counted for the game (status bits 24..27): the
+	// two writes above
+	$display("mt32: reports %0d, before %0d", mem[9][27:24], n_reports);
+	if (mem[9][27:24] != ((n_reports + 2) & 15)) begin $display("FAIL: MT32-pi reports not counted"); errors = errors + 1; end
+
+	// Reset Hanging Notes: the Pi asked for "mute", then the synth again;
+	// it stays there all the while, for the OSD and the game
+	notes_trig = 1;
+	repeat (2000) @(posedge clk);
+	notes_trig = 0;
+	repeat (2000) @(posedge clk);
+	n = mt32_on;
+	pi_read(n_req);
+	$display("mt32: Reset Hanging Notes, there %0d %0d, request %h", n, mt32_on, n_req[7:0]);
+	if (n_req[7:0] != 8'hA0 || !n || !mt32_on || !dut.midi_out) begin $display("FAIL: MT32-pi Reset Hanging Notes"); errors = errors + 1; end
+	pi_read(n_req);
+	if (n_req[7:0] != 8'hA1) begin $display("FAIL: MT32-pi request %h after Reset Hanging Notes", n_req[7:0]); errors = errors + 1; end
+	pi_polling = 1;
+	wait_fields(1);
 
 	f0 = dut.aud_play;
 	mem[29'h4000] = {6'd0, 2'd3, 8'h40, 8'h3C, 8'h90, 32'd0};          // note on
@@ -652,7 +694,7 @@ initial begin
 	if (mem[11] != 64'h7788556633441122) begin $display("FAIL: status analog %h", mem[11]); $finish; end
 	if (mem[12] != 64'hCAFE) begin $display("FAIL: status osd %h", mem[12]); $finish; end
 	// OSD status [127:64] at 0xC8, next to the audio fetch pointer (checked below)
-	if (mem[25] != 64'h0012_3432_789A_BCDE) begin $display("FAIL: status osd high %h", mem[25]); $finish; end
+	if (mem[25] != 64'h0012_3402_789A_BCDE) begin $display("FAIL: status osd high %h", mem[25]); $finish; end
 	// an OSD trigger: a pulse of a few clocks flips its bit in the status
 	trig = 4'b0010;
 	repeat (3) @(posedge clk);
@@ -1141,6 +1183,7 @@ task pi_write(input [7:0] a, input [7:0] b, input [7:0] c);
 		pi_sda = 0; #2500; pi_scl = 1; #5000; pi_sda = 1; #10000;   // stop
 	end
 endtask
+reg [7:0] pi_rd_sf;   // the SoundFont the last read asked for
 task pi_read(output integer v);
 	integer i, k;
 	begin
@@ -1151,6 +1194,7 @@ task pi_read(output integer v);
 			for (i = 0; i < 8; i = i + 1) begin
 				pi_sda = 1; #2500; pi_scl = 1; #2500;
 				if (k == 0) v = {v[30:0], user_in[0]};
+				if (k == 2) pi_rd_sf = {pi_rd_sf[6:0], user_in[0]};
 				#2500; pi_scl = 0; #2500;
 			end
 			i2c_bit(k == 2);   // the Pi's ACK, none after the last

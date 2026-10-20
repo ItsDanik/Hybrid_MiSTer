@@ -303,7 +303,7 @@ void MH_FMWrite(int reg, int value, int ahead);
 // messages, each at its audio frame as MH_FMWrite()'s (they go through the
 // same ring); the core sends them to the Pi and mixes its sound in. Whether
 // the music goes there is the player's, in the framework's OSD lines of the
-// MT32-pi, shown only while one is connected (status bits 96..102; the
+// MT32-pi, shown only while one is connected (status bits 96..103; the
 // template's CONF_STR has them for a core whose games play MIDI). With an
 // older core MH_MidiAvailable() is 0 and the calls below do nothing; without
 // a Pi, or with it off in the OSD, MH_MidiWanted() is 0: the game plays its
@@ -319,6 +319,12 @@ void MH_MidiEnable(int enabled);
 int MH_MidiWanted(void);
 // 1 once notes sound: with the MT32-pi, as MH_MidiWanted()
 int MH_MidiReady(void);
+// 1 once each time the synthesizer has lost the song's settings since the
+// last call: the MT32-pi switched synth, MT-32 ROM or SoundFont (it reports
+// that when it has loaded it), was reset, or the OSD's "Reset Hanging Notes"
+// was chosen. Its channels are then as after a reset (programs, volumes,
+// controllers): while MH_MidiWanted(), the game sends the song's again.
+int MH_MidiSynthChanged(void);
 // 0..127: 32 is the MT32-pi's sound as it comes, 127 nearly four times that
 void MH_MidiVolume(int volume);
 // A MIDI message (status byte 0x80..0xEF, its data bytes; the second is not

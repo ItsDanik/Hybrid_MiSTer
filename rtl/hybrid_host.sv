@@ -72,6 +72,11 @@
 //                   controller connected).
 //                   bit 23: an MT32-pi answers on the user port (host
 //                   version 15); cleared a second after it stops.
+//                   bits 27..24: counted up each time the MT32-pi reports
+//                   what it plays: after a reset, a change of synth, ROM or
+//                   SoundFont (when it has loaded it), and after "Reset
+//                   Hanging Notes". It then has none of the song's settings:
+//                   the game sends them again (MH_MidiSynthChanged()).
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -1063,9 +1068,14 @@ hybrid_fm fm
 // over I2C, which the Pi polls; it answers only when it is there
 // (mt32_available). The game's MIDI messages come through the FM ring and
 // are sent at their audio frame, at 31250 baud, from a queue of 1024 bytes.
-// What the Pi plays is the OSD's (status bits 96..102, the template's
+// What the Pi plays is the OSD's (status bits 96..103, the template's
 // CONF_STR): MT32-pi on / off, SoundFont or MT-32, the MT-32 ROM, the
-// SoundFont. Its sound is mixed in at the MIDI volume while the game has
+// SoundFont: the Pi's own (0, the default) or 0..7 (1..8). The Pi takes all
+// three from the core when it first finds it (mt32-pi's mister.cpp), so for
+// its own SoundFont the core sends back the one it reported: it may have up
+// to 512, which the OSD cannot list. It reports it before it takes anything:
+// the core's first answer after a reset is "mute", and the Pi replies to that
+// with what it plays. Its sound is mixed in at the MIDI volume while the game has
 // MIDI enabled and the OSD has the Pi on. When either goes off it is told to
 // stop all its notes (mt32pi's reset: the "mute" request).
 //
@@ -1075,7 +1085,10 @@ hybrid_fm fm
 // without an answer and the Pi is gone (unplugged, or its MiSTer support off):
 // mt32pi.sv, which would say "available" for ever, is held in reset until the
 // Pi answers again, so the OSD lines go, the game hears it is gone and plays
-// the FM chip again, and a Pi plugged in again starts as a new one.
+// the FM chip again, and a Pi plugged in again starts as a new one. Its
+// "available" goes at every mute as well (a reset): the Pi counts as there
+// from the first time it was until it goes quiet, so that a mute neither
+// hides the OSD lines nor sends the music to the FM chip for a moment.
 
 reg        midi_en = 0;
 reg  [6:0] midi_vol = 7'd32;
@@ -1085,10 +1098,14 @@ wire        mt32_available, mt32_newmode;
 wire  [7:0] mt32_mode, mt32_rom, mt32_sf;
 wire [15:0] mt32_i2s_l, mt32_i2s_r;
 reg   [2:0] mt32_avail_s = 0;
+reg         mt32_seen = 0;
+reg   [3:0] mt32_reports = 0;
+wire  [3:0] sf_osd = osd_status[103:100];
+wire  [7:0] sf_req = (sf_osd == 0 || sf_osd > 4'd8) ? mt32_sf : {4'd0, sf_osd - 4'd1};
 reg   [1:0] pi_sda_s = 2'b11;
 reg  [25:0] pi_quiet_t = 0;
 wire        pi_quiet = (pi_quiet_t == MT32_QUIET);
-assign      mt32_on = mt32_avail_s[2] && !pi_quiet;
+assign      mt32_on = mt32_seen && !pi_quiet;
 wire        midi_want = midi_en && !osd_status[96];
 wire        midi_out  = midi_want && mt32_on;
 
@@ -1140,13 +1157,15 @@ always @(posedge clk) begin
 	if (!midi_out) mq_rd <= mq_wr;
 end
 
-// mute: when the game's MIDI or the OSD's MT32-pi goes off, and at a reset,
-// long enough for the Pi's clock
-reg        midi_want_d = 0;
+// mute: when the game's MIDI or the OSD's MT32-pi goes off, the OSD's
+// "Reset Hanging Notes" (status bit 104, a trigger), and at a reset, long
+// enough for the Pi's clock
+reg        midi_want_d = 0, notes_trig_d = 0;
 reg  [4:0] mute_t = 0;
 always @(posedge clk) begin
-	midi_want_d <= midi_want;
-	if (midi_want_d && !midi_want) mute_t <= 5'd31;
+	midi_want_d  <= midi_want;
+	notes_trig_d <= osd_status[104];
+	if ((midi_want_d && !midi_want) || (osd_status[104] && !notes_trig_d)) mute_t <= 5'd31;
 	else if (mute_t != 0) mute_t <= mute_t - 1'd1;
 end
 
@@ -1169,7 +1188,7 @@ mt32pi mt32pi
 	// the OSD: SoundFont (its first value) or MT-32, ROM, SoundFont
 	.mt32_mode_req  (!osd_status[97]),
 	.mt32_rom_req   (osd_status[99:98]),
-	.mt32_sf_req    ({5'd0, osd_status[102:100]}),
+	.mt32_sf_req    (sf_req),
 	.mt32_mode      (mt32_mode),
 	.mt32_rom       (mt32_rom),
 	.mt32_sf        (mt32_sf),
@@ -1186,13 +1205,17 @@ reg  signed [15:0] mt32_l = 0, mt32_r = 0;
 reg   [3:0] newmode_s = 0;
 reg  [23:0] synth = 24'hFFFFFF;  // {mode, ROM, SoundFont} the Pi reported
 reg  [23:0] shown = 24'hFFFFFF;  // the one last named in the info box
-wire  [7:0] info_n = (synth[23:16] == 8'hA2) ? 8'd1 + synth[2:0]
+// info texts: 1..8 SoundFont 0..7, 9..11 the MT-32 ROMs, 12 unknown, 13 a
+// SoundFont after the eighth
+wire  [7:0] info_n = (synth[23:16] == 8'hA2) ? ((synth[7:0] <= 8'd7) ? 8'd1 + synth[2:0] : 8'd13)
                    : (synth[23:16] == 8'hA1 && synth[15:8] <= 8'd2) ? 8'd9 + synth[15:8] : 8'd12;
 always @(posedge clk) begin
 	mt32_avail_s <= {mt32_avail_s[1:0], mt32_available};
 	pi_sda_s     <= {pi_sda_s[0], user_out[0]};
 	if (!pi_sda_s[1]) pi_quiet_t <= 0;
 	else if (!pi_quiet) pi_quiet_t <= pi_quiet_t + 1'd1;
+	if (pi_quiet) mt32_seen <= 0;
+	else if (mt32_avail_s[2]) mt32_seen <= 1;
 	i2s_l1 <= mt32_i2s_l;
 	i2s_r1 <= mt32_i2s_r;
 	i2s_l2 <= i2s_l1;
@@ -1206,7 +1229,10 @@ always @(posedge clk) begin
 	// none, nor the CONF_STR's "I" line. hps_io takes `info` at the rising
 	// edge of info_req.
 	newmode_s <= {newmode_s[2:0], mt32_newmode};
-	if (newmode_s[3] != newmode_s[2]) synth <= {mt32_mode, mt32_rom, mt32_sf};
+	if (newmode_s[3] != newmode_s[2]) begin
+		synth        <= {mt32_mode, mt32_rom, mt32_sf};
+		mt32_reports <= mt32_reports + 1'd1;
+	end
 	info_req <= 0;
 	if (!midi_out) shown <= 24'hFFFFFF;
 	else if (synth != 24'hFFFFFF && synth != shown && !info_req) begin
@@ -1307,7 +1333,7 @@ reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 8'd0, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 4'd0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:0]};

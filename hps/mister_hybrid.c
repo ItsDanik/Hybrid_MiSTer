@@ -1475,6 +1475,22 @@ int MH_MidiReady(void) {
     return MH_MidiWanted();
 }
 
+// the core counts the Pi's reports in status bits 24..27
+int MH_MidiSynthChanged(void) {
+    static unsigned last = ~0u;
+    unsigned reports;
+
+    if (!MH_MidiAvailable()) {
+        return 0;
+    }
+    reports = (status[2] >> 24) & 15;
+    if (reports == last) {
+        return 0;
+    }
+    last = reports;
+    return 1;
+}
+
 void MH_MidiVolume(int volume) {
     midi_volume = volume < 0 ? 0 : volume > 127 ? 127 : volume;
     if (MH_IsOpen()) {

@@ -14,6 +14,9 @@
 // MIDI bytes are then "sent" at their audio frames, and with
 // FAKECORE_MIDILOG=<file> written there, "<audio frame> <bytes in hex>" a
 // line (tools/midilog2mid.py makes a MIDI file of it, to play on the PC).
+// Its reports (status bits 24..27) are counted when the script's osd2
+// changes the synth, ROM or SoundFont (bits 97..103) or sets bit 104 (Reset
+// Hanging Notes), as the Pi's when it has switched: logged "# reports n".
 //
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
@@ -73,6 +76,7 @@ static uint64_t audio_frac;
 static FILE* audio_out;
 static opl3_chip fm_chip;
 static int fm_on, midi_out, mt32;
+static unsigned mt32_reports;
 static uint32_t fm_fetch;
 static FILE* fm_log;
 static FILE* midi_log;
@@ -230,7 +234,7 @@ static void tick(void) {
     // the game has the screen (bit 19) at once: nothing fades here
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
         | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22)
-        | (mt32 << 23);
+        | (mt32 << 23) | ((mt32_reports & 15) << 24);
     status[3] = 15;
     status[15] = fm_fetch;
     status[0] = STATUS_MAGIC;
@@ -345,7 +349,15 @@ int main(int argc, char** argv) {
             // OSD status bits 64..95 are status[34]; entry n is (n + 10) % 25 pixels
             status[34] = (status[34] & ~(0x3ffu << 13)) | ((uint32_t)((a + 15) % 25) << 13) | ((uint32_t)((b + 15) % 25) << 18);
         } else if (sscanf(line, "osd2 %llx", &osd) == 1) {
-            status[35] = (uint32_t)osd;
+            // the Pi reports what it plays when it has switched, or after a
+            // mute
+            if (mt32 && (((uint32_t)osd ^ status[35]) & 0xfe || (osd & 0x100))) {
+                mt32_reports++;
+                if (midi_log) {
+                    fprintf(midi_log, "# reports %u\n", mt32_reports);
+                }
+            }
+            status[35] = (uint32_t)osd & ~0x100u;
         } else if (sscanf(line, "osd %llx", &osd) == 1) {
             status[8] = (uint32_t)osd;
             status[9] = (uint32_t)(osd >> 32);
