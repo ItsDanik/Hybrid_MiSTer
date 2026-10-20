@@ -71,7 +71,7 @@
 //                   Menu OK / Back) too. 0 for its info boxes (volume, a
 //                   controller connected).
 //                   bit 23: an MT32-pi answers on the user port (host
-//                   version 15).
+//                   version 15); cleared a second after it stops.
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -149,7 +149,10 @@ module hybrid_host
 	// comes: in that many fields after the core started (12 seconds)
 	parameter WALL_FONT    = "../hybrid/rtl/hybrid_wall_font.hex",
 	parameter WALL_ALONE   = "../hybrid/rtl/hybrid_wall_alone.hex",
-	parameter WALL_TIMEOUT = 716
+	parameter WALL_TIMEOUT = 716,
+	// the MT32-pi counts as gone when it has not polled for that many clocks
+	// (1 second; it polls every 50ms)
+	parameter MT32_QUIET   = 50_000_000
 )
 (
 	input             clk,          // 50MHz
@@ -1065,6 +1068,14 @@ hybrid_fm fm
 // SoundFont. Its sound is mixed in at the MIDI volume while the game has
 // MIDI enabled and the OSD has the Pi on. When either goes off it is told to
 // stop all its notes (mt32pi's reset: the "mute" request).
+//
+// The Pi reads the core's settings every 50ms (mt32-pi's
+// MisterUpdatePeriodMillis), from a core of its own, also while it loads a
+// SoundFont; mt32pi.sv answers on SDA only to a transaction for it. A second
+// without an answer and the Pi is gone (unplugged, or its MiSTer support off):
+// mt32pi.sv, which would say "available" for ever, is held in reset until the
+// Pi answers again, so the OSD lines go, the game hears it is gone and plays
+// the FM chip again, and a Pi plugged in again starts as a new one.
 
 reg        midi_en = 0;
 reg  [6:0] midi_vol = 7'd32;
@@ -1074,7 +1085,10 @@ wire        mt32_available, mt32_newmode;
 wire  [7:0] mt32_mode, mt32_rom, mt32_sf;
 wire [15:0] mt32_i2s_l, mt32_i2s_r;
 reg   [2:0] mt32_avail_s = 0;
-assign      mt32_on = mt32_avail_s[2];
+reg   [1:0] pi_sda_s = 2'b11;
+reg  [25:0] pi_quiet_t = 0;
+wire        pi_quiet = (pi_quiet_t == MT32_QUIET);
+assign      mt32_on = mt32_avail_s[2] && !pi_quiet;
 wire        midi_want = midi_en && !osd_status[96];
 wire        midi_out  = midi_want && mt32_on;
 
@@ -1146,7 +1160,7 @@ mt32pi mt32pi
 	.VGA_DE         (1'b0),
 	.USER_IN        (user_in),
 	.USER_OUT       (user_out),
-	.reset          (reset || mute_t != 0),
+	.reset          (reset || mute_t != 0 || pi_quiet),
 	.midi_tx        (tx_sh[0]),
 	.midi_rx        (),
 	.mt32_i2s_r     (mt32_i2s_r),
@@ -1176,6 +1190,9 @@ wire  [7:0] info_n = (synth[23:16] == 8'hA2) ? 8'd1 + synth[2:0]
                    : (synth[23:16] == 8'hA1 && synth[15:8] <= 8'd2) ? 8'd9 + synth[15:8] : 8'd12;
 always @(posedge clk) begin
 	mt32_avail_s <= {mt32_avail_s[1:0], mt32_available};
+	pi_sda_s     <= {pi_sda_s[0], user_out[0]};
+	if (!pi_sda_s[1]) pi_quiet_t <= 0;
+	else if (!pi_quiet) pi_quiet_t <= pi_quiet_t + 1'd1;
 	i2s_l1 <= mt32_i2s_l;
 	i2s_r1 <= mt32_i2s_r;
 	i2s_l2 <= i2s_l1;

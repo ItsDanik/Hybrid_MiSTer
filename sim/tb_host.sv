@@ -77,7 +77,7 @@ always #20.345 clk_audio = ~clk_audio; // 24.576MHz
 
 hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_DOTS("rtl/hybrid_wall_dots.hex"),
 	.WALL_EASE("rtl/hybrid_wall_ease.hex"), .WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"),
-	.WALL_TIMEOUT(1500)) dut
+	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
@@ -331,6 +331,7 @@ task test_mt32;
 	aud_errors0 = aud_errors;
 	if (mt32_on || mem[9][23]) begin $display("FAIL: an MT32-pi before one answered"); errors = errors + 1; end
 	pi_write(8'hA2, 8'h00, 8'h03);
+	pi_polling = 1;
 	wait_fields(1);
 	// the status block is written a little after the field starts
 	repeat (5000) @(posedge clk);
@@ -340,7 +341,9 @@ task test_mt32;
 	cur_midi = 1;
 	set_ctrl(1, 0, 0, 10);
 	wait_fields(2);
+	pi_stop;
 	pi_write(8'hA2, 8'h00, 8'h03);
+	pi_polling = 1;
 	wait_fields(1);
 	$display("mt32: MIDI on, info boxes %0d, last %0d", info_reqs, info_last);
 	if (info_reqs != 1 || info_last != 4) begin $display("FAIL: MT32-pi info box"); errors = errors + 1; end
@@ -379,6 +382,7 @@ task test_mt32;
 
 	// the OSD's MT32-pi off: silent, nothing sent, the Pi told to stop
 	// (asked for "mute" when it reads)
+	pi_stop;
 	osd_mt32[0] = 1;
 	mem[29'h4005] = {6'd0, 2'd3, 8'h40, 8'h3C, 8'h90, 32'd0};
 	cur_fmw = 6;
@@ -393,6 +397,23 @@ task test_mt32;
 	cur_fm = 0; cur_fmw = 0; cur_midi = 0; cur_midi_vol = 32;
 	set_ctrl(1, 0, 0, 10);
 	wait_fields(3);
+	// the Pi unplugged: no poll for 200ms. Gone, the music goes nowhere, the
+	// module held in reset; back with its next polls
+	cur_fm = 1; cur_midi = 1;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(14);
+	repeat (5000) @(posedge clk);
+	$display("mt32: unplugged, there %0d, status bit %0d, available %0d, MIDI out %0d", mt32_on, mem[9][23], dut.mt32_available, dut.midi_out);
+	if (mt32_on || mem[9][23] || dut.mt32_available || dut.midi_out) begin $display("FAIL: an MT32-pi that is gone"); errors = errors + 1; end
+	pi_polling = 1;
+	wait_fields(5);
+	repeat (5000) @(posedge clk);
+	$display("mt32: plugged in again, there %0d, status bit %0d, MIDI out %0d", mt32_on, mem[9][23], dut.midi_out);
+	if (!mt32_on || !mem[9][23] || !dut.midi_out) begin $display("FAIL: MT32-pi plugged in again"); errors = errors + 1; end
+	pi_stop;
+	cur_fm = 0; cur_midi = 0;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(1);
 	// the Pi's sound in the mix (the audio checker adds it)
 	$display("mt32: %0d audio samples wrong", aud_errors - aud_errors0);
 	if (aud_errors != aud_errors0) errors = errors + 1;
@@ -1135,6 +1156,25 @@ task pi_read(output integer v);
 			i2c_bit(k == 2);   // the Pi's ACK, none after the last
 		end
 		pi_sda = 0; #2500; pi_scl = 1; #5000; pi_sda = 1; #10000;
+	end
+endtask
+// The Pi reads the core's settings every 50ms; here every 20ms, and the core
+// takes it for gone after 200ms (MT32_QUIET) instead of a second. pi_stop
+// before the test's own reads and writes.
+reg     pi_polling = 0, pi_busy = 0;
+integer pi_poll_v;
+initial forever begin
+	#20000000;
+	if (pi_polling) begin
+		pi_busy = 1;
+		pi_read(pi_poll_v);
+		pi_busy = 0;
+	end
+end
+task pi_stop;
+	begin
+		pi_polling = 0;
+		wait (!pi_busy);
 	end
 endtask
 // I2S, 16 bits a channel at 48kHz: 1.536MHz bit clock, word select 1 for
