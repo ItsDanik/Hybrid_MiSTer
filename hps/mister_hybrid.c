@@ -83,6 +83,12 @@ static volatile int detached;
 static int reloaded; // detached because the core started over
 
 static int cpu1_allowed;
+// the CPUs the game thread had before MH_Open() pinned it to CPU0, given back
+// by MH_Close(): a program started in its place (execv) inherits them
+// (CrispyDoom's Heretic, Hexen and Strife ran with CPU0 alone, everything the
+// helper threads do on the game thread; 2026-10-21)
+static cpu_set_t open_cpus;
+static int open_cpus_saved;
 
 // present thread: FIFO of up to 2 staged frames
 static pthread_t present_thread;
@@ -277,6 +283,8 @@ int MH_Open(void) {
     cpu1_allowed = 0;
     if (sched_getaffinity(0, sizeof(cpus), &cpus) == 0 && CPU_ISSET(0, &cpus) && CPU_ISSET(1, &cpus)) {
         cpu1_allowed = 1;
+        open_cpus = cpus;
+        open_cpus_saved = 1;
         CPU_ZERO(&cpus);
         CPU_SET(0, &cpus);
         sched_setaffinity(0, sizeof(cpus), &cpus);
@@ -316,6 +324,10 @@ static int close_pending = 0;
 
 void MH_Close(void) {
     stop_present_thread();
+    if (open_cpus_saved) {
+        sched_setaffinity(0, sizeof(open_cpus), &open_cpus);
+        open_cpus_saved = 0;
+    }
     if (shm != NULL && audio_enabled) {
         // The audio thread may be in MH_AudioWrite(), in the memory: it is
         // unmapped once the audio is closed, MH_AudioEnable(0) (SDL closes
