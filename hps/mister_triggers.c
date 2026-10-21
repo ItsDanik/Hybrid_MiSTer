@@ -14,7 +14,13 @@
 // Z / RZ are the right stick) or HAT2Y / HAT2X. A stick rests in the middle
 // of its range and a trigger at the bottom of it, so the first of those pairs
 // seen with both axes at the bottom is taken. A controller is looked at until
-// that happens; one without such a pair has no triggers here.
+// that happens; one without such a pair has no triggers here. Z / RZ and
+// RX / RY are triggers only on a controller that has both pairs, and only
+// while the other pair, its right stick, is in the middle: a stick pushed up
+// and to the left is at the bottom of both its axes too. A Switch Pro
+// Controller has RX / RY alone, its right stick, and its ZL / ZR are buttons:
+// once that stick had been pushed up and left, it was taken for the triggers,
+// which then held fire and run while it was let go.
 //
 // Main_MiSTer decides which controller is which player, and that cannot be
 // seen from here: the values are the furthest-pressed of all controllers.
@@ -304,6 +310,18 @@ static int find_axes(pad* p) {
         }
         if (ioctl(p->fd, EVIOCGABS(pairs[k][0]), &l) < 0 || ioctl(p->fd, EVIOCGABS(pairs[k][1]), &r) < 0) {
             continue;
+        }
+        if (pairs[k][0] == ABS_Z || pairs[k][0] == ABS_RX) {
+            // the right stick: the other of Z / RZ and RX / RY, in the middle
+            const int stick_x = pairs[k][0] == ABS_Z ? ABS_RX : ABS_Z;
+            const int stick_y = pairs[k][0] == ABS_Z ? ABS_RY : ABS_RZ;
+            struct input_absinfo x, y;
+
+            if (!has_bit(abs_bits, stick_x) || !has_bit(abs_bits, stick_y) ||
+                ioctl(p->fd, EVIOCGABS(stick_x), &x) < 0 || ioctl(p->fd, EVIOCGABS(stick_y), &y) < 0 ||
+                at_rest(&x) || at_rest(&y)) {
+                continue;
+            }
         }
         if (at_rest(&l) && at_rest(&r)) {
             p->left = pairs[k][0];
