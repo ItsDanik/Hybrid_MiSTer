@@ -149,20 +149,64 @@ static int inputs_changed(const tDevice* devices, int count) {
     return 0;
 }
 
-// Connected joysticks from /proc/bus/input/devices (entries with a js handler)
+// 1 if a "B: KEY=" / "B: ABS=" bitmap of /proc/bus/input/devices (longs in
+// hex, the highest first) has one of the codes first..last
+static int has_codes(const char* bits, int first, int last) {
+    unsigned long words[16];
+    int n = 0, k;
+
+    while (n < 16 && *bits) {
+        char* end;
+        words[n] = strtoul(bits, &end, 16);
+        if (end == bits) {
+            break;
+        }
+        n++;
+        bits = end;
+    }
+    for (k = first; k <= last; k++) {
+        int w = k / (8 * (int)sizeof(long));
+        if (w < n && (words[n - 1 - w] >> (k % (8 * sizeof(long)))) & 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Connected joysticks from /proc/bus/input/devices: entries with a js handler,
+// or a stick or hat and a gamepad's buttons (BTN_JOYSTICK..BTN_DIGI - 1; a
+// keyboard's "Consumer Control" has some of those, and ABS_VOLUME). A Switch
+// Pro Controller of hid-nintendo has no js handler on the MiSTer: only
+// Zaparoo's virtual gamepad was found, its menu mapping without buttons, and
+// Menu OK / Back were no button at all (CrispyDoom issue #2, 2026-10-22).
 static int list_joysticks(tDevice* devices, int max) {
     FILE* f = fopen("/proc/bus/input/devices", "r");
     char line[512];
     unsigned vid = 0, pid = 0;
-    int virt = 0;
+    int virt = 0, buttons = 0, js = 0, axes = 0;
     int count = 0;
-    int i, dup;
+    int i, dup, end;
 
     if (f == NULL) {
         return 0;
     }
-    while (fgets(line, sizeof(line), f) != NULL) {
-        if (strncmp(line, "I:", 2) == 0) {
+    do {
+        end = fgets(line, sizeof(line), f) == NULL;
+        if (end || line[0] == '\n') {
+            // the end of an entry
+            dup = 0;
+            for (i = 0; i < count; i++) {
+                dup |= devices[i].vid == vid && devices[i].pid == pid;
+            }
+            if ((js || (buttons && axes)) && !dup && count < max) {
+                memset(&devices[count], 0, sizeof(devices[count]));
+                devices[count].vid = vid;
+                devices[count].pid = pid;
+                devices[count].virt = virt;
+                count++;
+            }
+            buttons = js = axes = 0;
+        } else if (strncmp(line, "I:", 2) == 0) {
             char* v = strstr(line, "Vendor=");
             char* p = strstr(line, "Product=");
             vid = v ? (unsigned)strtoul(v + 7, NULL, 16) : 0;
@@ -170,20 +214,15 @@ static int list_joysticks(tDevice* devices, int max) {
             virt = 0;
         } else if (strncmp(line, "S: Sysfs=/devices/virtual/", 26) == 0) {
             virt = 1;
-        } else if (strncmp(line, "H:", 2) == 0 && (strstr(line, "=js") != NULL || strstr(line, " js") != NULL) && count < max) {
-            dup = 0;
-            for (i = 0; i < count; i++) {
-                dup |= devices[i].vid == vid && devices[i].pid == pid;
-            }
-            if (!dup) {
-                memset(&devices[count], 0, sizeof(devices[count]));
-                devices[count].vid = vid;
-                devices[count].pid = pid;
-                devices[count].virt = virt;
-                count++;
-            }
+        } else if (strncmp(line, "H:", 2) == 0 && (strstr(line, "=js") != NULL || strstr(line, " js") != NULL)) {
+            js = 1;
+        } else if (strncmp(line, "B: KEY=", 7) == 0) {
+            buttons = has_codes(line + 7, 0x120, 0x13f);
+        } else if (strncmp(line, "B: ABS=", 7) == 0) {
+            // ABS_X..ABS_RZ, ABS_HAT0X / ABS_HAT0Y
+            axes = has_codes(line + 7, 0x00, 0x05) || has_codes(line + 7, 0x10, 0x11);
         }
-    }
+    } while (!end);
     fclose(f);
     return count;
 }
@@ -300,6 +339,11 @@ static void resolve(void) {
         int has_menu = load_map("", &devices[i], menu[i]);
         int has_core = load_map(prefix, &devices[i], core[i]);
 
+        // a menu mapping without OK and Back, nor A and B (Zaparoo's has
+        // its axes alone) is none
+        if (has_menu && menu_code(menu[i], 0) == 0 && menu_code(menu[i], 1) == 0) {
+            has_menu = 0;
+        }
         if (!has_menu) {
             memset(menu[i], 0, sizeof(menu[i]));
             for (k = 0; k < NUM_NAMED; k++) {
