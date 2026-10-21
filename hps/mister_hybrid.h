@@ -17,6 +17,8 @@
 //                       its CONF_STR ("A,B,X,Y,L,R,Select,Start" if unset)
 //   MISTER_HYBRID_SHM   development: a file to use instead of the DDR3 window
 //                       (see hybrid/tools/fakecore.c)
+//   MISTER_HYBRID_SOUNDFONTS  the folder of the SoundFonts, instead of
+//                       games/dnk/SoundFonts (MH_SoundFontDir())
 
 #include <stdint.h>
 
@@ -200,6 +202,17 @@ void MH_ReadInput(mh_input* input);
 // wants to pause meanwhile; nothing else needs it.
 int MH_OSDOpen(void);
 uint64_t MH_OSDStatus(void);
+// Shows text n (1..255) of the core's "I,<text 1>,<text 2>,...;" line in
+// Main_MiSTer's info box, the one of "ROMs decrypting", for 2 seconds; while
+// the OSD menu is open the core holds it until the menu closes (host version
+// 16; nothing with an older core). Texts 1..23 are the framework's (the
+// template's I line): 1..13 the MT32-pi's, which the core shows itself,
+// 14..16 MH_INFO_*; a game's own start at 24. A text has no commas or
+// semicolons; "\n" breaks a line, 30 characters to a line.
+void MH_OSDInfo(int n);
+#define MH_INFO_NO_SOUNDFONT      14 // no .sf2 in games/dnk/SoundFonts/
+#define MH_INFO_SOUNDFONT_DAMAGED 15 // the slot's file is no SoundFont 2, or damaged
+#define MH_INFO_SOUNDFONT_TOO_BIG 16 // more samples than the 64 MB of sample memory
 // OSD triggers: lines "T[56],<label>;" .. "T[59],<label>;" of the core's
 // CONF_STR, which do something once each time the player selects them (a
 // cheat, "next level"). Bit n set: trigger 56 + n was selected since the
@@ -317,46 +330,66 @@ void MH_FMVolume(int volume);
 // waiting (more than a second of the densest music), the write is dropped.
 void MH_FMWrite(int reg, int value, int ahead);
 
-// MIDI music, played outside the ARM (host version 15): for now on an
-// MT32-pi on the core's user port, a MIDI synthesizer on a Raspberry Pi
+// MIDI music, played outside the ARM: on an MT32-pi on the core's user port
+// (host version 15), a MIDI synthesizer on a Raspberry Pi
 // (github.com/dwhinham/mt32-pi: FluidSynth with SoundFonts, Munt for the
-// MT-32), which MiSTer players connect for ao486. The game sends MIDI
-// messages, each at its audio frame as MH_FMWrite()'s (they go through the
-// same ring); the core sends them to the Pi and mixes its sound in. Whether
-// the music goes there is the player's, in the framework's OSD lines of the
-// MT32-pi, shown only while one is connected (status bits 96..103; the
-// template's CONF_STR has them for a core whose games play MIDI). With an
-// older core MH_MidiAvailable() is 0 and the calls below do nothing; without
-// a Pi, or with it off in the OSD, MH_MidiWanted() is 0: the game plays its
-// FM music then.
+// MT-32), which MiSTer players connect for ao486, or on the SoundFont 2
+// synthesizer in the core (host version 16, docs/midi_synth.md). The game
+// sends MIDI messages, each at its audio frame as MH_FMWrite()'s; the library
+// sends them to the Pi (through the FM ring, the core mixes its sound in) or
+// works out the notes' voices for the synthesizer. Where the music goes is
+// the player's, in the OSD: "O[87],Music,MIDI,FM chip;" (FM chip: the game
+// plays its FM music), the MT32-pi's lines (status bits 96..104, shown only
+// while one is connected; "MT32-pi: On" sends the music to it) and the
+// synthesizer's "O[90:88],SoundFont,Default,1,2,3,4,5,6,7;", the per-game
+// choice from MH_SoundFontDir(), which the library loads, and another when
+// the OSD changes, by itself. The template's CONF_STR has them all for a core
+// whose games play MIDI. With an older core MH_MidiAvailable() is 0 and the
+// calls below do nothing; without a Pi or the synthesizer, or with the OSD on
+// the FM chip, MH_MidiWanted() is 0: the game plays its FM music then.
 int MH_MidiAvailable(void);
-// Needs MH_AudioEnable(1) first. Disabling stops the notes; MH_AudioEnable(0)
-// does too. A game enables it once and asks MH_MidiWanted() for where its
-// music goes.
+// Needs MH_AudioEnable(1) first. Enabling starts loading the synthesizer's
+// SoundFont in a thread (the game goes on meanwhile; its notes come once it
+// is there). Disabling stops the notes and forgets the channels;
+// MH_AudioEnable(0) does too. A game enables it once and asks MH_MidiWanted()
+// for where its music goes.
 void MH_MidiEnable(int enabled);
-// 1 while the game should play its MIDI music: MIDI is enabled, an MT32-pi
-// is connected and the OSD has it on. Ask it when a song starts, or every
-// frame to follow the OSD. Its changes are logged.
+// 1 while the game should play its MIDI music: MIDI is enabled, the OSD says
+// MIDI and an MT32-pi is connected and on in the OSD, or the synthesizer has
+// a SoundFont loaded or being loaded. 0 when there is no SoundFont that could
+// be loaded (Main_MiSTer's info box says why): the game plays its FM music
+// then. Ask it when a song starts, or every frame to follow the OSD. Where the
+// music goes is logged.
 int MH_MidiWanted(void);
-// 1 once notes sound: with the MT32-pi, as MH_MidiWanted()
+// 1 once notes sound: with the MT32-pi, as MH_MidiWanted(); with the
+// synthesizer, once the SoundFont is loaded (note-ons sent before are
+// dropped), so a game may hold its first song until then
 int MH_MidiReady(void);
 // 1 once each time the synthesizer has lost the song's settings since the
-// last call: the MT32-pi switched synth, MT-32 ROM or SoundFont (it reports
-// that when it has loaded it), was reset, or the OSD's "Reset Hanging Notes"
-// was chosen. Its channels are then as after a reset (programs, volumes,
-// controllers): while MH_MidiWanted(), the game sends the song's again.
+// last call: the music went from the MT32-pi to the synthesizer in the core or
+// back, or the MT32-pi switched synth, MT-32 ROM or SoundFont (it reports that
+// when it has loaded it), was reset, or the OSD's "Reset Hanging Notes" was
+// chosen. Its channels are then as after a reset (programs, volumes,
+// controllers): while MH_MidiWanted(), the game sends the song's again. (The
+// synthesizer in the core keeps its channels through a change of SoundFont.)
 int MH_MidiSynthChanged(void);
-// 0..127: 32 is the MT32-pi's sound as it comes, 127 nearly four times that
+// 0..127: 32 is the sound as it comes (the MT32-pi's, the synthesizer's),
+// 127 nearly four times that
 void MH_MidiVolume(int volume);
 // A MIDI message (status byte 0x80..0xEF, its data bytes; the second is not
 // sent for a program change or channel pressure), made at audio frame
 // `ahead` of the block the game will queue next, as MH_FMWrite(). Never
 // blocks; dropped when the ring is full.
 void MH_MidiEvent(int ahead, int status, int data1, int data2);
-// A system exclusive message, without its F0 and F7
+// A system exclusive message, without its F0 and F7 (the synthesizer knows
+// the GM, GS and XG resets and the GS drum parts)
 void MH_MidiSysEx(int ahead, const uint8_t* data, int length);
 // All sound and notes off, controllers reset, on all 16 channels
 void MH_MidiReset(int ahead);
+// Where the synthesizer's SoundFonts are: games/dnk/SoundFonts on the first
+// USB drive that has it, else on the SD card (MISTER_HYBRID_SOUNDFONTS in the
+// environment for another folder)
+const char* MH_SoundFontDir(void);
 
 // Messages: shown by the core under its logo, on its own picture (the purple
 // screen), host version 13. MH_MSG_ROWS lines of MH_MSG_COLS characters

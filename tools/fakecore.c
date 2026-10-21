@@ -7,13 +7,16 @@
 //
 // The FM chip of the core (hybrid_fm.sv) is a software one here, Nuked OPL3
 // (tools/nuked/, LGPL): the register writes the game queues are made at their
-// audio frames and the chip's sound is in audio.raw with the game's own.
+// audio frames and the chip's sound is in audio.raw with the game's own. The
+// MIDI synthesizer is its C model (tools/midisynth/), the sample memory in the
+// file too (from 0x01000000, 80 MB in all; the file is sparse).
 //
 // An MT32-pi (host version 15) is there with FAKECORE_MT32=1, and the OSD's
 // MT32-pi line (status bit 96, the script's osd2 line) not off: the game's
 // MIDI bytes are then "sent" at their audio frames, and with
 // FAKECORE_MIDILOG=<file> written there, "<audio frame> <bytes in hex>" a
-// line (tools/midilog2mid.py makes a MIDI file of it, to play on the PC).
+// line (tools/midilog2mid.py makes a MIDI file of it, to play on the PC);
+// the synthesizer's commands (host version 16) with FAKECORE_SYNTHLOG=<file>.
 // Its reports (status bits 24..27) are counted when the script's osd2
 // changes the synth, ROM or SoundFont (bits 97..103) or sets bit 104 (Reset
 // Hanging Notes), as the Pi's when it has switched: logged "# reports n".
@@ -42,6 +45,8 @@
 //   vga31 <0|1>             whether 640x400 and 640x480 are progressive at
 //                           31kHz (forced_scandoubler or HDMI Only) or, at
 //                           the start, interlaced at 15kHz
+//   music <0|1>             the OSD's Music: MIDI / FM chip (status bit 87)
+//   soundfont <0..7>        the OSD's SoundFont slot (status bits 88..90)
 //   reload                  count the fields from 0 again, as if the core was
 //                           loaded again
 //   quit                    stop ticking, as if another core was loaded
@@ -58,8 +63,11 @@
 #include <unistd.h>
 
 #include "nuked/opl3.c"
+#include "midisynth/midisynth.c"
 
 #define SHM_SIZE 0x400000
+#define SHM_FILE_SIZE 0x05000000 // and the MIDI sample memory, 64 MB at 0x01000000
+#define MIDI_QUEUE 64            // commands the reader holds ahead of their frames
 #define CTRL_MAGIC 0x4259484D
 #define STATUS_MAGIC 0x5359484D
 #define FIELD_NS 16768000 // 400 x 262 pixels at 6.25MHz
@@ -80,6 +88,41 @@ static unsigned mt32_reports;
 static uint32_t fm_fetch;
 static FILE* fm_log;
 static FILE* midi_log;
+static midisynth* midi_ms;
+static int midi_on;
+static uint32_t midi_fetch;
+static FILE* synth_log;
+
+// one audio frame of the MIDI synthesizer, after taking the commands written
+// (as many as its queue holds)
+static void midi_frame(uint32_t frame, uint32_t wcount, int volume, int* l, int* r) {
+    int64_t sums[4];
+    int16_t out[2];
+    uint64_t cmd[MH_MIDI_CMD_WORDS];
+    int i;
+
+    while (midi_fetch != wcount && ms_queued(midi_ms) < MIDI_QUEUE) {
+        const volatile uint32_t* e = (const volatile uint32_t*)(shm + 0x30000 + (midi_fetch % MH_MIDI_RING_CMDS) * 128);
+
+        for (i = 0; i < MH_MIDI_CMD_WORDS; i++) {
+            cmd[i] = e[2 * i] | (uint64_t)e[2 * i + 1] << 32;
+        }
+        if (synth_log) {
+            // FAKECORE_SYNTHLOG=<file>: every command, "<audio frame read> <16 words>"
+            fprintf(synth_log, "%u", frame);
+            for (i = 0; i < MH_MIDI_CMD_WORDS; i++) {
+                fprintf(synth_log, " %016llx", (unsigned long long)cmd[i]);
+            }
+            fprintf(synth_log, "\n");
+        }
+        ms_push(midi_ms, cmd);
+        midi_fetch++;
+    }
+    ms_frame(midi_ms, frame, sums);
+    ms_output(sums, volume, out);
+    *l += out[0];
+    *r += out[1];
+}
 
 // the entries of the FM ring that are due at `frame`: register writes for
 // the chip, MIDI bytes for the MT32-pi; skipped when that is off
@@ -121,7 +164,7 @@ static int fm_frame(int volume) {
 
 static void tick(void) {
     static struct timespec next;
-    uint32_t c0, c1, c2, c3, c5;
+    uint32_t c0, c1, c2, c3, c4, c5;
     int audio_en, fm_en, midi_en;
 
     if (next.tv_sec == 0) {
@@ -139,6 +182,7 @@ static void tick(void) {
     c1 = ctrl[1];
     c2 = ctrl[2];
     c3 = ctrl[3];
+    c4 = ctrl[4];
     c5 = ctrl[5];
     ctrl_valid = c0 == CTRL_MAGIC;
     // a message (0x1800, host version 13): printed when it changes, as the
@@ -162,6 +206,21 @@ static void tick(void) {
         }
         shown_seq = seq;
     }
+    // MH_OSDInfo() (host version 16): a new request in [23:16] shows text
+    // [15:8] of the I line in Main_MiSTer's info box, held while the OSD is open
+    {
+        static uint32_t info_seq;
+        static int info_waiting;
+        if (ctrl_valid && ((c5 >> 16) & 0xff) != info_seq) {
+            info_seq = (c5 >> 16) & 0xff;
+            info_waiting = ((c5 >> 8) & 0xff) != 0;
+        }
+        if (info_waiting && !osd_open) {
+            printf("fakecore: info box, text %u\n", (c5 >> 8) & 0xff);
+            fflush(stdout);
+            info_waiting = 0;
+        }
+    }
     audio_en = ctrl_valid && ((c1 >> 24) & 1);
     fm_en = audio_en && ((c1 >> 25) & 1);
     midi_en = audio_en && ((c5 >> 7) & 1);
@@ -172,7 +231,7 @@ static void tick(void) {
         fm_fetch = 0;
     }
     fm_on = fm_en;
-    if (midi_out && !(midi_en && mt32 && !(status[35] & 1)) && midi_log) {
+    if (midi_out && !(midi_en && mt32 && !(status[34] >> 23 & 1) && !(status[35] & 1)) && midi_log) {
         // the core tells the Pi to stop all its sound: logged as All Sound
         // Off on every channel
         int ch;
@@ -181,7 +240,15 @@ static void tick(void) {
             fprintf(midi_log, "%u %02x 78 00\n", audio_fetch, 0xb0 | ch);
         }
     }
-    midi_out = midi_en && mt32 && !(status[35] & 1);
+    midi_out = midi_en && mt32 && !(status[34] >> 23 & 1) && !(status[35] & 1);
+    // the synthesizer off: every voice silent, the read count from 0
+    if (!midi_en && midi_on) {
+        ms_reset(midi_ms);
+    }
+    if (!midi_en) {
+        midi_fetch = 0;
+    }
+    midi_on = midi_en;
     if (!ctrl_valid) {
         // no game: the core's own picture, 640x480
         fb_mode = 4;
@@ -211,15 +278,15 @@ static void tick(void) {
             int16_t block[64];
             int i;
             memcpy(block, (void*)(shm + 0x10000 + (audio_fetch % 16384) * 4), sizeof(block));
-            for (i = 0; (fm_on || midi_en) && i < 32; i++) {
+            for (i = 0; (fm_on || midi_on) && i < 32; i++) {
                 int fm, l, r;
                 ring_frame(audio_fetch + i, c3);
-                if (!fm_on) {
-                    continue;
-                }
-                fm = fm_frame((c1 >> 17) & 127);
+                fm = fm_on ? fm_frame((c1 >> 17) & 127) : 0;
                 l = block[i * 2] + fm;
                 r = block[i * 2 + 1] + fm;
+                if (midi_on) {
+                    midi_frame(audio_fetch + i, c4, (int)(c5 & 127), &l, &r);
+                }
                 block[i * 2] = l > 32767 ? 32767 : l < -32768 ? -32768 : l;
                 block[i * 2 + 1] = r > 32767 ? 32767 : r < -32768 ? -32768 : r;
             }
@@ -235,8 +302,22 @@ static void tick(void) {
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
         | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22)
         | (mt32 << 23) | ((mt32_reports & 15) << 24);
-    status[3] = 15;
+    status[3] = 16;
     status[15] = fm_fetch;
+    // the MIDI synthesizer: commands read, voices playing and which, at the
+    // frame it will make next
+    {
+        uint32_t bits[4];
+        int n = ms_playing(midi_ms, bits);
+
+        status[36] = midi_fetch;
+        status[37] = (uint32_t)n << 16;
+        status[38] = bits[0];
+        status[39] = bits[1];
+        status[40] = bits[2];
+        status[41] = bits[3];
+        status[42] = audio_fetch;
+    }
     status[0] = STATUS_MAGIC;
     status[1] = field;
 }
@@ -288,7 +369,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     fd = open(argv[1], O_RDWR | O_CREAT, 0644);
-    if (fd < 0 || ftruncate(fd, SHM_SIZE) != 0) {
+    if (fd < 0 || ftruncate(fd, SHM_FILE_SIZE) != 0) {
         perror(argv[1]);
         return 1;
     }
@@ -300,6 +381,14 @@ int main(int argc, char** argv) {
     ctrl = (volatile uint32_t*)shm;
     status = (volatile uint32_t*)(shm + 0x40);
     memset((void*)shm, 0, 0x1000);
+    {
+        const int16_t* samples = mmap(NULL, MH_MIDI_MAX_SAMPLES * 2, PROT_READ, MAP_SHARED, fd, 0x01000000);
+
+        if (samples == MAP_FAILED || (midi_ms = ms_new(samples, MH_MIDI_MAX_SAMPLES)) == NULL) {
+            perror("MIDI sample memory");
+            return 1;
+        }
+    }
     if (argc > 2 && (script = fopen(argv[2], "r")) == NULL) {
         perror(argv[2]);
         return 1;
@@ -314,6 +403,9 @@ int main(int argc, char** argv) {
     if (getenv("FAKECORE_MIDILOG")) {
         midi_log = fopen(getenv("FAKECORE_MIDILOG"), "w");
         setvbuf(midi_log, NULL, _IOLBF, 0);
+    }
+    if (getenv("FAKECORE_SYNTHLOG")) {
+        synth_log = fopen(getenv("FAKECORE_SYNTHLOG"), "w");
     }
 
     while (script != NULL && fgets(line, sizeof(line), script) != NULL) {
@@ -358,6 +450,11 @@ int main(int argc, char** argv) {
                 }
             }
             status[35] = (uint32_t)osd & ~0x100u;
+        } else if (sscanf(line, "music %d", &a) == 1) {
+            // OSD status bit 87 is bit 23 of status[34]
+            status[34] = (status[34] & ~(1u << 23)) | ((uint32_t)(a != 0) << 23);
+        } else if (sscanf(line, "soundfont %d", &a) == 1) {
+            status[34] = (status[34] & ~(7u << 24)) | ((uint32_t)(a & 7) << 24);
         } else if (sscanf(line, "osd %llx", &osd) == 1) {
             status[8] = (uint32_t)osd;
             status[9] = (uint32_t)(osd >> 32);

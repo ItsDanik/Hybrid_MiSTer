@@ -83,9 +83,15 @@ localparam CONF_STR = {
 	// Bits 16..23 were Menu OK / Menu Back up to host version 13: unused, a
 	// saved setting may still have them set.
 	// GAME: in a core whose games play MIDI music (MH_MidiWanted(),
-	// hybrid/README.md "MIDI and the MT32-pi"), the MT32-pi's lines, after
-	// the game's music option; a core without leaves them out, and the "I"
-	// line below. Shown only while an MT32-pi is connected (menu mask bit 6).
+	// hybrid/README.md "MIDI and the MT32-pi"), these lines after the game's
+	// music option; a core without leaves them out, and the "I" line below.
+	// Music and SoundFont (host version 16): MIDI music or the FM chip's, and
+	// the synthesizer's SoundFont (Default: GeneralUser GS, 1..7 a player's
+	// own .sf2, docs/midi_synth.md). With Music on MIDI an MT32-pi plays it
+	// when one is connected and on, the core's synthesizer otherwise. The
+	// MT32-pi's lines are shown only while one is connected (menu mask bit 6).
+	"O[87],Music,MIDI,FM chip;",
+	"O[90:88],SoundFont,Default,1,2,3,4,5,6,7;",
 	"h6O[96],MT32-pi,On,Off;",
 	"h6O[97],MT32-pi Synth,SoundFont,MT-32;",
 	"h6O[99:98],MT32-pi ROM,MT-32 v1,MT-32 v2,CM-32L;",
@@ -102,13 +108,18 @@ localparam CONF_STR = {
 	// (package/games/@NAME@/danik_hybrid_launch.sh).
 	"J1,Action 1,Action 2,Action 3,Action 4,Action 5,Action 6,Action 7,Menu,Menu OK,Menu Back;",
 	"jn,A,B,X,Y,L,R,Select,Start;",
-	// GAME: a core whose games play MIDI keeps this line, for the lines
-	// of the MT32-pi above; one without leaves both out. Main_MiSTer's info
-	// box shows text n when hybrid_host asks for it (`info`).
+	// GAME: a core whose games play MIDI keeps this line, for the MIDI lines
+	// above; one without leaves both out. Main_MiSTer's info box shows text n
+	// when hybrid_host asks for it (`info`): 1..13 the MT32-pi's synth, 14..16
+	// the SoundFont's errors (MH_INFO_*), then empty ones up to 23; a game's
+	// own texts follow from 24.
 	"I,MT32-pi: SoundFont 0,MT32-pi: SoundFont 1,MT32-pi: SoundFont 2,MT32-pi: SoundFont 3,",
 	"MT32-pi: SoundFont 4,MT32-pi: SoundFont 5,MT32-pi: SoundFont 6,MT32-pi: SoundFont 7,",
 	"MT32-pi: MT-32 v1,MT32-pi: MT-32 v2,MT32-pi: CM-32L,MT32-pi: unknown synth,",
-	"MT32-pi: SoundFont 8 or later;",
+	"MT32-pi: SoundFont 8 or later,",
+	"No SoundFont found\nFM music instead\nCopy GeneralUser-GS.sf2 to\ngames/dnk/SoundFonts/,",
+	"The SoundFont is damaged\nor no SoundFont 2 file\nFM music instead,",
+	"The SoundFont is too big\n(over 64 MB)\nFM music instead,,,,,,,;",
 	"V,v",`BUILD_DATE
 };
 

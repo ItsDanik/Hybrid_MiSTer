@@ -18,14 +18,14 @@ PER=$([ "$VGA31" = 1 ] && echo 1 || echo 2)   # fields per frame
 STEP=$((16 * PER))                            # fields per piece
 docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim \
   iverilog -g2012 -o "/src/${WORK#$PWD/}/tbw" -Ptb_wall.VGA31="$VGA31" -Ptb_wall.START=0 -Ptb_wall.FRAMES=1 \
-  sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v template/core/sys/mt32pi.sv || exit 1
+  sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v sim/hybrid_midi_stub.sv template/core/sys/mt32pi.sv || exit 1
 s=$FROM
 while [ "$s" -le "$TO" ]; do
   # the start and the number of frames are run-time arguments of a build per piece
   docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c "
     iverilog -g2012 -o /tmp/tbw -Ptb_wall.VGA31=$VGA31 -Ptb_wall.START=$s -Ptb_wall.FRAMES=$((STEP / PER)) \
       -Ptb_wall.OUT=\\\"/src/${WORK#$PWD/}/f$(printf %04d "$s")\\\" \
-      sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v template/core/sys/mt32pi.sv && vvp -n /tmp/tbw" &
+      sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v sim/hybrid_midi_stub.sv template/core/sys/mt32pi.sv && vvp -n /tmp/tbw" &
   s=$((s + STEP))
 done
 wait

@@ -39,6 +39,8 @@ copy(here.parent / "hps/mister_joymap.c", "src/core/mister/mister_joymap.c")
 copy(here.parent / "hps/mister_ui.c", "src/core/mister/mister_ui.c")
 copy(here.parent / "hps/mister_games.c", "src/core/mister/mister_games.c")
 copy(here.parent / "hps/mister_triggers.c", "src/core/mister/mister_triggers.c")
+copy(here.parent / "hps/mister_midi.c", "src/core/mister/mister_midi.c")
+copy(here.parent / "hps/mister_midi.h", "src/core/mister/mister_midi.h")
 copy(here.parent / "hps/mister_font.h", "src/core/mister/mister_font.h")
 copy(here.parent / "hps/mister_hybrid.h", "include/mister_hybrid.h")
 

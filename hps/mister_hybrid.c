@@ -12,14 +12,18 @@
 #define _GNU_SOURCE
 #include "mister_hybrid.h"
 #include "mister_font.h"
+#include "mister_midi.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -123,9 +127,24 @@ static uint32_t fm_wr;
 // the ring's writers: the audio thread and, with ahead 0, any other
 static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// MIDI (host version 15): to the MT32-pi on the user port
+// MIDI music: to an MT32-pi on the user port (host version 15), its
+// messages in the FM ring, or to the synthesizer in the core (host version
+// 16, docs/midi_synth.md): commands of 16 words of 64 bits in a ring at
+// MIDI_RING_OFFSET; the SoundFont's samples in a region of their own, mapped
+// only while the synthesizer is used
+#define MIDI_RING_OFFSET 0x30000
+#define MIDI_SAMPLES_PHYS 0x31000000
+#define MIDI_SAMPLES_FILE 0x01000000 // in fakecore's file
+#define MIDI_SAMPLES_SIZE (MH_MIDI_MAX_SAMPLES * 2)
 static int midi_enabled;
 static int midi_volume = 32;
+static int midi_fade = 32; // 32 down to 0 while a SoundFont is changed
+static int info_n, info_seq; // MH_OSDInfo(): the text, and a count of the requests
+static uint32_t midi_wr;
+
+static void midi_off(void);
+static void midi_close(void);
+static void midi_service(void);
 
 static void write_ctrl(void) {
     // Palette/framebuffer writes must land before the FPGA can see the new control block
@@ -133,8 +152,9 @@ static void write_ctrl(void) {
     __sync_synchronize();
     ctrl[2] = palette_seq;
     ctrl[3] = fm_wr;
-    ctrl[4] = 0;
-    ctrl[5] = (uint32_t)midi_volume | ((uint32_t)(midi_enabled && audio_enabled) << 7);
+    ctrl[4] = midi_wr;
+    ctrl[5] = (uint32_t)(midi_volume * midi_fade / 32) | ((uint32_t)(midi_enabled && audio_enabled) << 7)
+        | ((uint32_t)info_n << 8) | ((uint32_t)(info_seq & 0xff) << 16);
     ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24)
         | ((uint32_t)fm_volume << 17) | ((uint32_t)(fm_enabled && audio_enabled) << 25) | ((uint32_t)menu_mask << 28);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
@@ -343,6 +363,7 @@ void MH_Close(void) {
     }
     close_pending = 0;
     if (shm != NULL) {
+        midi_close();
         if (!detached && corename_matches()) {
             // back to the core's own picture, audio off. Not once another
             // core is loaded: the memory is its own then
@@ -429,48 +450,19 @@ const char* MH_SetName(void) {
     return set_name;
 }
 
-// The OSD's FPS Counter (MH_OSD_FPS): the frames presented in the last second,
-// drawn into the copy of the frame that the core shows, 8 pixels in from the
-// corner (a television hides the edge). With a palette: its lightest colour
-// on its darkest.
-static void fps_stamp(volatile uint8_t* dst, int row, int height) {
-    static struct timespec since;
-    static int count;
-    static int shown = -1;
+// Text drawn into the copy of the frame that the core shows (the FPS counter,
+// the SoundFont's name): line `line` of 10 pixels from 8 pixels in from the
+// corner (a television hides the edge), cut at the screen's edge. With a
+// palette: its lightest colour on its darkest.
+static void stamp_text(volatile uint8_t* dst, int row, int height, int line, const char* text) {
     static uint32_t pal_seq = ~0u;
     static uint8_t ink8, paper8;
-    struct timespec now;
-    char text[8];
-    double elapsed;
     int width = MH_Width();
     int bpp = row / width;
     int sx = width >= 640 ? 2 : 1;
     int sy = height >= 400 ? 2 : 1;
-    int n, c, x, y, w;
-    static int forced = -2; // MISTER_HYBRID_FPS=0|1: the counter off or on whatever the OSD says (screenshots)
+    int n = (int)strlen(text), c, x, y, w;
 
-    if (forced == -2) {
-        forced = getenv("MISTER_HYBRID_FPS") ? atoi(getenv("MISTER_HYBRID_FPS")) != 0 : -1;
-    }
-    if (forced == 0 || (forced < 0 && !MH_OSD_FPS(MH_OSDStatus()))) {
-        shown = -1;
-        count = 0;
-        return;
-    }
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    if (shown < 0 && count == 0) {
-        since = now;
-    }
-    count++;
-    elapsed = (double)(now.tv_sec - since.tv_sec) + (double)(now.tv_nsec - since.tv_nsec) * 1e-9;
-    if (elapsed >= 1.0) {
-        shown = (int)((count - 1) / elapsed + 0.5);
-        count = 1;
-        since = now;
-    }
-    if (shown < 0) {
-        return;
-    }
     if (bpp == 1 && pal_seq != palette_seq) {
         const volatile uint32_t* pal = (const volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
         int light = -1, dark = 1 << 30;
@@ -484,30 +476,108 @@ static void fps_stamp(volatile uint8_t* dst, int row, int height) {
         }
         pal_seq = palette_seq;
     }
-    n = snprintf(text, sizeof text, "%d", shown > 999 ? 999 : shown);
+    if (n > (width / sx - 18) / 8) {
+        n = (width / sx - 18) / 8;
+    }
     w = n * 8 + 2;
-    if ((8 + w) * sx > width || 18 * sy > height) {
+    if (n <= 0 || (18 + 10 * line) * sy > height) {
         return;
     }
     for (y = 0; y < 10 * sy; y++) {
-        volatile uint8_t* line = dst + (8 * sy + y) * row;
+        volatile uint8_t* out = dst + ((8 + 10 * line) * sy + y) * row;
 
         for (x = 0; x < w * sx; x++) {
             int gx = x / sx - 1, gy = y / sy - 1;
             int on = 0;
 
             if (gx >= 0 && gx < n * 8 && gy >= 0 && gy < 8) {
-                on = (mh_font[text[gx / 8] - 32][gy] >> (gx & 7)) & 1;
+                unsigned char ch = (unsigned char)text[gx / 8];
+
+                on = ch >= 32 && ch < 127 && (mh_font[ch - 32][gy] >> (gx & 7)) & 1;
             }
             if (bpp == 2) {
-                ((volatile uint16_t*)line)[8 * sx + x] = on ? 0xFFE0 : 0x0000;
+                ((volatile uint16_t*)out)[8 * sx + x] = on ? 0xFFE0 : 0x0000;
             } else {
-                line[8 * sx + x] = on ? ink8 : paper8;
+                out[8 * sx + x] = on ? ink8 : paper8;
             }
         }
     }
 }
 
+// The OSD's FPS Counter (MH_OSD_FPS): the frames presented in the last second.
+// Returns the lines it took.
+static int fps_stamp(volatile uint8_t* dst, int row, int height) {
+    static struct timespec since;
+    static int count;
+    static int shown = -1;
+    struct timespec now;
+    char text[8];
+    double elapsed;
+    static int forced = -2; // MISTER_HYBRID_FPS=0|1: the counter off or on whatever the OSD says (screenshots)
+
+    if (forced == -2) {
+        forced = getenv("MISTER_HYBRID_FPS") ? atoi(getenv("MISTER_HYBRID_FPS")) != 0 : -1;
+    }
+    if (forced == 0 || (forced < 0 && !MH_OSD_FPS(MH_OSDStatus()))) {
+        shown = -1;
+        count = 0;
+        return 0;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (shown < 0 && count == 0) {
+        since = now;
+    }
+    count++;
+    elapsed = (double)(now.tv_sec - since.tv_sec) + (double)(now.tv_nsec - since.tv_nsec) * 1e-9;
+    if (elapsed >= 1.0) {
+        shown = (int)((count - 1) / elapsed + 0.5);
+        count = 1;
+        since = now;
+    }
+    if (shown < 0) {
+        return 0;
+    }
+    snprintf(text, sizeof text, "%d", shown > 999 ? 999 : shown);
+    stamp_text(dst, row, height, 0, text);
+    return 1;
+}
+
+// A note of the MIDI synthesizer (the SoundFont chosen, or why there is none),
+// shown for a few seconds under the FPS counter's place
+#define MIDI_NOTE_LINES 3
+static pthread_mutex_t note_lock = PTHREAD_MUTEX_INITIALIZER;
+static char midi_note[MIDI_NOTE_LINES][80];
+static struct timespec midi_note_until;
+
+static void midi_show(int seconds, const char* l0, const char* l1, const char* l2) {
+    pthread_mutex_lock(&note_lock);
+    snprintf(midi_note[0], sizeof midi_note[0], "%s", l0);
+    snprintf(midi_note[1], sizeof midi_note[1], "%s", l1 ? l1 : "");
+    snprintf(midi_note[2], sizeof midi_note[2], "%s", l2 ? l2 : "");
+    clock_gettime(CLOCK_MONOTONIC, &midi_note_until);
+    midi_note_until.tv_sec += seconds;
+    pthread_mutex_unlock(&note_lock);
+    fprintf(stderr, "mister: %s%s%s%s%s\n", l0, l1 ? " " : "", l1 ? l1 : "", l2 ? " " : "", l2 ? l2 : "");
+}
+
+static void midi_stamp(volatile uint8_t* dst, int row, int height, int line) {
+    struct timespec now;
+    int k;
+
+    if (midi_note[0][0] == 0) {
+        return;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    pthread_mutex_lock(&note_lock);
+    if (now.tv_sec > midi_note_until.tv_sec
+        || (now.tv_sec == midi_note_until.tv_sec && now.tv_nsec >= midi_note_until.tv_nsec)) {
+        midi_note[0][0] = 0;
+    }
+    for (k = 0; k < MIDI_NOTE_LINES && midi_note[0][0] != 0 && midi_note[k][0] != 0; k++) {
+        stamp_text(dst, row, height, line + k, midi_note[k]);
+    }
+    pthread_mutex_unlock(&note_lock);
+}
 
 // MISTER_HYBRID_PACE=1: every 300 frames, on stderr, how the frames came to
 // the core. It shows the newest at each vblank, so a frame handed over in the
@@ -590,7 +660,7 @@ static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
             memcpy((void*)(dst + y * row), pixels + y * pitch, row);
         }
     }
-    fps_stamp(dst, row, height);
+    midi_stamp(dst, row, height, fps_stamp(dst, row, height));
     // MH_PresentAtField(): the core takes the newest frame at every vblank, so
     // this one is handed over in the field before its own, not earlier (the
     // frame before it would never be shown). Interlaced, frames are taken at
@@ -1053,6 +1123,17 @@ void MH_SetMenuMask(int mask) {
     write_ctrl();
 }
 
+void MH_OSDInfo(int n) {
+    if (!MH_IsOpen() || n < 1 || n > 255) {
+        return;
+    }
+    pthread_mutex_lock(&ctrl_lock);
+    info_n = n;
+    info_seq++;
+    pthread_mutex_unlock(&ctrl_lock);
+    write_ctrl();
+}
+
 static long elapsed_ms(const struct timespec* since) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -1260,7 +1341,7 @@ void MH_AudioEnable(int enabled) {
         // to stop its notes)
         fm_enabled = 0;
         fm_wr = 0;
-        midi_enabled = 0;
+        midi_off();
     }
     audio_enabled = enabled;
     write_ctrl();
@@ -1336,6 +1417,7 @@ void MH_AudioWrite(const uint32_t* frames, int count, int lead) {
         ring[(audio_wr + i) % MH_AUDIO_RING_FRAMES] = frames[i];
     }
     audio_wr += count;
+    midi_service();
 }
 
 int MH_FMAvailable(void) {
@@ -1439,11 +1521,348 @@ void MH_FMEnable(int enabled) {
     }
 }
 
+// MIDI music goes to one of two (docs/midi_synth.md, "The MT32-pi and the
+// synthesizer"): with the OSD on MIDI (status bit 87), to an MT32-pi that is
+// connected and on in the OSD (bit 96), else to the synthesizer in the core
+// (host version 16). The synthesizer follows every channel's settings
+// whichever plays, its notes only while it is the one.
+enum { MIDI_NONE, MIDI_PI, MIDI_SYNTH };
+static int midi_to = MIDI_NONE;          // where it went at the last block
+static volatile unsigned midi_switches;  // changes of where it goes, for MH_MidiSynthChanged()
+
+// The synthesizer's ARM side. midi_lock serialises the game's calls,
+// the audio thread's service (midi_service()) and the SoundFont loader, which
+// holds it only between its steps: MH_MidiEvent() never waits for a load.
+static pthread_mutex_t midi_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t midi_cond = PTHREAD_COND_INITIALIZER;
+static mh_midi* midi;
+static mh_sfont* midi_font;
+static char midi_font_path[512];
+static int16_t* midi_samples;  // the sample memory, mapped
+static uint32_t midi_dropped;  // commands that found the ring full
+static int midi_slot;          // the SoundFont slot the OSD asks for
+static int midi_tried = -1;    // the slot last loaded or tried
+static int midi_ok;            // that slot's SoundFont is loaded
+static int midi_loading;
+static int midi_quit;
+static int midi_thread_on;
+static pthread_t midi_thread;
+
 int MH_MidiAvailable(void) {
     return MH_IsOpen() && status[3] >= 15;
 }
 
+// the core has the synthesizer
+static int midi_synth_there(void) {
+    return MH_IsOpen() && status[3] >= 16;
+}
+
+static int midi_dest(void) {
+    // status bits 64..127
+    uint64_t high = MH_OSDStatusHigh();
+
+    if (!MH_MidiAvailable() || !midi_enabled || !audio_enabled || ((high >> 23) & 1)) {
+        return MIDI_NONE;
+    }
+    if ((status[2] & STATUS_MT32) && !((high >> 32) & 1)) {
+        return MIDI_PI;
+    }
+    return midi_synth_there() && midi != NULL ? MIDI_SYNTH : MIDI_NONE;
+}
+
+const char* MH_SoundFontDir(void) {
+    static char dir[64];
+    const char* env = getenv("MISTER_HYBRID_SOUNDFONTS");
+    struct stat st;
+    int i;
+
+    if (env != NULL && env[0] != 0) {
+        return env;
+    }
+    for (i = 0; i < 8; i++) {
+        snprintf(dir, sizeof dir, "/media/usb%d/games/dnk/SoundFonts", i);
+        if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+            return dir;
+        }
+    }
+    return "/media/fat/games/dnk/SoundFonts";
+}
+
+static int name_cmp(const void* a, const void* b) {
+    return strcasecmp(*(char* const*)a, *(char* const*)b);
+}
+
+// The file slots.txt names for a slot, when it is there (docs/midiplayer.md,
+// "slots.txt"): lines "<slot> <file>", # and empty lines skipped. -1 without
+// slots.txt, 0 when the slot is not listed or its file is missing
+static int slots_file(int slot, char* path, int size) {
+    char line[320];
+    FILE* f;
+    int found = 0;
+
+    snprintf(line, sizeof line, "%s/slots.txt", MH_SoundFontDir());
+    f = fopen(line, "r");
+    if (f == NULL) {
+        return -1;
+    }
+    while (!found && fgets(line, sizeof line, f) != NULL) {
+        size_t len = strcspn(line, "\r\n");
+        struct stat st;
+
+        line[len] = 0;
+        if (line[0] >= '0' && line[0] <= '7' && line[1] == ' ' && line[2] != 0 && line[0] - '0' == slot) {
+            snprintf(path, (size_t)size, "%s/%s", MH_SoundFontDir(), line + 2);
+            found = stat(path, &st) == 0 && S_ISREG(st.st_mode);
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+// The SoundFont of an OSD slot (docs/midi_synth.md, "Where the SoundFonts
+// are"): the file slots.txt names for it; without slots.txt, 0
+// GeneralUser-GS.sf2, else the first .sf2 by name, and N the Nth other .sf2
+// by name, case ignored. An empty slot is slot 0's. 0 when the folder has no
+// font; *own is 0 for an empty slot.
+static int soundfont_of(int slot, char* path, int size, int* own) {
+    DIR* d;
+    struct dirent* e;
+    char* names[256];
+    int n = 0, def = 0, pick, i, listed;
+
+    listed = slots_file(slot, path, size);
+    if (listed == 1) {
+        *own = 1;
+        return 1;
+    }
+    if (listed == 0 && slot != 0) {
+        // slots.txt has no font for it: slot 0's
+        if (!soundfont_of(0, path, size, own)) {
+            return 0;
+        }
+        *own = 0;
+        return 1;
+    }
+    d = opendir(MH_SoundFontDir());
+    if (d == NULL) {
+        return 0;
+    }
+    while ((e = readdir(d)) != NULL && n < 256) {
+        size_t len = strlen(e->d_name);
+
+        if (len > 4 && e->d_name[0] != '.' && strcasecmp(e->d_name + len - 4, ".sf2") == 0) {
+            names[n] = strdup(e->d_name);
+            n += names[n] != NULL;
+        }
+    }
+    closedir(d);
+    if (n == 0) {
+        return 0;
+    }
+    qsort(names, (size_t)n, sizeof names[0], name_cmp);
+    for (i = 0; i < n; i++) {
+        if (strcasecmp(names[i], "GeneralUser-GS.sf2") == 0) {
+            def = i;
+        }
+    }
+    pick = def;
+    *own = slot == 0;
+    for (i = 0; i < n && slot > 0; i++) {
+        if (i != def && --slot == 0) {
+            pick = i;
+            *own = 1;
+        }
+    }
+    snprintf(path, (size_t)size, "%s/%s", MH_SoundFontDir(), names[pick]);
+    for (i = 0; i < n; i++) {
+        free(names[i]);
+    }
+    return 1;
+}
+
+// A command into the ring (mh_midi's emit), under midi_lock. status[36]: the
+// commands the core has read
+static void midi_emit(void* ctx, const uint64_t* cmd) {
+    volatile uint32_t* ring;
+    int i;
+
+    (void)ctx;
+    if (!MH_IsOpen()) {
+        return;
+    }
+    if (midi_wr - status[36] >= MH_MIDI_RING_CMDS) {
+        midi_dropped++;
+        return;
+    }
+    ring = (volatile uint32_t*)(shm + MIDI_RING_OFFSET + (midi_wr % MH_MIDI_RING_CMDS) * MH_MIDI_CMD_WORDS * 8);
+    for (i = 0; i < MH_MIDI_CMD_WORDS; i++) {
+        ring[2 * i] = (uint32_t)cmd[i];
+        ring[2 * i + 1] = (uint32_t)(cmd[i] >> 32);
+    }
+    __sync_synchronize();
+    // one word, as MH_FMWrite()'s count
+    midi_wr++;
+    ctrl[4] = midi_wr;
+}
+
+// Every voice stopped and the sample memory no longer read: the core has
+// played the frame of the stop
+static void midi_stop_and_wait(void) {
+    uint32_t at;
+    int i;
+
+    pthread_mutex_lock(&midi_lock);
+    at = audio_wr;
+    if (midi != NULL) {
+        mh_midi_stop_all(midi, at);
+        mh_midi_set_font(midi, NULL);
+        mh_midi_flush(midi);
+    }
+    pthread_mutex_unlock(&midi_lock);
+    for (i = 0; i < 1000 && MH_IsOpen() && midi_enabled
+         && (int32_t)(*(volatile uint32_t*)(shm + AUDIO_PTR_OFFSET) - at) < MH_MIDI_BLOCK; i++) {
+        sleep_ms(1);
+    }
+}
+
+// Loads the slot's SoundFont, the music faded out meanwhile
+static void midi_load(int slot, int first) {
+    char path[512], err[160], line[80];
+    mh_sfont* font;
+    int own = 0, k;
+
+    if (!soundfont_of(slot, path, sizeof path, &own)) {
+        pthread_mutex_lock(&midi_lock);
+        midi_ok = 0;
+        pthread_mutex_unlock(&midi_lock);
+        fprintf(stderr, "mister: no SoundFont in %s/, FM music instead\n", MH_SoundFontDir());
+        MH_OSDInfo(MH_INFO_NO_SOUNDFONT);
+        return;
+    }
+    if (!first) {
+        if (own && slot == 0) {
+            snprintf(line, sizeof line, "SoundFont Default: %s", strrchr(path, '/') + 1);
+            midi_show(3, line, NULL, NULL);
+        } else if (own) {
+            snprintf(line, sizeof line, "SoundFont %d: %s", slot, strrchr(path, '/') + 1);
+            midi_show(3, line, NULL, NULL);
+        } else {
+            snprintf(line, sizeof line, "SoundFont %d: none, using", slot);
+            midi_show(3, line, strrchr(path, '/') + 1, NULL);
+        }
+    }
+    if (midi_font != NULL && strcmp(path, midi_font_path) == 0) {
+        pthread_mutex_lock(&midi_lock);
+        midi_ok = 1;
+        pthread_mutex_unlock(&midi_lock);
+        return;
+    }
+    if (midi_font != NULL) {
+        // fade out over 48ms, then nothing may read the samples
+        for (k = 28; k >= 0 && MH_IsOpen(); k -= 4) {
+            midi_fade = k;
+            write_ctrl();
+            sleep_ms(6);
+        }
+        midi_stop_and_wait();
+        pthread_mutex_lock(&midi_lock);
+        font = midi_font;
+        midi_font = NULL;
+        midi_font_path[0] = 0;
+        pthread_mutex_unlock(&midi_lock);
+        mh_sfont_free(font);
+    }
+    font = MH_IsOpen() ? mh_sfont_load(path, midi_samples, MH_MIDI_MAX_SAMPLES, err, sizeof err) : NULL;
+    pthread_mutex_lock(&midi_lock);
+    midi_font = font;
+    midi_ok = font != NULL;
+    if (font != NULL) {
+        snprintf(midi_font_path, sizeof midi_font_path, "%s", path);
+        if (midi != NULL) {
+            mh_midi_set_font(midi, font);
+        }
+    }
+    pthread_mutex_unlock(&midi_lock);
+    midi_fade = 32;
+    if (MH_IsOpen()) {
+        write_ctrl();
+    }
+    if (font == NULL && MH_IsOpen()) {
+        fprintf(stderr, "mister: SoundFont %s %s, FM music instead\n", path, err);
+        // "has 140 MB of samples, more than ..."
+        MH_OSDInfo(strncmp(err, "has ", 4) == 0 ? MH_INFO_SOUNDFONT_TOO_BIG : MH_INFO_SOUNDFONT_DAMAGED);
+    } else if (font != NULL) {
+        fprintf(stderr, "mister: SoundFont %s loaded\n", path);
+    }
+}
+
+// The loader: the slot the OSD asks for, whenever it changes
+static void* midi_loader(void* arg) {
+    int slot, first = 1;
+
+    (void)arg;
+    MH_PinThreadToCPU1();
+    pthread_mutex_lock(&midi_lock);
+    for (;;) {
+        while (!midi_quit && midi_slot == midi_tried) {
+            pthread_cond_wait(&midi_cond, &midi_lock);
+        }
+        if (midi_quit) {
+            break;
+        }
+        slot = midi_tried = midi_slot;
+        midi_loading = 1;
+        pthread_mutex_unlock(&midi_lock);
+        midi_load(slot, first);
+        first = 0;
+        pthread_mutex_lock(&midi_lock);
+        midi_loading = 0;
+    }
+    pthread_mutex_unlock(&midi_lock);
+    return NULL;
+}
+
+static void midi_off(void) {
+    pthread_mutex_lock(&midi_lock);
+    midi_enabled = 0;
+    midi_to = MIDI_NONE;
+    if (midi != NULL) {
+        mh_midi_free(midi);
+        midi = NULL;
+    }
+    pthread_mutex_unlock(&midi_lock);
+    if (MH_IsOpen()) {
+        write_ctrl();
+    }
+}
+
+// At MH_Close(): the loader stopped, the font and the sample memory let go
+static void midi_close(void) {
+    midi_off();
+    if (midi_thread_on) {
+        pthread_mutex_lock(&midi_lock);
+        midi_quit = 1;
+        pthread_cond_broadcast(&midi_cond);
+        pthread_mutex_unlock(&midi_lock);
+        pthread_join(midi_thread, NULL);
+        midi_thread_on = 0;
+        midi_quit = 0;
+    }
+    if (midi_font != NULL) {
+        mh_sfont_free(midi_font);
+        midi_font = NULL;
+    }
+    midi_font_path[0] = 0;
+    midi_tried = -1;
+    midi_ok = 0;
+    if (midi_samples != NULL) {
+        munmap(midi_samples, MIDI_SAMPLES_SIZE);
+        midi_samples = NULL;
+    }
+}
+
 void MH_MidiEnable(int enabled) {
+    void* p;
     int i;
 
     enabled = enabled != 0;
@@ -1457,50 +1876,92 @@ void MH_MidiEnable(int enabled) {
         for (i = 0; i < 50 && status[15] != fm_wr; i++) {
             sleep_ms(2);
         }
-        midi_enabled = 0;
+        midi_off();
         ring_stop();
         return;
     }
+    if (midi_synth_there() && midi_samples == NULL) {
+        p = mmap(NULL, MIDI_SAMPLES_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, mem_fd,
+            shm_is_file ? MIDI_SAMPLES_FILE : MIDI_SAMPLES_PHYS);
+        if (p == MAP_FAILED) {
+            // an MT32-pi can still play
+            fprintf(stderr, "mister: cannot map the MIDI sample memory\n");
+        } else {
+            midi_samples = p;
+        }
+    }
+    if (midi_samples != NULL) {
+        // The core starts its read count from 0 when it has seen the
+        // synthesizer off, at a vblank, as with the FM chip
+        midi_wr = 0;
+        write_ctrl();
+        for (i = 0; i < 100 && status[36] != 0; i++) {
+            sleep_ms(2);
+        }
+    }
     ring_start();
+    pthread_mutex_lock(&midi_lock);
+    if (midi_samples != NULL) {
+        midi = mh_midi_new(midi_emit, NULL);
+    }
+    if (midi != NULL) {
+        mh_midi_set_gain(midi, 0.5f);
+        if (midi_font != NULL && midi_ok) {
+            mh_midi_set_font(midi, midi_font);
+        }
+        midi_slot = (int)((MH_OSDStatusHigh() >> 24) & 7);
+        midi_dropped = 0;
+    }
     midi_enabled = 1;
+    if (midi != NULL && !midi_thread_on && pthread_create(&midi_thread, NULL, midi_loader, NULL) == 0) {
+        midi_thread_on = 1;
+    }
+    pthread_cond_signal(&midi_cond);
+    pthread_mutex_unlock(&midi_lock);
     write_ctrl();
 }
 
 int MH_MidiWanted(void) {
-    static int was = -1;
-    int there, wanted;
+    int dest = midi_dest(), wanted = dest == MIDI_PI;
 
-    if (!MH_MidiAvailable()) {
-        return 0;
+    if (dest == MIDI_SYNTH) {
+        pthread_mutex_lock(&midi_lock);
+        wanted = midi_ok || midi_loading || midi_tried != midi_slot;
+        pthread_mutex_unlock(&midi_lock);
     }
-    there = (status[2] & STATUS_MT32) != 0;
-    // OSD status bit 96, "MT32-pi: Off" (status[35] holds bits 96..127)
-    wanted = there && !(status[35] & 1);
-    if (there * 2 + wanted != was) {
-        printf("mister: MT32-pi %s\n", !there ? "not connected" : wanted ? "connected, the music goes to it" : "connected, off in the OSD");
-        was = there * 2 + wanted;
-    }
-    return wanted && midi_enabled && audio_enabled;
+    return wanted;
 }
 
 int MH_MidiReady(void) {
-    return MH_MidiWanted();
+    int ready;
+
+    if (!MH_MidiWanted()) {
+        return 0;
+    }
+    if (midi_dest() == MIDI_PI) {
+        return 1;
+    }
+    pthread_mutex_lock(&midi_lock);
+    ready = midi_ok && !midi_loading && midi_tried == midi_slot;
+    pthread_mutex_unlock(&midi_lock);
+    return ready;
 }
 
-// the core counts the Pi's reports in status bits 24..27
+// the core counts the Pi's reports in status bits 24..27; the music going
+// to the other of the two counts as well
 int MH_MidiSynthChanged(void) {
-    static unsigned last = ~0u;
+    static unsigned last = ~0u, last_switches;
     unsigned reports;
+    int changed;
 
     if (!MH_MidiAvailable()) {
         return 0;
     }
     reports = (status[2] >> 24) & 15;
-    if (reports == last) {
-        return 0;
-    }
+    changed = reports != last || midi_switches != last_switches;
     last = reports;
-    return 1;
+    last_switches = midi_switches;
+    return changed;
 }
 
 void MH_MidiVolume(int volume) {
@@ -1510,23 +1971,56 @@ void MH_MidiVolume(int volume) {
     }
 }
 
-// n bytes of MIDI (1..3) in one entry of the ring
-static void midi_put(int ahead, const uint8_t* b, int n) {
+static uint32_t midi_frame(int ahead) {
+    return audio_wr + (uint32_t)(ahead < 0 ? 0 : ahead);
+}
+
+// n bytes of MIDI (1..3) in one entry of the FM ring, for the MT32-pi
+static void pi_put(int ahead, const uint8_t* b, int n) {
     ring_put(ahead, (uint32_t)b[0] | (n > 1 ? (uint32_t)b[1] << 8 : 0) | (n > 2 ? (uint32_t)b[2] << 16 : 0)
         | ((uint32_t)n << 24));
 }
 
-void MH_MidiEvent(int ahead, int status_byte, int data1, int data2) {
+static void pi_event(int ahead, int status_byte, int data1, int data2) {
     uint8_t b[3];
 
-    if (!MH_IsOpen() || !midi_enabled || !audio_enabled || status_byte < 0x80 || status_byte >= 0xF0) {
-        return;
-    }
     b[0] = (uint8_t)status_byte;
     b[1] = (uint8_t)(data1 & 0x7f);
     b[2] = (uint8_t)(data2 & 0x7f);
     // program change and channel pressure have one data byte
-    midi_put(ahead, b, (status_byte & 0xe0) == 0xc0 ? 2 : 3);
+    pi_put(ahead, b, (status_byte & 0xe0) == 0xc0 ? 2 : 3);
+}
+
+static void pi_reset(int ahead) {
+    int ch;
+
+    for (ch = 0; ch < 16; ch++) {
+        pi_event(ahead, 0xb0 | ch, 120, 0); // all sound off
+        pi_event(ahead, 0xb0 | ch, 123, 0); // all notes off (an MT-32 knows only this one)
+        pi_event(ahead, 0xb0 | ch, 121, 0); // reset all controllers
+    }
+}
+
+void MH_MidiEvent(int ahead, int status_byte, int data1, int data2) {
+    int dest;
+
+    if (!MH_IsOpen() || !midi_enabled || !audio_enabled || status_byte < 0x80 || status_byte >= 0xF0) {
+        return;
+    }
+    dest = midi_dest();
+    if (dest == MIDI_PI) {
+        pi_event(ahead, status_byte, data1, data2);
+    }
+    // the synthesizer's notes only while it plays (the OSD may have just
+    // turned to the FM chip: the game is about to turn to its FM music)
+    if (dest != MIDI_SYNTH && (status_byte & 0xf0) == 0x90 && (data2 & 0x7f) > 0) {
+        return;
+    }
+    pthread_mutex_lock(&midi_lock);
+    if (midi != NULL) {
+        mh_midi_event(midi, midi_frame(ahead), status_byte, data1, data2);
+    }
+    pthread_mutex_unlock(&midi_lock);
 }
 
 void MH_MidiSysEx(int ahead, const uint8_t* data, int length) {
@@ -1536,30 +2030,103 @@ void MH_MidiSysEx(int ahead, const uint8_t* data, int length) {
     if (!MH_IsOpen() || !midi_enabled || !audio_enabled || length < 0) {
         return;
     }
-    b[0] = 0xf0;
-    n = 1;
-    for (i = 0; i <= length; i++) {
-        b[n++] = i < length ? (data[i] & 0x7f) : 0xf7;
-        if (n == 3 || i == length) {
-            midi_put(ahead, b, n);
-            n = 0;
+    if (midi_dest() == MIDI_PI) {
+        b[0] = 0xf0;
+        n = 1;
+        for (i = 0; i <= length; i++) {
+            b[n++] = i < length ? (data[i] & 0x7f) : 0xf7;
+            if (n == 3 || i == length) {
+                pi_put(ahead, b, n);
+                n = 0;
+            }
         }
     }
+    pthread_mutex_lock(&midi_lock);
+    if (midi != NULL) {
+        mh_midi_sysex(midi, midi_frame(ahead), data, length);
+    }
+    pthread_mutex_unlock(&midi_lock);
 }
 
 void MH_MidiReset(int ahead) {
-    uint8_t b[3];
-    int ch;
+    if (!MH_IsOpen() || !midi_enabled || !audio_enabled) {
+        return;
+    }
+    if (midi_dest() == MIDI_PI) {
+        pi_reset(ahead);
+    }
+    pthread_mutex_lock(&midi_lock);
+    if (midi != NULL) {
+        mh_midi_reset(midi, midi_frame(ahead));
+    }
+    pthread_mutex_unlock(&midi_lock);
+}
 
-    for (ch = 0; ch < 16; ch++) {
-        b[0] = (uint8_t)(0xb0 | ch);
-        b[2] = 0;
-        b[1] = 120; // all sound off
-        MH_MidiEvent(ahead, b[0], b[1], b[2]);
-        b[1] = 123; // all notes off (an MT-32 knows only this one)
-        MH_MidiEvent(ahead, b[0], b[1], b[2]);
-        b[1] = 121; // reset all controllers
-        MH_MidiEvent(ahead, b[0], b[1], b[2]);
+// From MH_AudioWrite(), once a block: the voices the core has ended, the OSD's
+// choice of SoundFont, and the commands of the block out to the core
+static void midi_service(void) {
+    static int stats = -1;
+    static uint32_t dropped_told;
+    static int told = -1;
+    uint32_t bits[4], frame;
+    uint64_t high;
+    int i, dest, there;
+
+    if (!midi_enabled) {
+        midi_to = MIDI_NONE;
+        return;
+    }
+    dest = midi_dest();
+    there = (status[2] & STATUS_MT32) != 0;
+    if (there * 4 + dest != told) {
+        printf("mister: MIDI music %s%s\n",
+            dest == MIDI_PI ? "to the MT32-pi" : dest == MIDI_SYNTH ? "to the synthesizer" : "off",
+            !there || dest == MIDI_PI ? "" : ((MH_OSDStatusHigh() >> 23) & 1) ? " (FM chip in the OSD)"
+                                                                               : ", MT32-pi off in the OSD");
+        told = there * 4 + dest;
+    }
+    if (dest != midi_to) {
+        if (midi_to == MIDI_PI) {
+            pi_reset(0);
+        }
+        if (dest != MIDI_NONE) {
+            midi_switches++;
+        }
+    }
+    pthread_mutex_lock(&midi_lock);
+    if (midi != NULL) {
+        // the core writes them at a vblank: the frame again, for a set of one
+        for (i = 0; i < 4; i++) {
+            frame = status[42];
+            bits[0] = status[38];
+            bits[1] = status[39];
+            bits[2] = status[40];
+            bits[3] = status[41];
+            if (status[42] == frame) {
+                mh_midi_voices(midi, frame, bits);
+                break;
+            }
+        }
+        if (midi_to == MIDI_SYNTH && dest != MIDI_SYNTH) {
+            // the music goes to the Pi, or the game turns to its FM music:
+            // nothing of the synthesizer's goes on
+            mh_midi_stop_all(midi, audio_wr);
+        }
+        high = MH_OSDStatusHigh();
+        if ((int)((high >> 24) & 7) != midi_slot) {
+            midi_slot = (int)((high >> 24) & 7);
+            pthread_cond_signal(&midi_cond);
+        }
+        mh_midi_flush(midi);
+    }
+    pthread_mutex_unlock(&midi_lock);
+    midi_to = dest;
+    if (stats < 0) {
+        stats = getenv("MISTER_HYBRID_STATS") != NULL;
+    }
+    if (stats && midi_dropped != dropped_told) {
+        fprintf(stderr, "mister: MIDI ring full, %u commands dropped\n", midi_dropped);
+        dropped_told = midi_dropped;
     }
 }
 

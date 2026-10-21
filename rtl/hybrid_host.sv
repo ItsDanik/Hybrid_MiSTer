@@ -18,8 +18,10 @@
 //  killed, or running when the MiSTer was reset, leaves that behind, and the
 //  memory keeps it: the core clears the magic when it starts (ctrl_clear).
 //
-//  Two clocks: `clk` (50MHz) for the DDR3 side, audio and input, and
-//  `clk_vid` for the video output, made here by hybrid_vclk.sv.
+//  Four clocks: `clk` (50MHz) for the DDR3 side, audio and input,
+//  `clk_vid` for the video output, made here by hybrid_vclk.sv, the MIDI
+//  synthesizer's 100MHz (hybrid_midi.sv, its own PLL) and the framework's
+//  CLK_AUDIO for the MT32-pi's module.
 //
 //  An MT32-pi (an external MIDI synthesizer on a Raspberry Pi, through the
 //  user port, host version 15) is handled here as well: see "MT32-pi" below.
@@ -44,13 +46,20 @@
 //              w1[63:32] number of entries written to the FM ring so far
 //              w2 (host version 15; the core clears it when it starts, so a
 //              game built before, which never writes it, leaves it 0)
-//                  [31:0]  0
-//                  [38:32] MIDI volume: the MT32-pi's sound, 32 = as it
-//                          comes, 127 = four times
+//                  [31:0]  commands written to the MIDI ring so far (host
+//                          version 16)
+//                  [38:32] MIDI volume: the MT32-pi's sound and the
+//                          synthesizer's, 32 = as it comes, 127 = four times
 //                  [39]    MIDI enable (with audio enable): MIDI messages of
 //                          the FM ring go to the MT32-pi, and its sound is
-//                          in the mix
-//                  [63:40] 0
+//                          in the mix; off, every voice of the synthesizer is
+//                          silent and its commands read count from 0
+//                  [47:40] info text, [55:48] info request count (host
+//                          version 16): when the count changes and the text
+//                          is not 0, Main_MiSTer's info box shows that text
+//                          of the core's "I," line, once the OSD menu is
+//                          closed
+//                  [63:56] 0
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
 //              w1  {version, 8'b0, mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
@@ -93,7 +102,10 @@
 //                  once a field would miss; the core flips the bit at each
 //                  one instead
 //              w5  {mouse y accumulator, mouse x accumulator}
-//              w6  {wheel accumulator[15:0], 13'b0, mouse buttons[2:0]}
+//              w6  {video lines late[15:0], 16'b0, wheel accumulator[15:0],
+//                   13'b0, mouse buttons[2:0]}: a line is late when the
+//                   next one is asked for before its read is done (host
+//                   version 16; counts on, wrapping)
 //              w7  {FM ring entries read so far[31:0], 3'b0, video clock
 //                   measured[12:0], 8'b0, video clock asked for[7:0]}: the
 //                   clock asked for in units of 0.5MHz, the one measured in
@@ -104,6 +116,10 @@
 //    0x0000C8  OSD status[127:64] (FPGA -> HPS), written every vblank after
 //              the status block (host version 13): the CRT Options page,
 //              with the HUD margins at bits 77..81 and 82..86
+//    0x0000D0  MIDI status (FPGA -> HPS, host version 16), written every
+//              vblank after that: w0 {8'b0, voices playing, cache underruns
+//              [15:0], commands read [31:0]}, w1 and w2 the voices playing
+//              (bit v of voice v), w3 [31:0] the audio frame they are of
 //    0x001000  palette slot 0: 256 x 32-bit 0x00RRGGBB
 //    0x001400  palette slot 1
 //    0x001800  message (HPS -> FPGA, host version 13), shown under the logo
@@ -127,12 +143,17 @@
 //              its audio frame. A register write has [63:48] 0. Entries of a
 //              kind that is not enabled are skipped. The ring is read while
 //              audio is enabled with the FM chip or MIDI or both.
+//    0x030000  MIDI ring (host version 16): 1024 commands of 16 words for
+//              the synthesizer (hybrid_midi.sv, docs/midi_synth.md); its
+//              sound is added too
 //    0x100000  framebuffer 0 (row stride = width of the video mode in pixels;
 //              an interlaced mode has all its rows here, as a progressive one)
 //    0x200000  framebuffer 1
 //    0x300000  framebuffer 2
 //    (0x400000 to 0x9FFFFF were the framebuffers of 1024x768 up to host
 //    version 12)
+//    0x1000000 the MIDI synthesizer's samples (host version 16): 64 MB of
+//              16-bit samples, sample n at byte 2n
 //
 //  This program is free software; you can redistribute it and/or modify it
 //  under the terms of the GNU General Public License as published by the Free
@@ -232,15 +253,16 @@ module hybrid_host
 	// an MT32-pi answers: its OSD lines are shown (a bit of status_menumask)
 	output            mt32_on,
 	// Main_MiSTer's info box (hps_io's info_req / info): text `info` of the
-	// CONF_STR's "I" line, the MT32-pi's synth when it has changed
-	output reg        info_req,
-	output reg  [7:0] info
+	// CONF_STR's "I" line at a rising edge: the MT32-pi's synth when it has
+	// changed, or the game's (MH_OSDInfo())
+	output reg        info_req = 0,
+	output reg  [7:0] info = 0
 );
 
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd15;
+localparam [31:0] VERSION      = 32'd16;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -254,6 +276,9 @@ localparam [28:0] AUD_PTR    = BASE + 29'h18;
 localparam [28:0] STAT_HI    = BASE + 29'h19;      // OSD status[127:64]
 localparam  [7:0] AUD_BURST  = 8'd16;             // 32 frames
 localparam [28:0] FM_ADDR    = BASE + 29'h4000;   // ring, 4096 words
+localparam [28:0] MIDI_ADDR  = BASE + 29'h6000;   // ring, 1024 commands of 16 words
+localparam [28:0] MSTAT_ADDR = BASE + 29'h1A;     // MIDI status, 4 words
+localparam [28:0] SMP_ADDR   = BASE + 29'h200000; // the MIDI samples
 
 assign ddr_be = 8'hFF;
 
@@ -495,6 +520,10 @@ reg        pal_loaded = 0;
 reg [31:0] frame_cnt = 0;
 
 reg [63:0] ctrl_w0, ctrl_w1, ctrl_w2;
+reg  [7:0] info_seen = 0;
+reg        info_pend = 0;
+reg  [7:0] info_txt = 0;
+reg  [3:0] pi_info_seen = 0;
 
 //////////////////////////////////////////////////////////////////
 // Memories
@@ -972,8 +1001,9 @@ reg [31:0] aud_play = 0;      // frames played
 reg signed [15:0] pcm_l = 0, pcm_r = 0;
 wire signed [15:0] fm_snd;
 wire signed [18:0] mt32_snd_l, mt32_snd_r;
-wire signed [19:0] mix_l = pcm_l + fm_snd + mt32_snd_l;
-wire signed [19:0] mix_r = pcm_r + fm_snd + mt32_snd_r;
+wire signed [15:0] midi_l, midi_r;
+wire signed [19:0] mix_l = pcm_l + fm_snd + mt32_snd_l + midi_l;
+wire signed [19:0] mix_r = pcm_r + fm_snd + mt32_snd_r + midi_r;
 
 wire [6:0] afifo_level = afifo_wr - afifo_rd;
 
@@ -1010,8 +1040,8 @@ always @(posedge clk) begin
 		// on underrun the last sample is held
 	end
 
-	// the FM chip's sound and the MT32-pi's on top (silent while not
-	// enabled), held at the limits
+	// the FM chip's sound, the MT32-pi's and the MIDI synthesizer's on top
+	// (silent while not enabled), held at the limits
 	aud_tick3 <= aud_tick2;
 	if (aud_tick3) begin
 		audio_l <= (mix_l > 20'sd32767) ? 16'sd32767 : (mix_l < -20'sd32768) ? -16'sd32768 : mix_l[15:0];
@@ -1093,6 +1123,9 @@ hybrid_fm fm
 reg        midi_en = 0;
 reg  [6:0] midi_vol = 7'd32;
 wire       ring_en = fm_en || midi_en;
+// the MT32-pi's synth for the info box, for the block that drives it
+reg  [7:0] pi_info = 0;
+reg  [3:0] pi_info_cnt = 0;
 
 wire        mt32_available, mt32_newmode;
 wire  [7:0] mt32_mode, mt32_rom, mt32_sf;
@@ -1106,7 +1139,8 @@ reg   [1:0] pi_sda_s = 2'b11;
 reg  [25:0] pi_quiet_t = 0;
 wire        pi_quiet = (pi_quiet_t == MT32_QUIET);
 assign      mt32_on = mt32_seen && !pi_quiet;
-wire        midi_want = midi_en && !osd_status[96];
+// the OSD's Music on MIDI (bit 87, host version 16) and MT32-pi on
+wire        midi_want = midi_en && !osd_status[87] && !osd_status[96];
 wire        midi_out  = midi_want && mt32_on;
 
 // the queue
@@ -1226,19 +1260,17 @@ always @(posedge clk) begin
 	// "MT32-pi: SoundFont 3" in the info box while the music goes to the Pi:
 	// when it starts to, and when the Pi reports another synth (it reports
 	// the same one again after a mute). A core whose game plays no MIDI has
-	// none, nor the CONF_STR's "I" line. hps_io takes `info` at the rising
-	// edge of info_req.
+	// none, nor the CONF_STR's "I" line. The DDR engine's block asks for it.
 	newmode_s <= {newmode_s[2:0], mt32_newmode};
 	if (newmode_s[3] != newmode_s[2]) begin
 		synth        <= {mt32_mode, mt32_rom, mt32_sf};
 		mt32_reports <= mt32_reports + 1'd1;
 	end
-	info_req <= 0;
 	if (!midi_out) shown <= 24'hFFFFFF;
-	else if (synth != 24'hFFFFFF && synth != shown && !info_req) begin
-		shown    <= synth;
-		info     <= info_n;
-		info_req <= 1;
+	else if (synth != 24'hFFFFFF && synth != shown) begin
+		shown       <= synth;
+		pi_info     <= info_n;
+		pi_info_cnt <= pi_info_cnt + 1'd1;
 	end
 end
 
@@ -1247,6 +1279,67 @@ wire signed [23:0] mt32_l_v = mt32_l * $signed({1'b0, midi_vol});
 wire signed [23:0] mt32_r_v = mt32_r * $signed({1'b0, midi_vol});
 assign mt32_snd_l = midi_out ? mt32_l_v[23:5] : 19'sd0;
 assign mt32_snd_r = midi_out ? mt32_r_v[23:5] : 19'sd0;
+
+//////////////////////////////////////////////////////////////////
+// MIDI synthesizer (hybrid_midi.sv)
+//
+// On its own 100MHz clock. The DDR engine below reads for it: the commands
+// of the MIDI ring, one at a time into its parameter slots, as soon as the
+// game has written them and a slot is free, and the samples its fetcher asks
+// for. It makes each audio frame in the one before; its sound is taken at
+// the strobe that counts aud_play to that frame.
+
+reg [31:0] midi_wcount = 0;
+wire       midi_cmd_req, midi_smp_req;
+wire [13:0] midi_cmd_addr;
+wire [22:0] midi_smp_addr;
+wire  [3:0] midi_smp_len;
+reg        midi_cmd_ack = 0, midi_smp_ack = 0;
+wire       midi_beat;
+wire [31:0] midi_read, midi_frame;
+wire [15:0] midi_under;
+wire  [7:0] midi_voices;
+wire [127:0] midi_bits;
+wire       clk_midi;
+
+pll_midi pll_midi
+(
+	.refclk(refclk),
+	.rst(1'b0),
+	.outclk_0(clk_midi),
+	.locked()
+);
+
+hybrid_midi midi
+(
+	.clk       (clk),
+	.mclk      (clk_midi),
+	.en        (midi_en),
+	.wcount    (midi_wcount),
+	.volume    (midi_vol),
+	.frame_stb (aud_tick2 && audio_en && afifo_level != 0),
+	.frame     (aud_play + 1'd1),
+	.cmd_req   (midi_cmd_req),
+	.cmd_addr  (midi_cmd_addr),
+	.cmd_ack   (midi_cmd_ack),
+	.smp_req   (midi_smp_req),
+	.smp_addr  (midi_smp_addr),
+	.smp_len   (midi_smp_len),
+	.smp_ack   (midi_smp_ack),
+	.beat      (midi_beat),
+	.dout      (ddr_dout),
+	.out_l     (midi_l),
+	.out_r     (midi_r),
+	.st_read   (midi_read),
+	.st_under  (midi_under),
+	.st_voices (midi_voices),
+	.st_bits   (midi_bits),
+	.st_frame  (midi_frame),
+	.dbg_sums  (),
+	.dbg_out   (),
+	.dbg_frame (),
+	.dbg_tgl   ()
+);
 
 //////////////////////////////////////////////////////////////////
 // Input state
@@ -1299,13 +1392,19 @@ localparam S_MSG_RD    = 11;
 localparam S_MSG_HDR   = 12;
 localparam S_MSG_BODY  = 13;
 localparam S_CLEAR2    = 14;
+localparam S_MIDI_WAIT = 15;
+localparam S_MIDI_STAT = 16;
 
-reg  [3:0] state = S_IDLE;
+reg  [4:0] state = S_IDLE;
+
+// the words of a read for the MIDI synthesizer
+assign midi_beat = ddr_dout_ready && state == S_MIDI_WAIT;
 // The control block is not read before the core has cleared its magic, in
 // its first 4 vblanks (more than once: the memory may not be there for the
 // very first write). Only when the core starts, not with a reset.
 reg  [2:0] ctrl_clear = 3'd4;
 reg        line_req = 0;
+reg [15:0] late_lines = 0;
 reg        vbl_req = 0;
 reg  [9:0] fetch_row;
 reg        fetch_bank;
@@ -1338,7 +1437,7 @@ always @(*) begin
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:0]};
 		4'd5:  stat_word = {mouse_y, mouse_x};
-		4'd6:  stat_word = {32'd0, mouse_wheel, 13'd0, mouse_btn};
+		4'd6:  stat_word = {late_lines, 16'd0, mouse_wheel, 13'd0, mouse_btn};
 		4'd7:  stat_word = {fm_fetch, 3'd0, vclk_count, 8'd0, vclk_code};
 		default: stat_word = keys[{wr_beat[2:0], 6'd0} +: 64];
 	endcase
@@ -1370,6 +1469,7 @@ always @(posedge clk) begin
 	req_s <= {req_s[1:0], req_tgl};
 	vbl_s <= {vbl_s[1:0], vbl_tgl};
 	if (req_s[2] != req_s[1]) begin
+		if (line_req || state == S_LINE_WAIT) late_lines <= late_lines + 1'd1;
 		line_req   <= 1;
 		fetch_row  <= req_row;
 		fetch_bank <= req_bank;
@@ -1417,6 +1517,9 @@ always @(posedge clk) begin
 		endcase
 	end
 
+	midi_cmd_ack <= 0;
+	midi_smp_ack <= 0;
+
 	if (!ddr_busy) begin
 		ddr_rd <= 0;
 
@@ -1440,6 +1543,17 @@ always @(posedge clk) begin
 					ddr_rd       <= 1;
 					state        <= S_AUD_WAIT;
 				end
+				// the MIDI synthesizer's samples (the ack's clock: its
+				// request is still up, the next one not yet)
+				else if (midi_smp_req && !midi_smp_ack && !midi_cmd_ack) begin
+					rd_cnt       <= 0;
+					rd_len       <= {4'd0, midi_smp_len};
+					ddr_addr     <= SMP_ADDR + {6'd0, midi_smp_addr};
+					ddr_burstcnt <= {4'd0, midi_smp_len};
+					ddr_rd       <= 1;
+					midi_smp_ack <= 1;
+					state        <= S_MIDI_WAIT;
+				end
 				else if (ring_en && !fm_ent_valid && !fm_take && !mq_put && fm_fetch != fm_wcount) begin
 					rd_cnt       <= 0;
 					rd_len       <= 8'd1;
@@ -1447,6 +1561,15 @@ always @(posedge clk) begin
 					ddr_burstcnt <= 8'd1;
 					ddr_rd       <= 1;
 					state        <= S_FM_WAIT;
+				end
+				else if (midi_cmd_req && !midi_smp_ack && !midi_cmd_ack) begin
+					rd_cnt       <= 0;
+					rd_len       <= 8'd16;
+					ddr_addr     <= MIDI_ADDR + {15'd0, midi_cmd_addr};
+					ddr_burstcnt <= 8'd16;
+					ddr_rd       <= 1;
+					midi_cmd_ack <= 1;
+					state        <= S_MIDI_WAIT;
 				end
 				else if (vbl_req && ctrl_clear != 0) begin
 					vbl_req <= 0;
@@ -1473,6 +1596,9 @@ always @(posedge clk) begin
 				end
 
 			S_FM_WAIT:
+				if (rd_cnt == rd_len) state <= S_IDLE;
+
+			S_MIDI_WAIT:
 				if (rd_cnt == rd_len) state <= S_IDLE;
 
 			S_AUD_PTR:
@@ -1570,9 +1696,18 @@ always @(posedge clk) begin
 				audio_en <= ctrl_magic && ctrl_w0[56];
 				fm_en    <= ctrl_magic && ctrl_w0[56] && ctrl_w0[57];
 				fm_vol   <= ctrl_w0[55:49];
-				midi_en  <= ctrl_magic && ctrl_w0[56] && ctrl_w2[39];
-				midi_vol <= ctrl_w2[38:32];
 				fm_wcount <= ctrl_w1[63:32];
+				midi_en     <= ctrl_magic && ctrl_w0[56] && ctrl_w2[39];
+				midi_vol    <= ctrl_w2[38:32];
+				midi_wcount <= ctrl_w2[31:0];
+				// an info box asked for: shown once the OSD menu is closed
+				if (ctrl_magic && ctrl_w2[55:48] != info_seen) begin
+					info_seen <= ctrl_w2[55:48];
+					if (ctrl_w2[47:40] != 0) begin
+						info_pend <= 1;
+						info_txt  <= ctrl_w2[47:40];
+					end
+				end
 				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
 				game_on  <= game_take;
 				if (ctrl_magic) begin
@@ -1673,8 +1808,25 @@ always @(posedge clk) begin
 					ddr_burstcnt <= 8'd1;
 					ddr_din      <= osd_status[127:64];
 				end else begin
+					ddr_we  <= 0;
+					wr_beat <= 0;
+					state   <= S_MIDI_STAT;
+				end
+
+			S_MIDI_STAT:
+				// the MIDI synthesizer's status: a burst of 4
+				if (!ddr_we) begin
+					ddr_we       <= 1;
+					ddr_addr     <= MSTAT_ADDR;
+					ddr_burstcnt <= 8'd4;
+					ddr_din      <= {8'd0, midi_voices, midi_under, midi_read};
+					wr_beat      <= 1;
+				end else if (wr_beat == 4'd4) begin
 					ddr_we <= 0;
 					state  <= S_IDLE;
+				end else begin
+					ddr_din <= wr_beat == 4'd1 ? midi_bits[63:0] : wr_beat == 4'd2 ? midi_bits[127:64] : {32'd0, midi_frame};
+					wr_beat <= wr_beat + 1'd1;
 				end
 
 			default: state <= S_IDLE;
@@ -1706,6 +1858,21 @@ always @(posedge clk) begin
 		fm_en      <= 0;
 		midi_en    <= 0;
 		menumask   <= 0;
+		info_pend  <= 0;
+	end
+	// the info box: the MT32-pi's synth as soon as it changes, the game's
+	// text once the OSD menu is closed; hps_io takes `info` at the rising
+	// edge of info_req
+	info_req <= 0;
+	if (pi_info_cnt != pi_info_seen && !info_req) begin
+		pi_info_seen <= pi_info_cnt;
+		info         <= pi_info;
+		info_req     <= 1;
+	end
+	else if (info_pend && !osd_open_s[1] && !info_req) begin
+		info      <= info_txt;
+		info_req  <= 1;
+		info_pend <= 0;
 	end
 	if (!audio_en) aud_fetch <= 0;
 	if (!ring_en) begin

@@ -35,7 +35,7 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim 
   iverilog -g2012 -o /tmp/tbw -Ptb_wall.WALL=\"$1/hybrid_wall.hex\" -Ptb_wall.WALL_PAL=\"$1/hybrid_wall_pal.hex\" \
     -Ptb_wall.WALL_DOTS=\"$1/hybrid_wall_dots.hex\" -Ptb_wall.WALL_EASE=\"$1/hybrid_wall_ease.hex\" \
     -Ptb_wall.OUT=\"/tmp/wall\" -Ptb_wall.VGA31=$2 -Ptb_wall.MSG=\"$3\" -Ptb_wall.TIMEOUT=$4 -Ptb_wall.START=$5 \
-    sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v template/core/sys/mt32pi.sv &&
+    sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v sim/hybrid_midi_stub.sv template/core/sys/mt32pi.sv &&
   vvp -n /tmp/tbw >&2 && cat /tmp/wall_000.ppm' sh "$DIR" "$VGA31" "${MSGFILE#$PWD/}" "$TIMEOUT" "${START:--1}" > "$OUT.ppm" || { rm -f "$OUT.ppm" "$MSGFILE"; exit 1; }
 rm -f "$MSGFILE"
 python3 -c "
