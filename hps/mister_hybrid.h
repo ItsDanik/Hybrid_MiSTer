@@ -264,6 +264,27 @@ int MH_ReadStickButtons(int* left, int* right);
 // nothing): left alone the motors stop by themselves after two seconds.
 // Returns 0 while no controller that can rumble is connected.
 int MH_Rumble(int strong, int weak);
+// Force feedback (a racing wheel, or a joystick that has it): Linux force
+// feedback with constant forces (FF_CONSTANT) on every connected controller
+// that can; Main_MiSTer passes a core none. Effects are in slots of the
+// game's choosing, 0..MH_FORCE_SLOTS-1, a slot one effect, played together.
+// A level is -255 (to the left) .. 255 (to the right). An effect with no end
+// (ms = 0) runs until set again or stopped, but a game must call
+// MH_ForceKeep() at least every second while it wants it (once a frame is
+// fine): left alone it stops by itself after two seconds, so that a game that
+// went away leaves no wheel pulling. Written without a wheel to try it on
+// (2026-10-21, for ReNFS): MISTER_HYBRID_FORCE_INVERT=1 in the game's
+// environment turns every force the other way. Each returns 0 while no such
+// controller is connected.
+#define MH_FORCE_SLOTS 8
+int MH_ForceAvailable(void);
+// A constant force of `level` for `ms` milliseconds (0: no end)
+int MH_ForceConstant(int slot, int level, int ms);
+// A shake: a sine of `magnitude` 0..255 and `period_ms`, for `ms` (0: no end)
+int MH_ForceSine(int slot, int magnitude, int period_ms, int ms);
+// Stop the slot's effect (-1: every slot)
+void MH_ForceStop(int slot);
+void MH_ForceKeep(void);
 // USB HID usage (= SDL scancode) of a key bitmap index, 0 if there is none
 int MH_KeyToHID(int key_index);
 

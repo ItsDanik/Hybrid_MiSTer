@@ -37,6 +37,13 @@
 // stop by themselves; a game that wants them to go on keeps calling
 // MH_Rumble(), which stores the effect again every second. Every controller
 // that can rumble does.
+//
+// FORCES (MH_Force*: a racing wheel's, or a joystick's): the same devices,
+// those with FF_CONSTANT. Each slot an effect stored on every such device,
+// played until it ends; one with no end is stored with two seconds to run and
+// stored again by MH_ForceKeep() every second, for the same reason as the
+// rumble. Main_MiSTer may have grabbed the wheel: force feedback is written
+// to it all the same (a grab stops only the events read from it).
 
 #include "mister_hybrid.h"
 
@@ -67,6 +74,9 @@ typedef struct {
     int wheel;   // a wheel Main_MiSTer hands the pedals of (is_wheel)
     int rumbles; // it can, and was opened for writing
     int effect;  // the stored effect, -1 = none yet
+    int forces;  // FF_CONSTANT, and opened for writing (MH_Force*)
+    int force_id[MH_FORCE_SLOTS]; // the slots' stored effects, -1 = none yet
+    int sines;   // FF_PERIODIC with FF_SINE as well
 } pad;
 
 static pad pads[MAX_PADS];
@@ -233,6 +243,22 @@ static void scan(void) {
         memset(ff, 0, sizeof ff);
         pads[free_slot].rumbles = writable && ioctl(fd, EVIOCGBIT(EV_FF, sizeof ff), ff) >= 0 && has_bit(ff, FF_RUMBLE);
         pads[free_slot].effect = -1;
+        pads[free_slot].forces = writable && has_bit(ff, FF_CONSTANT);
+        pads[free_slot].sines = pads[free_slot].forces && has_bit(ff, FF_PERIODIC) && has_bit(ff, FF_SINE);
+        for (i = 0; i < MH_FORCE_SLOTS; i++) {
+            pads[free_slot].force_id[i] = -1;
+        }
+        if (pads[free_slot].forces && has_bit(ff, FF_GAIN)) {
+            struct input_event gain;
+
+            memset(&gain, 0, sizeof gain);
+            gain.type = EV_FF;
+            gain.code = FF_GAIN;
+            gain.value = 0xffff;
+            if (write(fd, &gain, sizeof gain) < 0) {
+                // (no gain: as it is)
+            }
+        }
         pads[free_slot].fd = fd;
         snprintf(pads[free_slot].name, sizeof pads[free_slot].name, "%s", e->d_name);
         pads[free_slot].seen = 1;
@@ -388,6 +414,163 @@ int MH_Rumble(int strong, int weak) {
     last_weak = weak;
     sent = now;
     return any;
+}
+
+// ---- forces ----
+
+typedef struct {
+    int kind;         // 0 none, 1 constant, 2 sine
+    int level;        // the constant's, or the sine's magnitude
+    int period;       // the sine's, ms
+    long long end;    // when it stops (0: no end)
+    long long stored; // when it was last stored (no end: again every second)
+} force;
+
+static force forces[MH_FORCE_SLOTS];
+
+static void force_stop_on(pad* p, int slot) {
+    struct input_event ev;
+
+    if (p->force_id[slot] < 0) {
+        return;
+    }
+    memset(&ev, 0, sizeof ev);
+    ev.type = EV_FF;
+    ev.code = (unsigned short)p->force_id[slot];
+    ev.value = 0;
+    if (write(p->fd, &ev, sizeof ev) < 0 && errno == ENODEV) {
+        close(p->fd);
+        p->fd = -1;
+    }
+}
+
+// the slot's effect stored on every device that can and started; 1 if one could
+static int force_store(int slot, long long now) {
+    const force* f = &forces[slot];
+    const char* inv = getenv("MISTER_HYBRID_FORCE_INVERT");
+    int sign = inv != NULL && atoi(inv) ? -1 : 1;
+    int any = 0;
+    int i;
+
+    for (i = 0; i < MAX_PADS; i++) {
+        pad* p = &pads[i];
+        struct ff_effect effect;
+        struct input_event ev;
+        long long left;
+
+        if (p->fd < 0 || !p->forces) {
+            continue;
+        }
+        any = 1;
+        if (f->kind == 0 || (f->kind == 2 && !p->sines)) {
+            force_stop_on(p, slot);
+            continue;
+        }
+        memset(&effect, 0, sizeof effect);
+        effect.id = (short)p->force_id[slot];
+        // 0x4000: across, the way a wheel turns; a positive level to the right
+        effect.direction = 0x4000;
+        left = f->end ? f->end - now : 2000;
+        effect.replay.length = (unsigned short)(left < 1 ? 1 : left > 0x7fff ? 0x7fff : left);
+        if (f->kind == 1) {
+            effect.type = FF_CONSTANT;
+            effect.u.constant.level = (short)(sign * f->level * 128);
+        } else {
+            effect.type = FF_PERIODIC;
+            effect.u.periodic.waveform = FF_SINE;
+            effect.u.periodic.period = (unsigned short)(f->period < 1 ? 1 : f->period);
+            effect.u.periodic.magnitude = (short)(f->level * 128);
+        }
+        if (ioctl(p->fd, EVIOCSFF, &effect) < 0) {
+            if (errno == ENODEV) {
+                close(p->fd);
+                p->fd = -1;
+            }
+            continue;
+        }
+        p->force_id[slot] = effect.id;
+        memset(&ev, 0, sizeof ev);
+        ev.type = EV_FF;
+        ev.code = (unsigned short)effect.id;
+        ev.value = 1;
+        if (write(p->fd, &ev, sizeof ev) < 0) {
+            continue;
+        }
+    }
+    forces[slot].stored = now;
+    return any;
+}
+
+int MH_ForceAvailable(void) {
+    int i;
+
+    refresh();
+    for (i = 0; i < MAX_PADS; i++) {
+        if (pads[i].fd >= 0 && pads[i].forces) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int force_set(int slot, int kind, int level, int period, int ms) {
+    long long now = now_ms();
+    force* f;
+
+    if (slot < 0 || slot >= MH_FORCE_SLOTS) {
+        return 0;
+    }
+    refresh();
+    f = &forces[slot];
+    level = level < -255 ? -255 : level > 255 ? 255 : level;
+    if (kind == 2) {
+        level = level < 0 ? -level : level;
+    }
+    if (level == 0) {
+        kind = 0;
+    }
+    if (kind == f->kind && level == f->level && period == f->period && ms == 0 && f->end == 0 && kind != 0 &&
+        now - f->stored < 1000) {
+        return MH_ForceAvailable(); // the same, no end: kept going
+    }
+    f->kind = kind;
+    f->level = level;
+    f->period = period;
+    f->end = ms > 0 ? now + ms : 0;
+    return force_store(slot, now);
+}
+
+int MH_ForceConstant(int slot, int level, int ms) {
+    return force_set(slot, 1, level, 0, ms);
+}
+
+int MH_ForceSine(int slot, int magnitude, int period_ms, int ms) {
+    return force_set(slot, 2, magnitude, period_ms, ms);
+}
+
+void MH_ForceStop(int slot) {
+    int i;
+
+    for (i = 0; i < MH_FORCE_SLOTS; i++) {
+        if (slot < 0 || i == slot) {
+            force_set(i, 0, 0, 0, 0);
+        }
+    }
+}
+
+void MH_ForceKeep(void) {
+    long long now = now_ms();
+    int i;
+
+    for (i = 0; i < MH_FORCE_SLOTS; i++) {
+        if (forces[i].kind != 0 && forces[i].end == 0 && now - forces[i].stored >= 1000) {
+            refresh();
+            force_store(i, now);
+        }
+        if (forces[i].kind != 0 && forces[i].end != 0 && now >= forces[i].end) {
+            forces[i].kind = 0; // (it ended by itself)
+        }
+    }
 }
 
 // 1 while the button with Linux code `code` (BTN_*) is pressed on any
