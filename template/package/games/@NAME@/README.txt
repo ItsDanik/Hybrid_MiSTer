@@ -52,6 +52,8 @@ OSD options
                 picture: the core's own, with its messages, keeps its
                 width. Not there with forced_scandoubler=1.
   TODO game options
+  Save Diagnostic Report
+                the last line: see "If something is wrong" below.
 
 Controls
   Keyboard and mouse:
@@ -75,6 +77,17 @@ Controls
   Change the buttons in the OSD under "Define @NAME@ buttons". "Menu OK" and
   "Menu Back" there are only needed for a spare button without a game
   function. While the OSD is open, the game gets no input.
+
+If something is wrong
+  If the game stutters, the sound breaks up or something else is wrong,
+  open the OSD while it happens and pick Save Diagnostic Report, the last
+  line of the menu. The game keeps running; MiSTer's info box says the
+  report is saved in games/dnk/diagnostics/ on the SD card. Send that file
+  (@NAME@_<date>_<time>.zip) with a few words on what went wrong. The
+  report has the setup (versions, the video and audio lines of MiSTer.ini,
+  the OSD settings), how the last 60 seconds went, the game's log and a
+  screenshot. Nothing else: no network settings, addresses, saved games or
+  lists of your files.
 
 Files
   TODO settings and saved games
