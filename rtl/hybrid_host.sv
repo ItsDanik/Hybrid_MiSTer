@@ -882,8 +882,10 @@ always @(posedge clk) begin
 		end
 		7'd7: begin
 			bg_in  <= fade(WALL_BG, lv_bg);
-			lv_dim <= (lv_msg * 9'd154) >> 8;
-			lv_bar <= (lv_msg * 9'd192) >> 8;
+			// 17 bits: in the 9 of lv_msg the product overflowed (the bar and
+			// the marks at level 0, the background's colour)
+			lv_dim <= (lv_msg * 17'd154) >> 8;
+			lv_bar <= (lv_msg * 17'd192) >> 8;
 		end
 		7'd8: begin
 			wall_bg <= fade(bg_in, wall_level);
