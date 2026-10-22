@@ -4,9 +4,11 @@
 # S. Christian Collins, its version pinned here, into <folder> (the zip's
 # games/dnk/SoundFonts/) with its licence next to it.
 #
-# It is never committed, in no repository: package.sh fetches it from the
-# author's GitHub at the commit below, checks it against the SHA-256 sums,
-# and keeps it in the core's build/soundfont/ for the next package. The
+# It is never committed to a core's repository or the framework's (the
+# database's, dnk_Distribution_MiSTer, holds the copy players get):
+# package.sh fetches it from the author's GitHub at the commit below,
+# checks it against the SHA-256 sums, and keeps it in the core's
+# build/soundfont/ for the next package. The
 # licence lets it be shared and asks that it be shared from our own copy, not
 # by a link to the author's files: players get the database's copy.
 #
