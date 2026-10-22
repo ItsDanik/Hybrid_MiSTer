@@ -57,6 +57,11 @@
 #define STATUS_ALONE (1u << 21)
 #define STATUS_MT32 (1u << 23)
 #define STATUS_SYNTH (1u << 28) // the MIDI synthesizer is in the core (host version 16)
+#define STATUS_OVL (1u << 29)   // the overlay's handover has begun (host version 17)
+#define STATUS_OVL_OUT (1u << 30) // the overlay is out, as w2[58] asked (host version 17)
+#define CTRL_OVL (1u << 26)     // w0[58] in ctrl[1]: the overlay (host version 17)
+#define CTRL_OVL_OUT (1u << 26) // w2[58] in ctrl[5]: the overlay goes out, and stays out
+#define CTRL_OVL_RISE (1u << 27) // w2[59] in ctrl[5]: it rises in and sinks out (the logo)
 
 static const struct {
     short width, height;
@@ -88,6 +93,41 @@ static int audio_enabled;
 // set once the core is gone: another core may own the memory now, never write to it again
 static volatile int detached;
 static int reloaded; // detached because the core started over
+
+// The game's logo at its start (host version 17, docs/game_logo.md): drawn
+// into a framebuffer the core shows over its picture (the overlay), where
+// the MiSTer logo was, the lines under it, and the game's first frame held
+// back until it has been there 2 seconds
+#define LOGO_BOTTOM 295 // the MiSTer logo's bottom edge, the game's logo's too
+#define LOGO_IN 92      // fields from the handover's start to the logo fully in (OVL_T_IN + OVL_D_IN)
+#define LOGO_LINE 24    // fields a line is shown before the next comes (0.4 seconds)
+#define LOGO_HOLD 120   // fields the logo stays once it is in (2 seconds)
+#define LOGO_WAIT 900   // fields to wait for the handover before going on without it (15 seconds)
+#define LOGO_LINES 3
+static const char* const logo_text[LOGO_LINES] = { "Checking Game Data...", "Game Data OK", "Loading %s..." };
+static int overlay_mode; // MH_Overlay(1): the program's frames go on the overlay
+static struct {
+    int on;             // the overlay is asked for (w0[58]): the game's frames wait
+    int out;            // the logo going out for the program's page (overlay_mode)
+    int first;          // the first of the lines shown: LOGO_LINES - 1, "Loading" alone
+    int leaving;        // given up, the picture going out with it: still 8bpp
+    int in_known;       // the handover was seen, `in` is the field the logo is fully in
+    uint32_t in;
+    uint32_t start;     // the field it was asked for
+    int lines;          // the lines shown so far
+    int stop;           // the thread is to end
+    volatile int done;  // it has
+    int taken;          // another message took the lines' place
+    char title[64];
+    pthread_t thread;
+    int thread_on;
+    uint32_t palette[256]; // the game's palette, held back until its first frame
+    int palette_held;
+} logo;
+static pthread_mutex_t logo_lock = PTHREAD_MUTEX_INITIALIZER;
+static void logo_release(void);
+static void logo_start_thread(void);
+static void logo_end_thread(void);
 
 static int cpu1_allowed;
 static pid_t game_tid; // the thread that called MH_Open()
@@ -142,6 +182,7 @@ static pthread_mutex_t ring_lock = PTHREAD_MUTEX_INITIALIZER;
 #define MIDI_SAMPLES_SIZE (MH_MIDI_MAX_SAMPLES * 2)
 static int midi_enabled;
 static int midi_volume = 32;
+static int midi_program_dest = MH_MIDI_OSD;  // MH_MidiDest(): where the music goes, the program's choice
 static int midi_fade = 32; // 32 down to 0 while a SoundFont is changed
 static int info_n, info_seq; // MH_OSDInfo(): the text, and a count of the requests
 static uint32_t midi_wr;
@@ -158,9 +199,17 @@ static void write_ctrl(void) {
     ctrl[3] = fm_wr;
     ctrl[4] = midi_wr;
     ctrl[5] = (uint32_t)(midi_volume * midi_fade / 32) | ((uint32_t)(midi_enabled && audio_enabled) << 7)
-        | ((uint32_t)info_n << 8) | ((uint32_t)(info_seq & 0xff) << 16);
-    ctrl[1] = fb_current | (fb_format << 8) | (fb_mode << 12) | (palette_slot << 16) | (audio_enabled << 24)
-        | ((uint32_t)fm_volume << 17) | ((uint32_t)(fm_enabled && audio_enabled) << 25) | ((uint32_t)menu_mask << 28);
+        | ((uint32_t)info_n << 8) | ((uint32_t)(info_seq & 0xff) << 16)
+        | ((uint32_t)(midi_program_dest != MH_MIDI_OSD) << 24) | ((uint32_t)(midi_program_dest == MH_MIDI_PI) << 25)
+        | (logo.out ? CTRL_OVL_OUT : 0) | (logo.on ? CTRL_OVL_RISE : 0);
+    // the overlay is 640x480 at 8bpp; given up, the picture goes out with
+    // it in the game's mode, still read at 8bpp. The logo rises into place
+    // (ctrl[5] above), and goes out for a program's own page.
+    ctrl[1] = fb_current
+        | ((logo.on || logo.leaving || overlay_mode ? MH_FORMAT_INDEX8 : fb_format) << 8)
+        | ((logo.on || overlay_mode ? MH_MODE_640x480 : fb_mode) << 12) | (palette_slot << 16) | (audio_enabled << 24)
+        | ((uint32_t)fm_volume << 17) | ((uint32_t)(fm_enabled && audio_enabled) << 25)
+        | (logo.on || overlay_mode ? CTRL_OVL : 0) | ((uint32_t)menu_mask << 28);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
     __sync_synchronize();
     pthread_mutex_unlock(&ctrl_lock);
@@ -294,10 +343,25 @@ int MH_Open(void) {
         palette_seq = ctrl[2];
         palette_slot = (ctrl[1] >> 16) & 1;
     }
+    // a program started in the place of the one that showed the game's logo
+    // (execv: CrispyDoom's Heretic, Hexen and Strife) takes the logo over, as
+    // MH_Close() left it
+    env = getenv("MISTER_HYBRID_LOGO");
+    memset(&logo, 0, sizeof(logo));
+    if (env != NULL && ctrl[0] == CTRL_MAGIC && (ctrl[1] & CTRL_OVL) && status[3] >= 17
+        && sscanf(env, "%d %u %u %d %d %63[^\n]", &logo.in_known, &logo.in, &logo.start, &logo.first, &logo.lines,
+               logo.title) == 6) {
+        logo.on = 1;
+        ctrl_enabled = 1;
+        fb_current = (int)(ctrl[1] & 0xff) % FB_COUNT;
+    }
+    unsetenv("MISTER_HYBRID_LOGO");
     alive_time.tv_sec = 0;
     for (i = 0; i < FB_COUNT; i++) {
         // all of it: whatever ran before us may have used a larger mode
-        clear_framebuffer(i, FB_SIZE);
+        if (!logo.on || i != fb_current) {
+            clear_framebuffer(i, FB_SIZE);
+        }
     }
     write_ctrl();
 
@@ -317,6 +381,10 @@ int MH_Open(void) {
         cpu1_allowed ? ", helper threads on CPU1" : "");
     game_tid = (pid_t)syscall(SYS_gettid);
     mh_diag_start();
+    if (logo.on) {
+        printf("mister: the game's logo taken over\n");
+        logo_start_thread();
+    }
     return 1;
 }
 
@@ -350,6 +418,16 @@ static int close_pending = 0;
 
 void MH_Close(void) {
     mh_diag_stop();
+    logo_end_thread();
+    // the game's logo still there: it stays for a program started in this
+    // one's place (execv), which takes it over (MH_Open())
+    if (logo.on && shm != NULL && !detached) {
+        char state[128];
+
+        snprintf(state, sizeof(state), "%d %u %u %d %d %s", logo.in_known, logo.in, logo.start, logo.first, logo.lines,
+            logo.title);
+        setenv("MISTER_HYBRID_LOGO", state, 1);
+    }
     stop_present_thread();
     if (open_cpus_saved) {
         sched_setaffinity(0, sizeof(open_cpus), &open_cpus);
@@ -361,7 +439,7 @@ void MH_Close(void) {
         // the video before the audio; a game quitting after another core was
         // loaded crashed in the audio thread, CrispyDoom 2026-10-19). The
         // core's own picture comes back now.
-        if (!detached && corename_matches()) {
+        if (!detached && corename_matches() && !logo.on) {
             ctrl_enabled = 0;
             write_ctrl();
         }
@@ -373,8 +451,9 @@ void MH_Close(void) {
         midi_close();
         if (!detached && corename_matches()) {
             // back to the core's own picture, audio off. Not once another
-            // core is loaded: the memory is its own then
-            ctrl_enabled = 0;
+            // core is loaded: the memory is its own then. The game's logo
+            // stays (above)
+            ctrl_enabled = logo.on;
             audio_enabled = 0;
             fm_enabled = 0;
             fm_wr = 0;
@@ -704,6 +783,8 @@ static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
     if (fb_format == MH_FORMAT_RGB565) {
         ctrl_enabled = 1;
     }
+    // the program's page after the logo: in again with its frame
+    logo.out = 0;
     write_ctrl();
     pace_flip(status[1]);
 }
@@ -778,6 +859,13 @@ static void wait_for_screen(void) {
     if (screen_ours || !ctrl_enabled) {
         return;
     }
+    // on the overlay the core's picture stays: nothing to wait for (host
+    // version 17); a message under the MiSTer logo goes out with it
+    if (overlay_mode) {
+        screen_ours = 1;
+        MH_ClearMessage();
+        return;
+    }
     for (i = 0; i < 700 && MH_IsOpen() && status[3] >= 9 && !(status[2] & STATUS_GAME); i++) {
         sleep_ms(10);
     }
@@ -789,6 +877,15 @@ static void wait_for_screen(void) {
 // Wrap `text` into lines of MH_MSG_COLS: at '\n', and at the last space that
 // fits (a word longer than a line is broken). Empty lines are left out.
 // Returns the number of lines needed; the first `rows` go to `lines`.
+// A message of the game's own takes the place of the logo's lines: they stop
+static void logo_taken(void) {
+    if (logo.thread_on && !pthread_equal(pthread_self(), logo.thread)) {
+        pthread_mutex_lock(&logo_lock);
+        logo.taken = 1;
+        pthread_mutex_unlock(&logo_lock);
+    }
+}
+
 static int wrap_message(const char* text, char lines[][MH_MSG_COLS + 1], int rows) {
     int count = 0;
 
@@ -843,8 +940,9 @@ static void put_message(char lines[MH_MSG_ROWS][MH_MSG_COLS + 1], uint32_t flags
     msg[1] = seq | flags << 16;
     msg[0] = MSG_MAGIC;
     __sync_synchronize();
-    // the core shows its picture only while no game has the screen
-    if (ctrl_enabled) {
+    // the core shows its picture only while no game has the screen; the
+    // game's logo stays over it
+    if (ctrl_enabled && !logo.on) {
         present_flush();
         ctrl_enabled = 0;
         write_ctrl();
@@ -869,6 +967,7 @@ int MH_ShowMessage(const char* text, int flags) {
         strcpy(lines[MH_MSG_ROWS - 1] + len, "...");
     }
     printf("mister: message%s: %s\n", count > MH_MSG_ROWS ? " (cut, it needs more than 4 lines)" : "", text);
+    logo_taken();
     if (MH_IsOpen() && status[3] >= 13) {
         put_message(lines, (flags & MH_MSG_ERROR) ? 1 : 0);
     }
@@ -897,6 +996,7 @@ void MH_ShowList(const char* const* items, int count, int top, int selected) {
     if (top + MH_MSG_ROWS < count) {
         lines[MH_MSG_ROWS - 1][MH_MSG_COLS - 1] = 'v';
     }
+    logo_taken();
     put_message(lines, 2 | (uint32_t)((selected - top) & 3) << 2);
 }
 
@@ -916,6 +1016,295 @@ int MH_MessageShown(void) {
         return 0;
     }
     return (status[2] & STATUS_MSG) ? 1 : (status[2] & STATUS_ALONE) ? 2 : 0;
+}
+
+// The game's logo (docs/game_logo.md). The .mhl file of tools/make_logo.py
+// next to the program, in logos/: "MHLG", u16 width, u16 height, u16 colours
+// (n), n x RGB (indexes 1..n), the pixels (0 transparent).
+static int logo_load(const char* id, uint8_t* fb, uint32_t* palette) {
+    char dir[512], path[600], name[80];
+    unsigned char head[10];
+    struct dirent* ent;
+    ssize_t len;
+    DIR* d;
+    FILE* f;
+    int w, h, n, x0, y0, y, i, ok = 0;
+
+    // the program's folder (GAMEDIR), the file's name in any case
+    len = readlink("/proc/self/exe", dir, sizeof(dir) - 1);
+    if (len <= 0 || id == NULL || id[0] == 0) {
+        return 0;
+    }
+    dir[len] = 0;
+    *strrchr(dir, '/') = 0;
+    snprintf(path, sizeof(path), "%s/logos", dir);
+    snprintf(name, sizeof(name), "%s.mhl", id);
+    d = opendir(path);
+    if (d == NULL) {
+        return 0;
+    }
+    while ((ent = readdir(d)) != NULL && strcasecmp(ent->d_name, name) != 0) {
+    }
+    if (ent != NULL) {
+        snprintf(path + strlen(path), sizeof(path) - strlen(path), "/%s", ent->d_name);
+    }
+    closedir(d);
+    if (ent == NULL || (f = fopen(path, "rb")) == NULL) {
+        return 0;
+    }
+    if (fread(head, 1, 10, f) == 10 && memcmp(head, "MHLG", 4) == 0) {
+        w = head[4] | head[5] << 8;
+        h = head[6] | head[7] << 8;
+        n = head[8] | head[9] << 8;
+        x0 = (640 - w) / 2;
+        y0 = LOGO_BOTTOM - h;
+        if (w > 0 && w <= 640 && h > 0 && y0 >= 0 && n >= 1 && n <= 255) {
+            unsigned char rgb[255 * 3];
+            ok = fread(rgb, 3, n, f) == (size_t)n;
+            memset(palette, 0, 256 * sizeof(*palette));
+            for (i = 0; ok && i < n; i++) {
+                palette[i + 1] = (uint32_t)rgb[3 * i] << 16 | rgb[3 * i + 1] << 8 | rgb[3 * i + 2];
+            }
+            memset(fb, 0, 640 * 480);
+            for (y = 0; ok && y < h; y++) {
+                ok = fread(fb + (y0 + y) * 640 + x0, 1, w, f) == (size_t)w;
+            }
+        }
+    }
+    fclose(f);
+    if (!ok) {
+        fprintf(stderr, "mister: %s: not a logo of make_logo.py\n", path);
+    }
+    return ok;
+}
+
+// The lines under the logo, `count` of them
+static void logo_lines(int count) {
+    char text[(MH_MSG_COLS + 1) * LOGO_LINES];
+    size_t n = 0;
+    int i;
+
+    for (i = logo.first; i < count && i < LOGO_LINES; i++) {
+        n += snprintf(text + n, sizeof(text) - n, logo_text[i], logo.title);
+        n += snprintf(text + n, sizeof(text) - n, "\n");
+    }
+    pthread_mutex_lock(&logo_lock);
+    if (!logo.taken) {
+        MH_ShowMessage(text, 0);
+        logo.lines = count;
+    }
+    pthread_mutex_unlock(&logo_lock);
+}
+
+// Wait for field `at` (and for the handover to be seen first: `at` counts
+// from the logo fully in then). 0 when the logo is to go on without it: the
+// core is gone, the thread is to end, or no handover came.
+static int logo_wait(int after_in) {
+    for (;;) {
+        uint32_t now;
+
+        if (!MH_IsOpen() || logo.stop) {
+            return 0;
+        }
+        now = status[1];
+        if (!logo.in_known) {
+            if (status[2] & STATUS_OVL) {
+                // the handover has begun: the logo is in LOGO_IN fields. A
+                // message there (the list) goes out with the MiSTer logo
+                logo.in = now + LOGO_IN;
+                logo.in_known = 1;
+                if (logo.lines == 0) {
+                    MH_ClearMessage();
+                }
+            } else if ((int32_t)(now - (logo.start + LOGO_WAIT)) >= 0) {
+                return 0;
+            }
+        }
+        if (logo.in_known && (int32_t)(now - (logo.in + after_in)) >= 0) {
+            return 1;
+        }
+        sleep_ms(5);
+    }
+}
+
+// The lines pile up once the logo is in, each LOGO_LINE fields before the next
+static void* logo_main(void* arg) {
+    int k;
+
+    (void)arg;
+    MH_PinThreadToCPU1();
+    for (k = logo.lines > logo.first ? logo.lines : logo.first; k < LOGO_LINES; k++) {
+        if (!logo_wait((k - logo.first) * LOGO_LINE)) {
+            // no handover: the last line alone, under the MiSTer logo
+            if (!logo.stop && MH_IsOpen() && !logo.in_known) {
+                pthread_mutex_lock(&logo_lock);
+                if (!logo.taken) {
+                    char text[96];
+                    snprintf(text, sizeof(text), logo_text[LOGO_LINES - 1], logo.title);
+                    MH_ShowMessage(text, 0);
+                }
+                pthread_mutex_unlock(&logo_lock);
+            }
+            break;
+        }
+        logo_lines(k + 1);
+    }
+    logo.done = 1;
+    return NULL;
+}
+
+static void logo_start_thread(void) {
+    logo.stop = 0;
+    logo.done = 0;
+    logo.taken = 0;
+    logo.thread_on = pthread_create(&logo.thread, NULL, logo_main, NULL) == 0;
+}
+
+static void logo_end_thread(void) {
+    if (logo.thread_on) {
+        logo.stop = 1;
+        pthread_join(logo.thread, NULL);
+        logo.thread_on = 0;
+    }
+}
+
+// Show the game's logo: 1 when it is there (host version 17, its file)
+static int logo_show(const char* id, const char* title, int first) {
+    uint32_t palette[256];
+    volatile uint32_t* pal;
+    uint8_t* image;
+    int fb, i;
+
+    if (!MH_IsOpen() || status[3] < 17 || logo.on || screen_ours || (image = malloc(640 * 480)) == NULL) {
+        return 0;
+    }
+    if (!logo_load(id, image, palette)) {
+        free(image);
+        return 0;
+    }
+    present_flush();
+    // into a framebuffer the core does not show, and a palette slot
+    fb = (fb_current + 1) % FB_COUNT;
+    memcpy((void*)framebuffer(fb), image, 640 * 480);
+    free(image);
+    palette_slot ^= 1;
+    pal = (volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
+    for (i = 0; i < 256; i++) {
+        pal[i] = palette[i];
+    }
+    palette_seq++;
+    memset(&logo, 0, sizeof(logo));
+    snprintf(logo.title, sizeof(logo.title), "%s", title);
+    logo.first = first;
+    logo.start = status[1];
+    logo.on = 1;
+    fb_current = fb;
+    ctrl_enabled = 1;
+    write_ctrl();
+    printf("mister: the logo of %s\n", id);
+    return 1;
+}
+
+static int game_logo(const char* id, const char* title, int first) {
+    char text[MH_MSG_COLS + 1];
+
+    if (logo_show(id, title, first)) {
+        logo_start_thread();
+        return 1;
+    }
+    // no logo: the last line alone, under the MiSTer logo
+    snprintf(text, sizeof(text), logo_text[LOGO_LINES - 1], title);
+    MH_ShowMessage(text, 0);
+    return 0;
+}
+
+int MH_GameLogo(const char* id, const char* title) {
+    return game_logo(id, title, 0);
+}
+
+int MH_GameLogoLoading(const char* id, const char* title) {
+    return game_logo(id, title, LOGO_LINES - 1);
+}
+
+int MH_Overlay(int on) {
+    if (!MH_IsOpen() || status[3] < 17) {
+        return 0;
+    }
+    overlay_mode = on != 0;
+    write_ctrl();
+    return 1;
+}
+
+void MH_GameLogoMissing(const char* id) {
+    if (!logo_show(id, "", 0)) {
+        return;
+    }
+    if (logo_wait(0)) {
+        logo_lines(1);
+        logo_wait(LOGO_LINE);
+    }
+}
+
+// The game's first frame: the logo's 2 seconds are over, then it is given up
+// and goes out with the core's picture, and the game gets the screen (black
+// until its frame is there)
+static void logo_release(void) {
+    int i;
+
+    if (!logo.on) {
+        return;
+    }
+    // the lines first (the thread sees the handover), then the 2 seconds
+    while (logo.thread_on && !logo.done && MH_IsOpen()) {
+        sleep_ms(5);
+    }
+    if (logo.in_known) {
+        logo_wait(LOGO_HOLD);
+    }
+    logo_end_thread();
+    if (!MH_IsOpen()) {
+        logo.on = 0;
+        return;
+    }
+    if (overlay_mode) {
+        // the program's page in the logo's place: the logo goes out (as it
+        // came, backwards), the line with it; out of sight the page's palette
+        // goes in, and its frame (present_to_fpga()) brings the overlay back
+        logo.out = 1;
+        write_ctrl();
+        for (i = 0; i < 300 && MH_IsOpen() && !(status[2] & STATUS_OVL_OUT); i++) {
+            sleep_ms(10);
+        }
+        MH_ClearMessage();
+        for (i = 0; i < 50 && MH_IsOpen() && (status[2] & STATUS_MSG); i++) {
+            sleep_ms(10);
+        }
+        logo.on = 0;
+        if (logo.palette_held) {
+            volatile uint32_t* pal;
+
+            logo.palette_held = 0;
+            palette_slot ^= 1;
+            pal = (volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
+            for (i = 0; i < 256; i++) {
+                pal[i] = logo.palette[i] & 0xffffff;
+            }
+            palette_seq++;
+        }
+        return;
+    }
+    logo.on = 0;
+    logo.leaving = 1;
+    write_ctrl();
+    for (i = 0; i < 300 && MH_IsOpen() && !(status[2] & STATUS_GAME); i++) {
+        sleep_ms(10);
+    }
+    logo.leaving = 0;
+    write_ctrl();
+    if (logo.palette_held) {
+        logo.palette_held = 0;
+        MH_SetPalette(logo.palette);
+    }
 }
 
 // Clear every framebuffer. The buffer on screen is cleared once the core
@@ -944,6 +1333,11 @@ void MH_SetFormat(int format) {
     if (!MH_IsOpen() || format == fb_format) {
         return;
     }
+    // the game's logo is in a framebuffer: the others are black still
+    if (logo.on) {
+        fb_format = format;
+        return;
+    }
     present_flush();
     // A game that changes the format while it runs (8 bit for one screen,
     // RGB565 for another) goes through black (pixel 0), as in MH_SetMode():
@@ -963,6 +1357,10 @@ int MH_SetMode(int mode) {
     }
     if (!MH_ModeAvailable(mode)) {
         return 0;
+    }
+    if (logo.on) {
+        fb_mode = mode;
+        return 1;
     }
     present_flush();
     // The rows of the framebuffers are of another length in the new mode: go
@@ -984,6 +1382,7 @@ void MH_Present(const void* pixels, int pitch) {
     if (!MH_IsOpen()) {
         return;
     }
+    logo_release();
     start_present_thread();
     if (!present_threaded) {
         present_to_fpga(src, pitch, present_at);
@@ -1052,6 +1451,7 @@ void MH_PresentBuffer(void) {
     if (!MH_IsOpen() || !present_threaded || staging_direct < 0) {
         return;
     }
+    logo_release();
     pthread_mutex_lock(&present_lock);
     queue[(queue_head + queue_count) % 2] = staging_direct;
     queue_at[(queue_head + queue_count) % 2] = present_at;
@@ -1071,6 +1471,12 @@ void MH_SetPalette(const uint32_t* rgb) {
     int i;
 
     if (!MH_IsOpen()) {
+        return;
+    }
+    // the game's logo is on the screen: its palette waits for the first frame
+    if (logo.on) {
+        memcpy(logo.palette, rgb, sizeof(logo.palette));
+        logo.palette_held = 1;
         return;
     }
     // Frames queued before this palette change must reach the FPGA first
@@ -1567,6 +1973,7 @@ void MH_FMEnable(int enabled) {
 // (host version 16). The synthesizer follows every channel's settings
 // whichever plays, its notes only while it is the one.
 enum { MIDI_NONE, MIDI_PI, MIDI_SYNTH };
+#define MIDI_NAMED -2  // midi_tried: MH_MidiLoadSoundFont()'s file
 static int midi_to = MIDI_NONE;          // where it went at the last block
 static volatile unsigned midi_switches;  // changes of where it goes, for MH_MidiSynthChanged()
 
@@ -1581,7 +1988,11 @@ static char midi_font_path[512];
 static int16_t* midi_samples;  // the sample memory, mapped
 static uint32_t midi_dropped;  // commands that found the ring full
 static int midi_slot;          // the SoundFont slot the OSD asks for
-static int midi_tried = -1;    // the slot last loaded or tried
+static int midi_tried = -1;    // the slot last loaded or tried, MIDI_NAMED for midi_named
+static char midi_named[512];   // MH_MidiLoadSoundFont()'s file, "" for the OSD's slot
+static unsigned midi_named_gen, midi_tried_gen;  // its requests, and the one last loaded or tried
+static int midi_failed;        // the last load found no font or a bad one
+static char midi_coming[512];  // the file being loaded
 static int midi_ok;            // that slot's SoundFont is loaded
 static int midi_loading;
 static int midi_quit;
@@ -1601,10 +2012,18 @@ static int midi_dest(void) {
     // status bits 64..127
     uint64_t high = MH_OSDStatusHigh();
 
-    if (!MH_MidiAvailable() || !midi_enabled || !audio_enabled || ((high >> 23) & 1)) {
+    if (!MH_MidiAvailable() || !midi_enabled || !audio_enabled) {
         return MIDI_NONE;
     }
-    if ((status[2] & STATUS_MT32) && !((high >> 32) & 1)) {
+    if (midi_program_dest != MH_MIDI_OSD) {
+        // the program's choice, not the OSD's (host version 17): the Pi
+        // while one is connected, else the synthesizer
+        if (midi_program_dest == MH_MIDI_PI && (status[2] & STATUS_MT32)) {
+            return MIDI_PI;
+        }
+    } else if ((high >> 23) & 1) {
+        return MIDI_NONE;
+    } else if ((status[2] & STATUS_MT32) && !((high >> 32) & 1)) {
         return MIDI_PI;
     }
     return midi_synth_there() && midi != NULL ? MIDI_SYNTH : MIDI_NONE;
@@ -1720,6 +2139,56 @@ static int soundfont_of(int slot, char* path, int size, int* own) {
     return 1;
 }
 
+int MH_SoundFontSlots(char files[MH_SF_SLOTS][MH_SF_NAME], int own[MH_SF_SLOTS]) {
+    char path[512];
+    int k, any = 0, o;
+
+    for (k = 0; k < MH_SF_SLOTS; k++) {
+        files[k][0] = 0;
+        own[k] = 0;
+        if (soundfont_of(k, path, sizeof path, &o)) {
+            snprintf(files[k], MH_SF_NAME, "%s", strrchr(path, '/') + 1);
+            own[k] = o;
+            any = 1;
+        }
+    }
+    return any;
+}
+
+int MH_SetSoundFontSlot(int slot, const char* file) {
+    char files[MH_SF_SLOTS][MH_SF_NAME], path[512], tmp[520];
+    int own[MH_SF_SLOTS], k, ok;
+    FILE* f;
+
+    if (slot < 0 || slot >= MH_SF_SLOTS || (file != NULL && (strchr(file, '/') != NULL || strchr(file, '\n') != NULL))) {
+        return 0;
+    }
+    // every slot as the OSD offers it now, so that no other one moves when
+    // slots.txt is written for the first time
+    MH_SoundFontSlots(files, own);
+    snprintf(files[slot], MH_SF_NAME, "%s", file != NULL ? file : "");
+    own[slot] = file != NULL && file[0] != 0;
+    snprintf(path, sizeof path, "%s/slots.txt", MH_SoundFontDir());
+    snprintf(tmp, sizeof tmp, "%s.new", path);
+    f = fopen(tmp, "w");
+    if (f == NULL) {
+        return 0;
+    }
+    fprintf(f, "# SoundFont slots of every core's OSD line SoundFont (docs/midiplayer.md)\n");
+    for (k = 0; k < MH_SF_SLOTS; k++) {
+        if (own[k] && files[k][0] != 0) {
+            fprintf(f, "%d %s\n", k, files[k]);
+        }
+    }
+    ok = fflush(f) == 0 && fsync(fileno(f)) == 0;
+    ok = fclose(f) == 0 && ok;
+    if (!ok || rename(tmp, path) != 0) {
+        unlink(tmp);
+        return 0;
+    }
+    return 1;
+}
+
 // A command into the ring (mh_midi's emit), under midi_lock. status[36]: the
 // commands the core has read
 static void midi_emit(void* ctx, const uint64_t* cmd) {
@@ -1765,21 +2234,38 @@ static void midi_stop_and_wait(void) {
     }
 }
 
-// Loads the slot's SoundFont, the music faded out meanwhile
-static void midi_load(int slot, int first) {
+// A load is waiting: the OSD's slot changed, or the program asked for a file
+// (under midi_lock)
+static int midi_pending(void) {
+    if (midi_named[0] != 0) {
+        return midi_tried != MIDI_NAMED || midi_tried_gen != midi_named_gen;
+    }
+    return midi_slot != midi_tried;
+}
+
+// Loads the slot's SoundFont, or the named file (MH_MidiLoadSoundFont(): no
+// info box then, the program says what it likes), the music faded out
+// meanwhile
+static void midi_load(int slot, const char* named, int first) {
     char path[512], err[160], line[80];
     mh_sfont* font;
     int own = 0, k;
 
-    if (!soundfont_of(slot, path, sizeof path, &own)) {
+    if (named != NULL) {
+        snprintf(path, sizeof path, "%s", named);
+    } else if (!soundfont_of(slot, path, sizeof path, &own)) {
         pthread_mutex_lock(&midi_lock);
         midi_ok = 0;
+        midi_failed = 1;
         pthread_mutex_unlock(&midi_lock);
         fprintf(stderr, "mister: no SoundFont in %s/, FM music instead\n", MH_SoundFontDir());
         MH_OSDInfo(MH_INFO_NO_SOUNDFONT);
         return;
     }
-    if (!first) {
+    pthread_mutex_lock(&midi_lock);
+    snprintf(midi_coming, sizeof midi_coming, "%s", path);
+    pthread_mutex_unlock(&midi_lock);
+    if (!first && named == NULL) {
         if (own && slot == 0) {
             snprintf(line, sizeof line, "SoundFont Default: %s", strrchr(path, '/') + 1);
             midi_show(3, line, NULL, NULL);
@@ -1794,6 +2280,7 @@ static void midi_load(int slot, int first) {
     if (midi_font != NULL && strcmp(path, midi_font_path) == 0) {
         pthread_mutex_lock(&midi_lock);
         midi_ok = 1;
+        midi_failed = 0;
         pthread_mutex_unlock(&midi_lock);
         return;
     }
@@ -1816,6 +2303,7 @@ static void midi_load(int slot, int first) {
     pthread_mutex_lock(&midi_lock);
     midi_font = font;
     midi_ok = font != NULL;
+    midi_failed = font == NULL;
     if (font != NULL) {
         snprintf(midi_font_path, sizeof midi_font_path, "%s", path);
         if (midi != NULL) {
@@ -1827,7 +2315,9 @@ static void midi_load(int slot, int first) {
     if (MH_IsOpen()) {
         write_ctrl();
     }
-    if (font == NULL && MH_IsOpen()) {
+    if (font == NULL && MH_IsOpen() && named != NULL) {
+        fprintf(stderr, "mister: SoundFont %s %s\n", path, err);
+    } else if (font == NULL && MH_IsOpen()) {
         fprintf(stderr, "mister: SoundFont %s %s, FM music instead\n", path, err);
         // "has 140 MB of samples, more than ..."
         MH_OSDInfo(strncmp(err, "has ", 4) == 0 ? MH_INFO_SOUNDFONT_TOO_BIG : MH_INFO_SOUNDFONT_DAMAGED);
@@ -1836,24 +2326,35 @@ static void midi_load(int slot, int first) {
     }
 }
 
-// The loader: the slot the OSD asks for, whenever it changes
+// The loader: the slot the OSD asks for, whenever it changes, or the file the
+// program asks for
 static void* midi_loader(void* arg) {
+    char named[512];
     int slot, first = 1;
 
     (void)arg;
     MH_PinThreadToCPU1();
     pthread_mutex_lock(&midi_lock);
     for (;;) {
-        while (!midi_quit && midi_slot == midi_tried) {
+        while (!midi_quit && !midi_pending()) {
             pthread_cond_wait(&midi_cond, &midi_lock);
         }
         if (midi_quit) {
             break;
         }
-        slot = midi_tried = midi_slot;
+        if (midi_named[0] != 0) {
+            memcpy(named, midi_named, sizeof named);
+            midi_tried = MIDI_NAMED;
+            midi_tried_gen = midi_named_gen;
+        } else {
+            named[0] = 0;
+            midi_tried = midi_slot;
+        }
+        slot = midi_slot;
         midi_loading = 1;
+        midi_coming[0] = 0;
         pthread_mutex_unlock(&midi_lock);
-        midi_load(slot, first);
+        midi_load(slot, named[0] != 0 ? named : NULL, first);
         first = 0;
         pthread_mutex_lock(&midi_lock);
         midi_loading = 0;
@@ -1894,6 +2395,9 @@ static void midi_close(void) {
     }
     midi_font_path[0] = 0;
     midi_tried = -1;
+    midi_named[0] = 0;
+    midi_failed = 0;
+    midi_program_dest = MH_MIDI_OSD;
     midi_ok = 0;
     if (midi_samples != NULL) {
         munmap(midi_samples, MIDI_SAMPLES_SIZE);
@@ -1966,7 +2470,7 @@ int MH_MidiWanted(void) {
 
     if (dest == MIDI_SYNTH) {
         pthread_mutex_lock(&midi_lock);
-        wanted = midi_ok || midi_loading || midi_tried != midi_slot;
+        wanted = midi_ok || midi_loading || midi_pending();
         pthread_mutex_unlock(&midi_lock);
     }
     return wanted;
@@ -1982,9 +2486,68 @@ int MH_MidiReady(void) {
         return 1;
     }
     pthread_mutex_lock(&midi_lock);
-    ready = midi_ok && !midi_loading && midi_tried == midi_slot;
+    ready = midi_ok && !midi_loading && !midi_pending();
     pthread_mutex_unlock(&midi_lock);
     return ready;
+}
+
+int MH_MidiPiConnected(void) {
+    return MH_MidiAvailable() && (status[2] & STATUS_MT32) != 0;
+}
+
+void MH_MidiDest(int dest) {
+    // a core before host version 17 sends to the Pi as its OSD says
+    midi_program_dest = MH_IsOpen() && status[3] >= 17 && (dest == MH_MIDI_SYNTH || dest == MH_MIDI_PI) ? dest
+                                                                                                         : MH_MIDI_OSD;
+    if (MH_IsOpen()) {
+        write_ctrl();
+    }
+}
+
+int MH_MidiLoadSoundFont(const char* file) {
+    if (!midi_synth_there()) {
+        return 0;
+    }
+    pthread_mutex_lock(&midi_lock);
+    if (file == NULL || file[0] == 0) {
+        // the OSD's slot again: loaded again, unless it is the font there
+        if (midi_named[0] != 0) {
+            midi_named[0] = 0;
+            midi_tried = -1;
+        }
+    } else {
+        if (strchr(file, '/') != NULL) {
+            snprintf(midi_named, sizeof midi_named, "%s", file);
+        } else {
+            snprintf(midi_named, sizeof midi_named, "%s/%s", MH_SoundFontDir(), file);
+        }
+        midi_named_gen++;
+    }
+    pthread_cond_signal(&midi_cond);
+    pthread_mutex_unlock(&midi_lock);
+    return 1;
+}
+
+int MH_MidiSoundFont(char* file, int size) {
+    int state;
+
+    pthread_mutex_lock(&midi_lock);
+    if (midi_loading || midi_pending()) {
+        state = MH_SF_LOADING;
+    } else if (midi_ok) {
+        state = MH_SF_LOADED;
+    } else {
+        state = midi_failed ? MH_SF_FAILED : MH_SF_NONE;
+    }
+    if (file != NULL && size > 0) {
+        // the one coming, else the one there
+        const char* path = state == MH_SF_LOADED ? midi_font_path
+                         : state != MH_SF_LOADING ? ""
+                         : midi_named[0] != 0 ? midi_named : midi_loading ? midi_coming : "";
+        snprintf(file, (size_t)size, "%s", path);
+    }
+    pthread_mutex_unlock(&midi_lock);
+    return state;
 }
 
 // the core counts the Pi's reports in status bits 24..27; the music going
@@ -2118,12 +2681,14 @@ static void midi_service(void) {
     }
     dest = midi_dest();
     there = (status[2] & STATUS_MT32) != 0;
-    if (there * 4 + dest != told) {
+    if (there * 4 + dest + 8 * (midi_program_dest != MH_MIDI_OSD) != told) {
         printf("mister: MIDI music %s%s\n",
             dest == MIDI_PI ? "to the MT32-pi" : dest == MIDI_SYNTH ? "to the synthesizer" : "off",
-            !there || dest == MIDI_PI ? "" : ((MH_OSDStatusHigh() >> 23) & 1) ? " (FM chip in the OSD)"
-                                                                               : ", MT32-pi off in the OSD");
-        told = there * 4 + dest;
+            !there || dest == MIDI_PI                 ? ""
+            : midi_program_dest != MH_MIDI_OSD          ? ", the program's choice"
+            : ((MH_OSDStatusHigh() >> 23) & 1)         ? " (FM chip in the OSD)"
+                                                        : ", MT32-pi off in the OSD");
+        told = there * 4 + dest + 8 * (midi_program_dest != MH_MIDI_OSD);
     }
     if (dest != midi_to) {
         if (midi_to == MIDI_PI) {

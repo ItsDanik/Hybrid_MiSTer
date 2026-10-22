@@ -66,6 +66,22 @@ const char* MH_GamePath(void) {
     return path;
 }
 
+// The game's logo: a shareware's is its full game's (games.txt has no line
+// for it)
+static const char* logo_id(const mh_game* game) {
+    return game->shareware_of != NULL ? game->shareware_of : game->id;
+}
+
+// The game picked, its logo and lines (host version 17)
+static int picked(const mh_game* games, int pick) {
+    if (MH_IsOpen() && (games[pick].files == NULL || games[pick].files[0] == NULL)) {
+        MH_GameLogoLoading(logo_id(&games[pick]), games[pick].name);
+    } else if (MH_IsOpen()) {
+        MH_GameLogo(logo_id(&games[pick]), games[pick].name);
+    }
+    return pick;
+}
+
 // A message with the game's folder for its %s
 static void message(const char* core, const char* text) {
     char buf[MH_MSG_ROWS * (MH_MSG_COLS + 1) + 64];
@@ -108,14 +124,17 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
                 continue;
             }
             if (MH_GameFound(&games[i], dir)) {
-                return i;
+                return picked(games, i);
             }
             // the shareware or demo of it, when the full game is not there
             for (j = 0; j < count; j++) {
                 if (games[j].shareware_of != NULL && strcasecmp(games[j].shareware_of, games[i].id) == 0
                     && MH_GameFound(&games[j], dir)) {
-                    return j;
+                    return picked(games, j);
                 }
+            }
+            if (MH_IsOpen()) {
+                MH_GameLogoMissing(games[i].id);
             }
             message(core, games[i].missing);
             return -1;
@@ -134,12 +153,12 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
         return -1;
     }
     if (n == 1 || !MH_IsOpen()) {
-        return found[0];
+        return picked(games, found[0]);
     }
     pick = MH_UI_Menu(core, "Select a game:", names, n, 0);
     if (pick < 0 || pick >= n) {
         return -1;
     }
     *listed = 1;
-    return found[pick];
+    return picked(games, found[pick]);
 }

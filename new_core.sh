@@ -45,7 +45,7 @@ cp -r "$HYBRID/template/." .
 mv gitignore .gitignore
 rm -r game
 cp "$HYBRID/LICENSE" LICENSE
-mkdir -p releases
+mkdir -p releases package/logos
 
 # @NAME@ in file and directory names, deepest first
 find . -depth -name '*@NAME@*' -not -path './hybrid/*' -not -path './.git/*' | while read -r f; do
@@ -71,6 +71,10 @@ $NAME is set up in $ROOT. Next:
     marked GAME:
   - package/games.txt: the games (one line each); the launcher's screen
     offers them once the port is in the database
+  - package/logos/<id>.png for every game of games.txt ($ID.png to begin
+    with): its logo, 440x200, shown at its start (hybrid/docs/game_logo.md;
+    package.sh refuses without). See one as the core will show it:
+    hybrid/tools/make_logo.py <png> /tmp/logo.mhl --preview out.png --title "$TITLE"
   - core/$NAME.sv: the game's options, "J1" and "jn" in CONF_STR. Repeat "jn"
     in danik_hybrid_launch.sh (MISTER_HYBRID_JN).
   - README.md and package/games/$NAME/README.txt: every TODO

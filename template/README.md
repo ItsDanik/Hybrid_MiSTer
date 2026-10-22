@@ -124,6 +124,7 @@ If you enjoy this project, you can support my work on [Patreon](https://www.patr
 
 - **TODO the game / source port** by its authors.
 - **[SDL](https://libsdl.org)** by Sam Lantinga and contributors.
+- TODO with MIDI music (`MIDI_SYNTH` 1), else delete: **[GeneralUser GS](https://www.schristiancollins.com/generaluser.php)** by S. Christian Collins: the SoundFont of the core's MIDI synthesizer, which comes with the port, its licence next to it.
 - **[MiSTer](https://github.com/MiSTer-devel)** by Sorgelig and the MiSTer-devel contributors: the framework and Template_MiSTer.
 - **[MiSTer Frontier](https://github.com/MiSTerOrganize/MiSTer_Frontier)** by MiSTer Organize: thank you for the inspiration. Hybrid cores on the MiSTer, and the way their game is launched (a daemon that watches the loaded core and runs a script from its games folder), come from MiSTer Frontier. Our launcher is a separate implementation and does not need MiSTer Frontier installed.
 

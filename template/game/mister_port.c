@@ -83,17 +83,10 @@ static int PickedFromList = 0;
 
 int MiSTer_PickGame(const struct mh_game *games, int count)
 {
-    char text[MH_MSG_COLS + 1];
-    int pick;
-
-    if (!MH_Open())
-        return MH_PickGame(games, count, NULL, NO_GAME, &PickedFromList);
-    pick = MH_PickGame(games, count, NULL, NO_GAME, &PickedFromList);
-    if (pick >= 0) {
-        snprintf(text, sizeof(text), "Loading %s...", games[pick].name);
-        MH_UI_Message(TITLE, text, 0);
-    }
-    return pick;
+    // the game's logo and the lines under it ("Loading <name>..." the last)
+    // come with the pick (MH_GameLogo(), host version 17)
+    MH_Open();
+    return MH_PickGame(games, count, NULL, NO_GAME, &PickedFromList);
 }
 
 void MiSTer_ShowError(const char *message)

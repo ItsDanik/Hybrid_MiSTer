@@ -23,6 +23,15 @@
 // FAKECORE_SYNTH=0 is a core built without the synthesizer (MIDI_SYNTH 0,
 // status word 1 bit 28 clear).
 //
+// The overlay (host version 17, w0[58]; the game's logo, docs/game_logo.md):
+// its handover begins in the first field it is asked for (the intro is over
+// here), status bit 29 from then on. Given up, the core's picture goes out in
+// 43 fields before the game has the screen (bit 19); without it the game has
+// it at once, nothing fades. Each step is printed with its field. w2[58]
+// takes the overlay out as the core does (its fade-in backwards, status bit 30
+// once out) until it is cleared; the framebuffers it shows are printed.
+// FAKECORE_VERSION=<n> is a core of host version n (17 by default).
+//
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
 // Script, one command per line (# starts a comment):
@@ -83,6 +92,8 @@ static uint32_t field;
 static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
 static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown, osd_open;
+static int version = 17;
+static int ovl_on, ovl_t, ovl_fade, game_on, game_fb = -1, ovl_shown = -1, ovl_gone, ovl_prints;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
@@ -170,6 +181,7 @@ static int fm_frame(int volume) {
 static void tick(void) {
     static struct timespec next;
     uint32_t c0, c1, c2, c3, c4, c5;
+    int want;
     int audio_en, fm_en, midi_en;
 
     if (next.tv_sec == 0) {
@@ -190,6 +202,61 @@ static void tick(void) {
     c4 = ctrl[4];
     c5 = ctrl[5];
     ctrl_valid = c0 == CTRL_MAGIC;
+    // the overlay: its handover, given up the picture going out, then the game
+    {
+        int want = version >= 17 && ctrl_valid && ((c1 >> 26) & 1);
+
+        int out = want && ((c5 >> 26) & 1);
+
+        if (want && !ovl_on && !game_on) {
+            ovl_on = 1;
+            ovl_t = 0;
+            ovl_gone = 0;
+            ovl_shown = -1;
+            ovl_prints = 0;
+            printf("fakecore: field %u: the overlay's handover begins%s\n", field, ((c5 >> 27) & 1) ? ", rising" : "");
+        } else if (ovl_on && want) {
+            // as hybrid_host: the fade-in (fields 61..92) backwards when asked
+            if (out && ovl_t > 61) {
+                ovl_t = (ovl_t > 92 ? 92 : ovl_t) - 1;
+            } else if (!(out && ovl_t == 61) && ovl_t < 127) {
+                ovl_t++;
+            }
+            if (out && ovl_t == 61 && !ovl_gone) {
+                printf("fakecore: field %u: the overlay is out\n", field);
+            } else if (!out && ovl_gone) {
+                printf("fakecore: field %u: the overlay comes in again%s\n", field, ((c5 >> 27) & 1) ? ", rising" : "");
+            }
+            ovl_gone = out && ovl_t == 61;
+            // the logo's framebuffer, then the program's first one
+            if ((int)(c1 & 3) != ovl_shown && ovl_prints < 2) {
+                ovl_prints++;
+                printf("fakecore: field %u: the overlay shows framebuffer %d\n", field, (int)(c1 & 3));
+            }
+            ovl_shown = (int)(c1 & 3);
+        } else if (ovl_on && !want) {
+            ovl_on = 0;
+            ovl_fade = ctrl_valid ? 43 : 0;
+            printf("fakecore: field %u: the overlay given up\n", field);
+        }
+        if (!ctrl_valid) {
+            game_on = 0;
+            ovl_fade = 0;
+            game_fb = -1;
+        } else if (!want && !game_on) {
+            if (ovl_fade > 0) {
+                ovl_fade--;
+            } else {
+                game_on = 1;
+                game_fb = (int)(c1 & 3);
+                printf("fakecore: field %u: the game has the screen\n", field);
+            }
+        } else if (game_on && game_fb >= 0 && (int)(c1 & 3) != game_fb) {
+            printf("fakecore: field %u: the game's first frame\n", field);
+            game_fb = -1;
+        }
+        fflush(stdout);
+    }
     // a message (0x1800, host version 13): printed when it changes, as the
     // core would show it under its logo
     {
@@ -200,9 +267,9 @@ static void tick(void) {
         if (seq != shown_seq && msg_shown) {
             int l;
             if ((seq >> 17) & 1) {
-                printf("fakecore: list, line %u selected:\n", (seq >> 18) & 3);
+                printf("fakecore: field %u: list, line %u selected:\n", field, (seq >> 18) & 3);
             } else {
-                printf("fakecore: message%s:\n", (seq >> 16) & 1 ? " (error)" : "");
+                printf("fakecore: field %u: message%s:\n", field, (seq >> 16) & 1 ? " (error)" : "");
             }
             for (l = 0; l < 4; l++) {
                 printf("  |%.71s\n", (const char*)(shm + 0x1808 + l * 80));
@@ -236,7 +303,10 @@ static void tick(void) {
         fm_fetch = 0;
     }
     fm_on = fm_en;
-    if (midi_out && !(midi_en && mt32 && !(status[34] >> 23 & 1) && !(status[35] & 1)) && midi_log) {
+    // the OSD's Music on MIDI (bit 87) and MT32-pi on (bit 96), or the
+    // program's choice (MH_MidiDest(), host version 17)
+    want = midi_en && (((c5 >> 24) & 1) ? ((c5 >> 25) & 1) : !(status[34] >> 23 & 1) && !(status[35] & 1));
+    if (midi_out && !(want && mt32) && midi_log) {
         // the core tells the Pi to stop all its sound: logged as All Sound
         // Off on every channel
         int ch;
@@ -245,7 +315,7 @@ static void tick(void) {
             fprintf(midi_log, "%u %02x 78 00\n", audio_fetch, 0xb0 | ch);
         }
     }
-    midi_out = midi_en && mt32 && !(status[34] >> 23 & 1) && !(status[35] & 1);
+    midi_out = want && mt32;
     // the synthesizer off: every voice silent, the read count from 0
     if (!midi_en && midi_on) {
         ms_reset(midi_ms);
@@ -303,11 +373,12 @@ static void tick(void) {
         }
     }
     field++;
-    // the game has the screen (bit 19) at once: nothing fades here
+    // the game has the screen (bit 19): at once, after an overlay once the
+    // picture has gone out
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
-        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22)
-        | (mt32 << 23) | ((mt32_reports & 15) << 24) | ((unsigned)synth << 28);
-    status[3] = 16;
+        | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (game_on << 19) | ((msg_shown && !game_on) << 20) | (osd_open << 22)
+        | (mt32 << 23) | ((mt32_reports & 15) << 24) | ((unsigned)synth << 28) | (ovl_on << 29) | ((unsigned)ovl_gone << 30);
+    status[3] = version;
     status[15] = fm_fetch;
     // the MIDI synthesizer: commands read, voices playing and which, at the
     // frame it will make next
@@ -406,6 +477,9 @@ int main(int argc, char** argv) {
     }
     mt32 = getenv("FAKECORE_MT32") != NULL && atoi(getenv("FAKECORE_MT32")) != 0;
     synth = getenv("FAKECORE_SYNTH") == NULL || atoi(getenv("FAKECORE_SYNTH")) != 0;
+    if (getenv("FAKECORE_VERSION")) {
+        version = atoi(getenv("FAKECORE_VERSION"));
+    }
     if (getenv("FAKECORE_MIDILOG")) {
         midi_log = fopen(getenv("FAKECORE_MIDILOG"), "w");
         setvbuf(midi_log, NULL, _IOLBF, 0);

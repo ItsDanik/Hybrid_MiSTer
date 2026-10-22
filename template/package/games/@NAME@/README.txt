@@ -83,6 +83,10 @@ Files
 Credits
   TODO the game / source port by its authors.
   SDL by Sam Lantinga and contributors.
+  TODO with MIDI music (MIDI_SYNTH 1), else delete: GeneralUser GS by
+  S. Christian Collins (the SoundFont,
+  https://www.schristiancollins.com/generaluser.php; its licence in
+  games/dnk/SoundFonts/GeneralUser-GS-LICENSE.txt).
   MiSTer by Sorgelig and the MiSTer-devel contributors.
   MiSTer Frontier by MiSTer Organize
   (https://github.com/MiSTerOrganize/MiSTer_Frontier): thank you for the

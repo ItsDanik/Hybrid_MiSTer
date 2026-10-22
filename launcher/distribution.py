@@ -11,6 +11,12 @@
 #               port's release zip extracted (its menu entries, core, games/
 #               dnk/<Engine>/), the launcher and its screen in Scripts/, and
 #               the catalogue, Scripts/.danik_hybrid_ports/catalogue.txt.
+#   shared.txt  the files several ports bring, a line each: <path>|<Engine>,...
+#               (the ports that bring it): GeneralUser GS in games/dnk/
+#               SoundFonts/, which every port with MIDI has in its zip
+#               (hybrid/tools/soundfont.sh). Stored once; every port that
+#               brings it must bring the same bytes, and it goes when the
+#               last of them goes.
 #   README.md   for players, with where each game's files go: made again
 #               with every publish and remove
 #
@@ -44,7 +50,9 @@
 # launcher before (games/dnk/danik_hybrid_cores.sh, version 3, which hands a
 # running version 2 over to the new one): launcher. A port's core and games/dnk/<Engine>/: <engine> and the tag of
 # each of its games, <engine><game>. A menu entry: <engine><game> and
-# <engine>. A folder: the tags of everything in it.
+# <engine>. A shared file (games/dnk/SoundFonts/): the tags of the cores
+# and of the games of every port that brings it. A folder: the tags of
+# everything in it.
 import hashlib
 import io
 import json
@@ -66,6 +74,10 @@ LAUNCHER_DIR = "Scripts/.danik_hybrid_ports"
 CATALOGUE = LAUNCHER_DIR + "/catalogue.txt"
 # the last version of the launcher before, which hands a running one over
 BRIDGE = "games/dnk/danik_hybrid_cores.sh"
+# files that several ports bring, stored once (shared.txt)
+SHARED_DIR = "games/dnk/SoundFonts"
+# the player's in that folder, never a port's: the MIDI Player writes it
+PLAYERS = {SHARED_DIR + "/slots.txt"}
 # in a zip, not in the database: Downloader does not install drop-in files
 NOT_SHIPPED = {"downloader_danik_hybrid_ports.ini"}
 README = """# dnk_Distribution_MiSTer
@@ -83,7 +95,7 @@ The game data is not included: copy the files from your own copy of each game in
 the SD card, or into the same folder on a USB drive (`/media/usb0/games/dnk/<Engine>/`), where the port
 looks first. Each port's README.txt, which comes with it into the folder on the SD card, says which files
 go where; without them, the game says so when it is loaded.
-
+%s
 | Games | Your game files go in | Which files |
 |---|---|---|
 %s
@@ -126,6 +138,34 @@ def write_ports(checkout, ports):
                 "# Written by launcher/distribution.py of Hybrid_MiSTer.\n")
         for engine, zipname in sorted(ports, key=lambda p: p[0].lower()):
             f.write("%s|%s\n" % (engine, zipname))
+
+
+def read_shared(checkout):
+    """{path: [engines]} of the files several ports bring"""
+    shared = {}
+    for line in read_lines(os.path.join(checkout, "shared.txt")):
+        path, engines = line.split("|", 1)
+        shared[path] = [e for e in engines.split(",") if e]
+    return shared
+
+
+def write_shared(checkout, shared):
+    with open(os.path.join(checkout, "shared.txt"), "w", encoding="utf-8") as f:
+        f.write("# The files several ports bring, stored once, a line each: <path>|<Engine>,...\n"
+                "# Written by launcher/distribution.py of Hybrid_MiSTer.\n")
+        for path in sorted(shared):
+            f.write("%s|%s\n" % (path, ",".join(sorted(shared[path], key=str.lower))))
+
+
+def drop_shared(checkout, shared, engine):
+    """`engine` no longer brings its shared files: those no port brings go"""
+    files = os.path.join(checkout, "files")
+    for path in list(shared):
+        if engine in shared[path]:
+            shared[path].remove(engine)
+            if not shared[path]:
+                del shared[path]
+                remove_paths(files, [path])
 
 
 def games_of(files, engine):
@@ -203,7 +243,7 @@ def put_launcher(files):
 
 # ── checks and the catalogue ────────────────────────────────────────
 
-def tags_of(files, ports):
+def tags_of(files, ports, shared):
     """{path: [tags]} for every file of the tree, or die if it does not add up"""
     engines = {e for e, _ in ports}
     tags = {}
@@ -220,6 +260,14 @@ def tags_of(files, ports):
     for path in walk(files):
         if path in (LAUNCHER, BRIDGE) or path.startswith(LAUNCHER_DIR + "/"):
             tags[path] = ["launcher"]
+            continue
+        if path.startswith(SHARED_DIR + "/"):
+            if path not in shared:
+                die("%s is not in shared.txt" % path)
+            for engine in shared[path]:
+                if engine not in engines:
+                    die("%s is brought by %s, which is not in ports.txt" % (path, engine))
+            tags[path] = sorted({t for e in shared[path] for t in [norm(e)] + game_tags[e]})
             continue
         m = re.fullmatch(r"games/dnk/([^/]+)/.+", path) or re.fullmatch(r"_Other/dnk/dnk-(.+)_\d{8}\.rbf", path)
         if m:
@@ -256,6 +304,9 @@ def tags_of(files, ports):
         missing = [g for g, _ in games_of(files, engine) if g not in entries[engine]]
         if missing:
             die("%s has no menu entry for %s" % (engine, ", ".join(missing)))
+    for path in shared:
+        if path not in tags:
+            die("%s of shared.txt is not in files/" % path)
     if LAUNCHER not in tags:
         die("there is no launcher (%s)" % LAUNCHER)
     return tags
@@ -280,7 +331,12 @@ def readme_text(files, ports):
             die("%s has no %sREADME.txt" % (engine, folder))
         rows.append("| %s | `/media/fat/%s` | [README.txt](files/%sREADME.txt) |\n"
                     % (", ".join(t for _, t in games_of(files, engine)), folder, urllib.parse.quote(folder)))
-    return README % "".join(rows)
+    font = ""
+    if os.path.isfile(os.path.join(files, SHARED_DIR, "GeneralUser-GS.sf2")):
+        font = ("\nThe ports whose games play MIDI music bring the SoundFont [GeneralUser GS](https://www.schristiancollins.com/generaluser.php)\n"
+                "by S. Christian Collins, in `/media/fat/%s/` with its licence: their cores' synthesizer plays\n"
+                "the music with it. Your own `.sf2` files can go in the same folder.\n" % SHARED_DIR)
+    return README % (font, "".join(rows))
 
 
 def write_readme(checkout, ports):
@@ -297,7 +353,7 @@ def write_catalogue(files, ports):
 def check(checkout):
     files = os.path.join(checkout, "files")
     ports = read_ports(checkout)
-    tags = tags_of(files, ports)
+    tags = tags_of(files, ports, read_shared(checkout))
     with open(os.path.join(files, LAUNCHER), "rb") as f:
         if f.read() != framework_launcher():
             die("%s is not the launcher of this Hybrid_MiSTer" % LAUNCHER)
@@ -351,7 +407,7 @@ def make_db(checkout, base_url, out):
 
 
 def commit(checkout, message):
-    git(checkout, "add", "-A", "ports.txt", "files", "README.md")
+    git(checkout, "add", "-A", "ports.txt", "shared.txt", "files", "README.md")
     if git(checkout, "status", "--porcelain").strip():
         git(checkout, "commit", "-q", "-m", message)
     sha = git(checkout, "rev-parse", "HEAD").decode().strip()
@@ -377,6 +433,8 @@ def cmd_init(checkout):
         subprocess.run(["git", "init", "-q", "-b", "main", checkout], check=True)
     if not os.path.exists(os.path.join(checkout, "ports.txt")):
         write_ports(checkout, [])
+    if not os.path.exists(os.path.join(checkout, "shared.txt")):
+        write_shared(checkout, {})
     if not os.path.exists(os.path.join(checkout, "README.md")):
         write_readme(checkout, read_ports(checkout))
 
@@ -384,6 +442,7 @@ def cmd_init(checkout):
 def cmd_publish(checkout, zips):
     files = os.path.join(checkout, "files")
     ports = dict(read_ports(checkout))
+    shared = read_shared(checkout)
     launcher = framework_launcher()
     for zpath in zips:
         with zipfile.ZipFile(zpath) as z:
@@ -407,14 +466,29 @@ def cmd_publish(checkout, zips):
                 ok = (n in NOT_SHIPPED or n in (LAUNCHER, BRIDGE) or n.startswith(LAUNCHER_DIR + "/")
                       or n.startswith("games/dnk/%s/" % engine)
                       or re.fullmatch(r"_Other/dnk/dnk-%s_\d{8}\.rbf" % re.escape(engine), n)
-                      or re.fullmatch(r"_Other/dnk-[^/]+\.mgl", n))
+                      or re.fullmatch(r"_Other/dnk-[^/]+\.mgl", n)
+                      or (n.startswith(SHARED_DIR + "/") and n not in PLAYERS))
                 if ok and n.endswith(".mgl"):
                     ok = mgl_target(z.read(n))[0] == engine
                 if not ok or n == CATALOGUE:
                     die("%s: %s is no file of %s" % (zpath, n, engine))
+            # a shared file: the same bytes as the other ports that bring it
+            for n in names:
+                if n.startswith(SHARED_DIR + "/"):
+                    others = [e for e in shared.get(n, []) if e != engine]
+                    if not others:
+                        continue
+                    with open(os.path.join(files, n), "rb") as f:
+                        same = f.read() == z.read(n)
+                    if not same:
+                        die("%s: its %s is not the one %s brings: package them with the same hybrid/"
+                            % (zpath, n, ", ".join(others)))
             # the port's files of before go, the zip's come
             remove_paths(files, engine_paths(files, engine))
+            drop_shared(checkout, shared, engine)
             for n in names:
+                if n.startswith(SHARED_DIR + "/"):
+                    shared.setdefault(n, []).append(engine)
                 if n in NOT_SHIPPED or n == BRIDGE or n.startswith("Scripts/"):
                     continue
                 dest = os.path.join(files, n)
@@ -427,6 +501,7 @@ def cmd_publish(checkout, zips):
             print("%s: %s" % (engine, os.path.basename(zpath)))
     put_launcher(files)
     write_ports(checkout, list(ports.items()))
+    write_shared(checkout, shared)
     write_catalogue(files, list(ports.items()))
     write_readme(checkout, list(ports.items()))
     commit(checkout, "Publish " + (", ".join(os.path.basename(z) for z in zips) or
@@ -436,13 +511,16 @@ def cmd_publish(checkout, zips):
 def cmd_remove(checkout, engines):
     files = os.path.join(checkout, "files")
     ports = dict(read_ports(checkout))
+    shared = read_shared(checkout)
     for engine in engines:
         if engine not in ports:
             die("%s is not in ports.txt" % engine)
         remove_paths(files, engine_paths(files, engine))
+        drop_shared(checkout, shared, engine)
         del ports[engine]
     put_launcher(files)
     write_ports(checkout, list(ports.items()))
+    write_shared(checkout, shared)
     write_catalogue(files, list(ports.items()))
     write_readme(checkout, list(ports.items()))
     commit(checkout, "Remove " + ", ".join(engines))

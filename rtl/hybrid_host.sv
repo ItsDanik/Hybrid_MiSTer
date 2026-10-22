@@ -39,7 +39,11 @@
 //              w0[56]    audio enable
 //              w0[57]    FM chip enable (the chip is in reset without it,
 //                        and without audio enable)
-//              w0[59:58] 0
+//              w0[58]    overlay (host version 17): the frame is drawn over
+//                        the core's picture, which stays, instead of taking
+//                        the screen; 8bpp 640x480, index 0 transparent (see
+//                        "The overlay" below)
+//              w0[59]    0
 //              w0[63:60] OSD menu mask: bits a game sets to hide or grey out
 //                        lines of the core's CONF_STR (H/h/D/d 0..3)
 //              w1[31:0]  palette sequence number (reload when changed)
@@ -59,10 +63,22 @@
 //                          is not 0, Main_MiSTer's info box shows that text
 //                          of the core's "I," line, once the OSD menu is
 //                          closed
-//                  [63:56] 0
+//                  [56]    the program, not the OSD, decides where the MIDI
+//                          music goes (host version 17): [57] 1 to the
+//                          MT32-pi (while one answers), 0 to the synthesizer
+//                  [58]    the overlay goes out (host version 17): its
+//                          fade-in backwards, then it stays out (status
+//                          bit 30) until the bit is cleared, when it comes
+//                          in again: the program changes its frame and
+//                          palette meanwhile (the game's logo to the MIDI
+//                          Player's page)
+//                  [59]    the overlay rises 16 pixels into place as it
+//                          comes in, and sinks as it goes out (the game's
+//                          logo); without it, it only fades
+//                  [63:60] 0
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
-//              w1  {version, 8'b0, mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
+//              w1  {version, 2'b0, overlay, synth, reports[3:0], mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
 //                   field, ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
 //                   lace: the mode is shown interlaced.
 //                   field: the field that was on the screen had the even
@@ -89,6 +105,9 @@
 //                   bit 28: the core has the MIDI synthesizer (host version
 //                   16; MIDI_SYNTH). Without it the MIDI music goes to an
 //                   MT32-pi, or the game plays its FM music.
+//                   bit 29: the overlay is shown (host version 17): its
+//                   handover has begun. bit 30: it is out, as w2[58] asked
+//                   (its level 0).
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -123,9 +142,14 @@
 //              the status block (host version 13): the CRT Options page,
 //              with the HUD margins at bits 77..81 and 82..86
 //    0x0000D0  MIDI status (FPGA -> HPS, host version 16), written every
-//              vblank after that: w0 {8'b0, voices playing, cache underruns
-//              [15:0], commands read [31:0]}, w1 and w2 the voices playing
-//              (bit v of voice v), w3 [31:0] the audio frame they are of
+//              vblank after that: w0 {the MT32-pi's synth[7:0], voices
+//              playing, cache underruns[15:0], commands read [31:0]}, w1 and
+//              w2 the voices playing
+//              (bit v of voice v), w3 [31:0] the audio frame they are of.
+//              The MT32-pi's synth (host version 17): 0 none reported (or no
+//              Pi), else as the info texts number it: 1..8 SoundFont 0..7,
+//              9..11 MT-32 v1, v2, CM-32L, 12 unknown, 13 a SoundFont after
+//              the eighth
 //    0x001000  palette slot 0: 256 x 32-bit 0x00RRGGBB
 //    0x001400  palette slot 1
 //    0x001800  message (HPS -> FPGA, host version 13), shown under the logo
@@ -272,7 +296,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd16;
+localparam [31:0] VERSION      = 32'd17;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -399,7 +423,7 @@ reg  [3:0] v_mode = 0;
 reg        v_fast = 0, v_lace = 0;
 reg  [5:0] v_hsize = 0;
 reg  [3:0] v_hpos = 0, v_vpos = 0;
-reg        v_fmt16 = 0, v_valid = 0;
+reg        v_fmt16 = 0, v_valid = 0, v_ovl = 0;
 reg        field = 0;         // interlaced: 1 = even rows
 
 assign f1 = v_lace & ~field;
@@ -467,6 +491,12 @@ wire       vbl_start = line_start && (next_vc == V_ACTIVE);
 reg        req_tgl = 0, vbl_tgl = 0;
 reg  [9:0] req_row;
 reg        req_bank;
+// the overlay rising into place: its rows that many lower, none above them
+// (taken in the vblank, after the levels of the frame are worked out)
+reg  [4:0] v_ovl_dy = 0;
+reg        lb_blank[0:1];
+initial {lb_blank[0], lb_blank[1]} = 2'b00;
+wire [9:0] scr_row = !v_lace ? next2_vc : {next2_vc[8:0], (next2_vc < vc) ? field : ~field};
 reg        vbl_field = 0;
 
 always @(posedge clk_vid) begin
@@ -480,7 +510,8 @@ always @(posedge clk_vid) begin
 				v_hpos  <= s_hpos;
 				v_vpos  <= s_vpos;
 				v_fmt16 <= fmt16;
-				v_valid <= game_on;
+				v_valid <= game_on & ~ovl_left;
+				v_ovl   <= ovl_vis & ~fmt16 & ~game_on;
 				field   <= v_lace & ~field;
 			end
 		end else begin
@@ -493,13 +524,15 @@ always @(posedge clk_vid) begin
 	// while the one before it ends.
 	if (line_start && next2_vc < V_ACTIVE) begin
 		req_tgl  <= ~req_tgl;
-		req_row  <= !v_lace ? next2_vc : {next2_vc[8:0], (next2_vc < vc) ? field : ~field};
+		req_row  <= (v_ovl && scr_row >= v_ovl_dy) ? scr_row - v_ovl_dy : scr_row;
 		req_bank <= next2_vc[0];
+		lb_blank[next2_vc[0]] <= v_ovl && scr_row < v_ovl_dy;
 	end
 	if (vbl_start) begin
 		vbl_tgl   <= ~vbl_tgl;
 		vbl_field <= field;
 	end
+	if (line_start && next_vc == V_ACTIVE + 10'd2) v_ovl_dy <= ovl_vis ? a_ovl_dy : 5'd0;
 
 	// off: everything of the class is taken as it is and the counters wait
 	// in the blanking
@@ -510,7 +543,8 @@ always @(posedge clk_vid) begin
 		v_hpos  <= s_hpos;
 		v_vpos  <= s_vpos;
 		v_fmt16 <= fmt16;
-		v_valid <= game_on;
+		v_valid <= game_on & ~ovl_left;
+		v_ovl   <= 0;
 		field   <= 0;
 		ce_div  <= 0;
 		hc      <= 0;
@@ -527,6 +561,8 @@ reg  [1:0] fb_index = 0;
 reg        fmt16 = 0;         // RGB565 instead of 8bpp paletted
 reg [31:0] pal_seq = 0;
 reg        pal_loaded = 0;
+reg  [9:0] pal_lv = 256;      // the levels its colours have: the overlay's from the background, or
+                              // with bit 9 the master level from black (256: as they are)
 reg [31:0] frame_cnt = 0;
 
 reg [63:0] ctrl_w0, ctrl_w1, ctrl_w2;
@@ -557,11 +593,13 @@ reg [63:0] pal_wdata;
 reg [63:0] pal_q;
 reg  [2:0] byte_sel;
 reg        pal_hi;
+reg        pix_clear;         // index 0: the overlay's transparent colour
 wire [7:0] pix_index = lbuf_q[{byte_sel, 3'b0} +: 8];
 always @(posedge clk) if (pal_we) pal[pal_waddr] <= pal_wdata;
 always @(posedge clk_vid) begin
-	pal_q  <= pal[pix_index[7:1]];
-	pal_hi <= pix_index[0];
+	pal_q     <= pal[pix_index[7:1]];
+	pal_hi    <= pix_index[0];
+	pix_clear <= pix_index == 8'd0 || lb_blank[vc[0]];
 end
 
 // RGB565 pixels skip the palette
@@ -609,6 +647,29 @@ always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
 // pictures, the background and the lit dot are worked out for the levels of
 // the field in the vblank, on clk, and hold still while the video side reads
 // them. The dots and the shine are worked out per pixel, from the colour.
+//
+// The overlay (host version 17, docs/midiplayer.md): a program that asks for
+// it (w0[58]) has its frame drawn over the picture, which stays, instead of
+// taking the screen: 640x480 at 8bpp, palette index 0 transparent. It never
+// gets game_on (the picture's own timing, no Horizontal Size). Once the intro
+// is over (ovl_t, in fields from there):
+//    0  the logo goes as it came: its intro step backwards, fading out while
+//       it sinks the 16 pixels it rose; the dots and the message go with it  31
+//   31  the background and the badge alone                     30
+//   61  the overlay fades in, rising 16 pixels into place as the logo did
+//       in the intro with w2[59] (the game's logo)              31
+// w2[58] runs that last step backwards and holds the overlay out at 61, a
+// message going with it, until the bit is cleared.
+// The overlay's level is put into its palette as the palette is read (each
+// field while it changes): a colour mixed with the background, as if the
+// program kept clear of the badge, which it is to do. The pixel only decides
+// between the palette and the picture. A message there when the handover
+// begins goes out with the logo; one shown later (the game's lines under its
+// logo, docs/game_logo.md) is at its full level. Without w0[58] again (the
+// magic kept) the picture goes out for a game as ever, the overlay with it at
+// the master level (in its palette as well) and the logo staying gone. The
+// game then has the screen in its own mode, black until it publishes another
+// framebuffer than the overlay's (ovl_left): its first frame always is.
 
 localparam [23:0] WALL_BG  = 24'h7F30A0;   // BACKGROUND of make_wall.py
 localparam [23:0] WALL_LIT = 24'hFF5CB4;   // a lit dot: the pink of "FPGA", brighter
@@ -653,6 +714,9 @@ localparam        WALL_MSG_X     = WALL_LOGO_X;
 localparam        WALL_MSG_Y     = WALL_LOGO_Y + WALL_LOGO_H + 16;
 localparam        WALL_MSG_COLS  = 71;
 localparam        WALL_MSG_PITCH = 16;
+// the overlay's handover, in fields from the end of the intro
+localparam        OVL_T_GAP = 31;                 // the logo is gone
+localparam        OVL_T_IN  = 61, OVL_D_IN = 31;  // the overlay fades in
 
 reg  [3:0] wall[0:WALL_PIXELS - 1];
 reg [23:0] wall_pal[0:31];
@@ -691,6 +755,15 @@ reg        msg_timeout = 0;   // the core's own is shown
 reg        attached = 0;      // a game was there since the core started
 reg [10:0] alone_t = 0;       // fields without one
 reg        intro_skip = 0;    // the intro begun with a message: at its end at once
+reg        ovl_on = 0;        // the overlay's handover has begun
+reg  [6:0] ovl_t = 0;         // its fields, up to 127
+reg        msg_keep = 0;      // the message, gone meanwhile, goes out with the logo
+reg  [8:0] lv_ovl = 0;        // the overlay's level, 0..256
+reg        ovl_vis = 0;       // and it is seen
+reg        ovl_left = 0;      // the game has the screen after an overlay, its first frame not yet there
+reg  [1:0] ovl_fb = 0;        // the overlay's framebuffer
+wire       ovl_out_req;       // w2[58]: the overlay out, held there
+wire       ovl_rise;          // w2[59]: it rises in and sinks out
 
 reg  [7:0] wall_hold = WALL_HOLD;   // fields of black still to come
 reg  [8:0] wall_level = 0;    // the master level, 0..256
@@ -705,6 +778,7 @@ reg [23:0] dot_lit = 0;       // a lit dot, as shown
 reg [23:0] msg_ink = 0;       // the text of a message, as shown
 reg [23:0] msg_dim = 0;       // a list's marks that there is more: 60% of the way to the text
 reg [23:0] msg_bar = 0;       // its bar: 75% of the way to the pink of a lit dot
+reg  [8:0] lv_msg = 256;      // the message's level: the logo's, while it goes out for the overlay
 reg [15:0] wall_dark = 0;     // the logo's colours that are dark, which light up in a dot
 
 function [7:0] fade8(input [7:0] c, input [8:0] level);
@@ -742,36 +816,46 @@ endfunction
 // The levels and places of this field (or frame), and from them the colours.
 // One step per clock after the vblank asked for it (fade_start): first the
 // progress of each part and its place on the curve (one table, so one part
-// at a time), then the 32 colours, each mixed from the background at its
-// part's level in one clock and put at the master level in the next.
+// at a time), then the 32 colours and the message's 3, each mixed from the
+// background at its part's level in one clock and put at the master level in
+// the next.
 reg  [6:0] wall_seq = 7'h7F;  // 7F: idle
-reg  [8:0] p_logo = 0, p_icon = 0, p_text = 0, p_shine = 0;
-reg  [8:0] e_logo = 0, e_icon = 0, e_text = 0;
+reg  [8:0] p_logo = 0, p_icon = 0, p_text = 0, p_shine = 0, p_ovl = 0;
+reg  [8:0] e_logo = 0, e_icon = 0, e_text = 0, e_ovl = 0;
 reg  [8:0] ease_q;
 reg  [8:0] lv_bg = 0, lv_logo = 0, lv_text = 0;
 reg [23:0] bg_in = 0;         // the background at its level, before the master's
 reg [23:0] pal_mix;
 reg  [4:0] pal_n;
+reg  [1:0] put_kind;          // 0 a colour of the pictures, 1..3 the message's ink, dim and bar
 reg        pal_put = 0;
+reg  [8:0] lv_dim = 154, lv_bar = 192;   // the message's marks and bar
 // read by the video side
 reg  [4:0] a_logo_dy = WALL_RISE;
 reg  [9:0] a_icon_x = 640, a_text_dx = WALL_TEXT_SLIDE;
 reg signed [10:0] a_shine = WALL_SHINE_FROM;
 reg        a_dots = 0;
 reg  [4:0] a_dot_head = 0;
+reg  [4:0] a_ovl_dy = WALL_RISE;   // the overlay below its place, rising in
 
 wire [4:0] seq_n = wall_seq[4:0] - 5'd9;      // the colour of steps 9..40
 wire [8:0] lv_n  = (seq_n == 5'd0 || seq_n == 5'd16) ? 9'd0    // the background of a picture
                  : (seq_n < 5'd16) ? lv_logo : (seq_n >= 5'd28) ? lv_text : 9'd256;
+// the message's colours after the pictures': steps 41..43
+wire [23:0] seq_src = (wall_seq == 7'd41 || wall_seq == 7'd42) ? WALL_INK : (wall_seq == 7'd43) ? WALL_LIT : wall_pal[seq_n];
+wire  [8:0] seq_lv  = (wall_seq == 7'd41) ? lv_msg : (wall_seq == 7'd42) ? lv_dim : (wall_seq == 7'd43) ? lv_bar : lv_n;
+// the overlay's handover: the logo's intro step backwards
+wire  [8:0] logo_t  = !ovl_on ? intro_t : (ovl_t >= OVL_T_GAP) ? 9'd0 + WALL_T_LOGO : 9'd0 + WALL_T_LOGO + WALL_D_LOGO - ovl_t;
 wire [23:0] pal_c = wall_pal[pal_n];
 wire [15:0] pal_lum = pal_c[23:16] * 8'd77 + pal_c[15:8] * 8'd150 + pal_c[7:0] * 8'd29;
 
 always @(posedge clk) begin
-	ease_q  <= wall_ease[(wall_seq == 7'd1) ? p_logo : (wall_seq == 7'd2) ? p_icon : p_text];
+	ease_q  <= wall_ease[(wall_seq == 7'd1) ? p_logo : (wall_seq == 7'd2) ? p_icon : (wall_seq == 7'd3) ? p_text : p_ovl];
 	pal_put <= 0;
 	case (wall_seq)
 		7'd0: begin
-			p_logo  <= progress(intro_t, WALL_T_LOGO, WALL_D_LOGO);
+			p_logo  <= progress(logo_t, WALL_T_LOGO, WALL_D_LOGO);
+			p_ovl   <= progress({2'd0, ovl_t}, OVL_T_IN, OVL_D_IN);
 			p_icon  <= progress(intro_t, WALL_T_ICON, WALL_D_ICON);
 			p_text  <= progress(intro_t, WALL_T_TEXT, WALL_D_TEXT);
 			p_shine <= progress(intro_t, WALL_T_SHINE, WALL_D_SHINE);
@@ -780,6 +864,7 @@ always @(posedge clk) begin
 		7'd2: e_logo  <= ease_q;
 		7'd3: e_icon  <= ease_q;
 		7'd4: e_text  <= ease_q;
+		7'd5: e_ovl   <= ease_q;
 		7'd6: if (anim_frame) begin
 			lv_bg      <= progress(intro_t, WALL_T_BG, WALL_D_BG);
 			lv_logo    <= p_logo;
@@ -790,27 +875,45 @@ always @(posedge clk) begin
 			a_shine    <= WALL_SHINE_FROM + ((WALL_SHINE_SPAN * p_shine) >> 8);
 			a_dots     <= intro_on && intro_t >= WALL_T_DOTS && !(msg_show ? msg_err | msg_list : msg_timeout);
 			a_dot_head <= dot_t[5:1];
+			lv_ovl     <= ovl_on ? p_ovl : 9'd0;
+			a_ovl_dy   <= ovl_rise ? (WALL_RISE * (10'd256 - e_ovl)) >> 8 : 5'd0;
+			ovl_vis    <= ovl_on && p_ovl != 0;
+			lv_msg     <= (ovl_on && ovl_t < OVL_T_GAP) ? p_logo : (ovl_on && ovl_out_req) ? p_ovl : 9'd256;
 		end
-		7'd7: bg_in <= fade(WALL_BG, lv_bg);
+		7'd7: begin
+			bg_in  <= fade(WALL_BG, lv_bg);
+			lv_dim <= (lv_msg * 9'd154) >> 8;
+			lv_bar <= (lv_msg * 9'd192) >> 8;
+		end
 		7'd8: begin
 			wall_bg <= fade(bg_in, wall_level);
 			dot_lit <= fade(mix(bg_in, WALL_LIT, lv_logo), wall_level);
-			msg_ink <= fade(WALL_INK, wall_level);
-			msg_dim <= fade(mix(bg_in, WALL_INK, 9'd154), wall_level);
-			msg_bar <= fade(mix(bg_in, WALL_LIT, 9'd192), wall_level);
 		end
 		default: ;
 	endcase
-	if (wall_seq >= 7'd9 && wall_seq <= 7'd40) begin
-		pal_mix <= mix(bg_in, wall_pal[seq_n], lv_n);
-		pal_n   <= seq_n;
-		pal_put <= 1;
+	if (wall_seq >= 7'd9 && wall_seq <= 7'd43) begin
+		pal_mix  <= mix(bg_in, seq_src, seq_lv);
+		pal_n    <= seq_n;
+		put_kind <= (wall_seq <= 7'd40) ? 2'd0 : wall_seq[1:0];   // 41, 42, 43: 1, 2, 3
+		pal_put  <= 1;
+	end
+	// a program that left takes its overlay along at once, not at the next frame
+	if (wall_seq == 7'd6 && !ovl_on) begin
+		lv_ovl  <= 0;
+		ovl_vis <= 0;
 	end
 	if (pal_put) begin
-		wall_fpal[pal_n] <= fade(pal_mix, wall_level);
-		if (!pal_n[4]) wall_dark[pal_n[3:0]] <= pal_lum[15:8] < 8'd160;
+		case (put_kind)
+			2'd0: begin
+				wall_fpal[pal_n] <= fade(pal_mix, wall_level);
+				if (!pal_n[4]) wall_dark[pal_n[3:0]] <= pal_lum[15:8] < 8'd160;
+			end
+			2'd1: msg_ink <= fade(pal_mix, wall_level);
+			2'd2: msg_dim <= fade(pal_mix, wall_level);
+			default: msg_bar <= fade(pal_mix, wall_level);
+		endcase
 	end
-	if (wall_seq != 7'h7F) wall_seq <= (wall_seq == 7'd41) ? 7'h7F : wall_seq + 1'd1;
+	if (wall_seq != 7'h7F) wall_seq <= (wall_seq == 7'd44) ? 7'h7F : wall_seq + 1'd1;
 	if (fade_start) wall_seq <= 0;
 end
 
@@ -883,7 +986,7 @@ end
 // rows of 6 pixels, one character a clock (its word of the message, then its
 // row of the font), in the half of the buffer the next line does not read.
 // The text is only ever on rows of the screen that have nothing else.
-wire        msg_vis   = msg_show | msg_timeout;
+wire        msg_vis   = msg_show | msg_timeout | msg_keep;
 wire  [9:0] fill_y    = v_lace ? {next2_vc[8:0], ~field} : next2_vc;
 wire  [9:0] fill_ty   = fill_y - WALL_MSG_Y;
 wire        fill_on   = msg_vis && fill_ty < 4 * WALL_MSG_PITCH && fill_ty[3:0] < 4'd13;
@@ -909,7 +1012,7 @@ always @(posedge clk_vid) begin
 		f_line <= fill_ty[5:4];
 		f_row  <= fill_ty[3:0];
 		f_bank <= next2_vc[0];
-		f_rom  <= !msg_show;
+		f_rom  <= !(msg_show | msg_keep);
 		f_c    <= 0;
 	end
 	else if (f_c < 8'd72) f_c <= f_c + 1'd1;
@@ -1132,6 +1235,8 @@ hybrid_fm fm
 
 reg        midi_en = 0;
 reg  [6:0] midi_vol = 7'd32;
+reg        midi_prog = 0;     // the program chooses where the music goes (host version 17)
+reg        midi_prog_pi = 0;  // and chose the MT32-pi
 wire       ring_en = fm_en || midi_en;
 // the MT32-pi's synth for the info box, for the block that drives it
 reg  [7:0] pi_info = 0;
@@ -1149,8 +1254,9 @@ reg   [1:0] pi_sda_s = 2'b11;
 reg  [25:0] pi_quiet_t = 0;
 wire        pi_quiet = (pi_quiet_t == MT32_QUIET);
 assign      mt32_on = mt32_seen && !pi_quiet;
-// the OSD's Music on MIDI (bit 87, host version 16) and MT32-pi on
-wire        midi_want = midi_en && !osd_status[87] && !osd_status[96];
+// the OSD's Music on MIDI (bit 87, host version 16) and MT32-pi on, or the
+// program's choice of the Pi (MH_MidiDest(), host version 17)
+wire        midi_want = midi_en && (midi_prog ? midi_prog_pi : !osd_status[87] && !osd_status[96]);
 wire        midi_out  = midi_want && mt32_on;
 
 // the queue
@@ -1253,6 +1359,8 @@ reg  [23:0] shown = 24'hFFFFFF;  // the one last named in the info box
 // SoundFont after the eighth
 wire  [7:0] info_n = (synth[23:16] == 8'hA2) ? ((synth[7:0] <= 8'd7) ? 8'd1 + synth[2:0] : 8'd13)
                    : (synth[23:16] == 8'hA1 && synth[15:8] <= 8'd2) ? 8'd9 + synth[15:8] : 8'd12;
+// and for the program (the MIDI status, host version 17): 0 while there is none
+wire  [7:0] pi_synth = (!mt32_on || synth == 24'hFFFFFF) ? 8'd0 : info_n;
 always @(posedge clk) begin
 	mt32_avail_s <= {mt32_avail_s[1:0], mt32_available};
 	pi_sda_s     <= {pi_sda_s[0], user_out[0]};
@@ -1458,15 +1566,20 @@ wire  [7:0] row_len = fmt16 ? {row_bytes, 1'b0} : {1'b0, row_bytes};
 wire [28:0] fb_addr = FB_ADDR + {10'd0, fb_index, 17'd0};
 wire [28:0] row_addr = fb_addr + fetch_row * row_len;
 
-// the game gets the screen once the core's picture has faded out
+// the game gets the screen once the core's picture has faded out; one that
+// asks for the overlay never does
 wire       ctrl_magic = (ctrl_w0[31:0] == CTRL_MAGIC);
-wire       game_take  = ctrl_magic && (game_on || wall_level == 0);
+wire       ovl_want   = ctrl_magic && ctrl_w0[58];
+assign     ovl_out_req = ctrl_magic && ctrl_w2[58];
+assign     ovl_rise    = ctrl_w2[59];
+wire       game_take  = ctrl_magic && !ovl_want && (game_on || wall_level == 0);
+wire [9:0] pal_want   = !ovl_on ? 10'd256 : (wall_level != 9'd256) ? {1'b1, wall_level} : {1'b0, lv_ovl};
 
 reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 3'd0, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 1'b0, ovl_on && ovl_out_req && ovl_t == OVL_T_IN, ovl_on, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:17], diag_toggle, osd_status[15:0]};
@@ -1530,7 +1643,10 @@ always @(posedge clk) begin
 			S_PAL_WAIT: begin
 				pal_we    <= 1;
 				pal_waddr <= rd_cnt[6:0];
-				pal_wdata <= ddr_dout;
+				// the overlay fading in: each colour from the background's
+				pal_wdata <= (pal_lv == 10'd256) ? ddr_dout
+				           : {8'd0, mix(pal_lv[9] ? 24'd0 : WALL_BG, ddr_dout[55:32], pal_lv[8:0]),
+				              8'd0, mix(pal_lv[9] ? 24'd0 : WALL_BG, ddr_dout[23:0], pal_lv[8:0])};
 			end
 			S_AUD_WAIT: begin
 				afifo_we    <= 1;
@@ -1733,6 +1849,8 @@ always @(posedge clk) begin
 				fm_wcount <= ctrl_w1[63:32];
 				midi_en     <= ctrl_magic && ctrl_w0[56] && ctrl_w2[39];
 				midi_vol    <= ctrl_w2[38:32];
+				midi_prog    <= ctrl_magic && ctrl_w2[56];
+				midi_prog_pi <= ctrl_w2[57];
 				midi_wcount <= ctrl_w2[31:0];
 				// an info box asked for: shown once the OSD menu is closed
 				if (ctrl_magic && ctrl_w2[55:48] != info_seen) begin
@@ -1771,17 +1889,29 @@ always @(posedge clk) begin
 				if (!game_take) begin
 					fade_start <= 1;
 					anim_frame <= !(u_lace && run && vbl_field);
-					if (ctrl_magic && (!intro_on || intro_done)) begin
+					if (ctrl_magic && !ovl_want && (!intro_on || intro_done)) begin
 						wall_level <= (wall_level < WALL_STEP) ? 9'd0 : wall_level - WALL_STEP;
 						if (intro_on) dot_t <= dot_t + 1'd1;
+						msg_keep   <= 0;
 					end
-					else if (game_on) begin
+					// the overlay: its handover, then the picture as it is
+					else if (ovl_on && ovl_want) begin
+						// asked to go out: its fade-in backwards, from its end
+						if (ovl_out_req && ovl_t > OVL_T_IN)
+							ovl_t <= (ovl_t > OVL_T_IN + OVL_D_IN) ? 7'd0 + OVL_T_IN + OVL_D_IN - 1'd1 : ovl_t - 1'd1;
+						else if (!(ovl_out_req && ovl_t == OVL_T_IN) && ovl_t != 7'd127) ovl_t <= ovl_t + 1'd1;
+						if (ovl_t >= OVL_T_GAP) msg_keep <= 0;
+						dot_t <= dot_t + 1'd1;
+					end
+					else if (game_on || ovl_on) begin
 						wall_hold  <= WALL_HOLD_LEFT;
 						wall_level <= 0;
 						intro_on   <= 0;
 						intro_skip <= 0;
 						intro_t    <= 0;
 						dot_t      <= 0;
+						ovl_on     <= 0;
+						msg_keep   <= 0;
 					end
 					else if (!run) ;
 					// a message: no black, and the picture as at the end of
@@ -1797,11 +1927,30 @@ always @(posedge clk) begin
 						            : (wall_level > 9'd256 - WALL_STEP) ? 9'd256 : wall_level + WALL_STEP;
 						if (intro_on && intro_t != 9'd511) intro_t <= intro_t + 1'd1;
 						if (intro_on && intro_t >= WALL_T_DOTS) dot_t <= dot_t + 1'd1;
+						// the overlay's handover begins once the intro is over
+						// and the picture is all there
+						if (ovl_want && intro_on && intro_done && wall_level == 9'd256) begin
+							ovl_on   <= 1;
+							ovl_t    <= 0;
+							msg_keep <= msg_show;
+						end
 					end
 				end
-				if (ctrl_magic && (!pal_loaded || ctrl_w1[31:0] != pal_seq)) begin
+				// the overlay given up: gone with the picture, once the game has the
+				// screen, which is black until the game's first frame
+				if (game_take && ovl_on) begin
+					ovl_on   <= 0;
+					ovl_left <= 1;
+					ovl_fb   <= fb_index;
+				end
+				else if (ovl_left && (!game_take || fb_index != ovl_fb)) ovl_left <= 0;
+				// a level of the overlay's when a frame starts: interlaced, both
+				// fields of a frame are of the same picture
+				if (ctrl_magic && (!pal_loaded || ctrl_w1[31:0] != pal_seq
+				                   || (pal_want != pal_lv && !(u_lace && run && vbl_field)))) begin
 					pal_loaded   <= 1;
 					pal_seq      <= ctrl_w1[31:0];
+					pal_lv       <= pal_want;
 					rd_cnt       <= 0;
 					rd_len       <= 8'd128;
 					ddr_addr     <= PAL_ADDR + (ctrl_w0[48] ? 29'h80 : 29'h0);
@@ -1853,7 +2002,7 @@ always @(posedge clk) begin
 					ddr_we       <= 1;
 					ddr_addr     <= MSTAT_ADDR;
 					ddr_burstcnt <= 8'd4;
-					ddr_din      <= {8'd0, midi_voices, midi_under, midi_read};
+					ddr_din      <= {pi_synth, midi_voices, midi_under, midi_read};
 					wr_beat      <= 1;
 				end else if (wr_beat == 4'd4) begin
 					ddr_we <= 0;
@@ -1879,6 +2028,9 @@ always @(posedge clk) begin
 		wall_level <= 0;
 		intro_on   <= 0;
 		intro_skip <= 0;
+		ovl_on     <= 0;
+		msg_keep   <= 0;
+		ovl_left   <= 0;
 		attached   <= 0;
 		alone_t    <= 0;
 		msg_timeout <= 0;
@@ -1956,8 +2108,9 @@ always @(posedge clk_vid) begin
 		if (o_hbl | o_vbl) begin
 			{r, g, b} <= 24'd0;
 		end else if (!v_valid) begin
-			// the core's picture until the HPS side publishes a valid control block
-			{r, g, b} <= wall_rgb;
+			// the core's picture until the HPS side publishes a valid control
+			// block, and under the overlay
+			{r, g, b} <= (v_ovl && !pix_clear) ? (pal_hi ? pal_q[55:32] : pal_q[23:0]) : wall_rgb;
 		end else if (v_fmt16) begin
 			r <= {pix16[15:11], pix16[15:13]};
 			g <= {pix16[10:5], pix16[10:9]};

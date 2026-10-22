@@ -204,10 +204,13 @@ integer cur_vmode = 0, cur_mask = 0;
 integer cur_fm = 0, cur_fmw = 0;
 // the MIDI synthesizer: enable, volume, commands written; the info box
 integer cur_midi = 0, cur_midivol = 32, cur_midiw = 0, cur_info = 0, cur_infocnt = 0;
+// where the MIDI goes, the program's choice (MH_MidiDest(), host version 17):
+// cur_prog 1 to choose, cur_prog_pi 1 for the MT32-pi
+integer cur_prog = 0, cur_prog_pi = 0;
 task set_ctrl(input integer fb, input integer mode, input integer slot, input integer seq);
 	mem[0] = {cur_mask[3:0], 2'd0, cur_fm[0], 1'b1, 7'd64, slot[0], cur_vmode[3:0], 3'd0, mode[0], fb[7:0], 32'h4259484D};
 	mem[1] = {cur_fmw[31:0], seq[31:0]};
-	mem[2] = {8'd0, cur_infocnt[7:0], cur_info[7:0], cur_midi[0], cur_midivol[6:0], cur_midiw[31:0]};
+	mem[2] = {6'd0, cur_prog_pi[0], cur_prog[0], cur_infocnt[7:0], cur_info[7:0], cur_midi[0], cur_midivol[6:0], cur_midiw[31:0]};
 endtask
 // command c of the MIDI ring: word k is {c, k}
 task midi_cmds(input integer from, input integer to);
@@ -475,6 +478,35 @@ task test_mt32;
 	if (rx_n != 9 || dut.mt32_snd_l != 0 || n[7:0] != 8'hA0) begin $display("FAIL: MT32-pi with the OSD's Music on FM chip"); errors = errors + 1; end
 	pi_read(n);
 	if (n[7:0] != 8'hA1) begin $display("FAIL: MT32-pi request %h after the mute", n[7:0]); errors = errors + 1; end
+	// the program's choice (MH_MidiDest(), host version 17) over the OSD's
+	// Music on FM chip and MT32-pi off: the Pi plays; then the synthesizer
+	// chosen, the Pi silent again
+	osd_mt32[0] = 1;
+	cur_prog = 1; cur_prog_pi = 1;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(1);
+	pi_read(n);
+	if (!dut.midi_out) begin $display("FAIL: MT32-pi not out with the program's choice"); errors = errors + 1; end
+	mem[29'h4007] = {6'd0, 2'd3, 8'h40, 8'h3F, 8'h90, 32'd0};
+	cur_fmw = 8;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(3);
+	pi_read(n);
+	$display("mt32: the program's choice, the Pi: %0d bytes, %h %h %h", rx_n, rx[9], rx[10], rx[11]);
+	if (rx_n != 12 || rx[9] != 8'h90 || rx[10] != 8'h3F || rx[11] != 8'h40) begin
+		$display("FAIL: MT32-pi with the program's choice"); errors = errors + 1;
+	end
+	cur_prog_pi = 0;
+	mem[29'h4008] = {6'd0, 2'd3, 8'h40, 8'h41, 8'h90, 32'd0};
+	cur_fmw = 9;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(3);
+	pi_read(n);
+	$display("mt32: the program's choice, the synthesizer: %0d bytes, request %h", rx_n, n[7:0]);
+	if (rx_n != 12 || dut.midi_out || n[7:0] != 8'hA0) begin $display("FAIL: MT32-pi with the program's choice of the synthesizer"); errors = errors + 1; end
+	pi_read(n);
+	cur_prog = 0;
+	osd_mt32[0] = 0;
 	osd_music = 0;
 	cur_fm = 0; cur_fmw = 0; cur_midi = 0; cur_midivol = 32;
 	set_ctrl(1, 0, 0, 10);

@@ -403,6 +403,43 @@ void MH_MidiReset(int ahead);
 // environment for another folder)
 const char* MH_SoundFontDir(void);
 
+// Host version 17, for a program that is a MIDI player rather than a game
+// (docs/midiplayer.md). Without them a core's music follows its OSD, as above.
+//
+// Where the music goes, the program's choice rather than the OSD's (the
+// MT32-pi's line, the Music line): MH_MIDI_SYNTH the synthesizer in the core,
+// MH_MIDI_PI an MT32-pi while one is connected (else the synthesizer),
+// MH_MIDI_OSD the OSD's again. MH_MidiSynthChanged() is 1 after a switch, as
+// after the OSD's.
+enum { MH_MIDI_OSD, MH_MIDI_SYNTH, MH_MIDI_PI };
+void MH_MidiDest(int dest);
+// 1 while an MT32-pi is connected to the core's user port
+int MH_MidiPiConnected(void);
+// The synthesizer plays the SoundFont `file` (a name in MH_SoundFontDir(), or
+// a path) instead of the OSD slot's, until MH_MidiLoadSoundFont(NULL) gives
+// the choice back to the OSD. The load is the OSD's: in a thread, the music
+// faded out meanwhile, the channels kept; MH_MidiReady() is 0 until it is
+// there. No info box when it fails: MH_MidiSoundFont() says so. 0 when the
+// core has no synthesizer.
+int MH_MidiLoadSoundFont(const char* file);
+// The synthesizer's SoundFont: MH_SF_LOADED (its path in `file`),
+// MH_SF_LOADING (the one coming, when known), MH_SF_FAILED (the last one
+// asked for is no SoundFont 2, or too big, or missing), MH_SF_NONE. `file` may
+// be NULL.
+enum { MH_SF_NONE, MH_SF_LOADING, MH_SF_LOADED, MH_SF_FAILED };
+int MH_MidiSoundFont(char* file, int size);
+// The SoundFont slots of every core's OSD line SoundFont (docs/midiplayer.md,
+// "slots.txt"): for each of the 8 (0 the Default) the file of
+// MH_SoundFontDir() it plays and whether it is its own (own[k] 0: an empty
+// slot, which plays slot 0's). 0 when the folder has no font.
+#define MH_SF_SLOTS 8
+#define MH_SF_NAME 256
+int MH_SoundFontSlots(char files[MH_SF_SLOTS][MH_SF_NAME], int own[MH_SF_SLOTS]);
+// Puts a file of MH_SoundFontDir() in a slot, NULL or "" empties it: writes
+// slots.txt with every slot as it is now, so no other one moves. A core reads
+// it when its game loads a font. 0 when it cannot be written.
+int MH_SetSoundFontSlot(int slot, const char* file);
+
 // Messages: shown by the core under its logo, on its own picture (the purple
 // screen), host version 13. MH_MSG_ROWS lines of MH_MSG_COLS characters
 // (32..126; others are shown as '?') is all there is room for: write
@@ -457,8 +494,40 @@ int MH_GameFound(const mh_game* game, const char* dir);
 // full game) the only one, or the one the player picks from a list
 // (*listed = 1); -1 when the player backs out, or after the message `none`
 // when there is none. A message waits until the player leaves the core; %s
-// in it is the game's folder (MH_GamePath()).
+// in it is the game's folder (MH_GamePath()). The game it returns gets its
+// logo (MH_GameLogo(), its `name` the title; a shareware its full game's
+// logo; MH_GameLogoLoading() for a game without files to check), as does one
+// whose files are missing (MH_GameLogoMissing()).
 int MH_PickGame(const mh_game* games, int count, const char* dir, const char* none, int* listed);
+
+// The game's logo at its start (host version 17, docs/game_logo.md): the
+// core's MiSTer logo goes, the game's comes in its place (logos/<id>.mhl next
+// to the program, made by package.sh with tools/make_logo.py), and under it
+// the lines "Checking Game Data...", "Game Data OK", "Loading <title>...". The
+// game loads meanwhile; its first frame (MH_Present(), MH_PresentBuffer())
+// waits until the logo has been there 2 seconds, and its palette and mode are
+// taken with that frame. MH_PickGame() calls it with the game it returns: a
+// port with pick code of its own calls it once it knows the game. Without the
+// file, or with a core of host version 16 or older: "Loading <title>..." under
+// the MiSTer logo, and 0. A program started in this one's place (execv after
+// MH_Close()) takes the logo over in MH_Open().
+int MH_GameLogo(const char* id, const char* title);
+// A game without files to check (MH_PickGame() with none, the MIDI Player):
+// its logo and "Loading <title>..." alone
+int MH_GameLogoLoading(const char* id, const char* title);
+// The overlay (host version 17): the program's frames, 640x480 at 8bpp (its
+// mode and format are taken as that), are drawn over the core's picture
+// instead of taking the screen; index 0 is transparent. The purple screen and
+// its badge stay; the program keeps clear of the badge (x >= 520, y >= 380).
+// Its first frame comes in as the overlay's handover has it (docs/
+// midiplayer.md, "The screen"), and after the game's logo, once the logo has
+// gone out. Called before the first frame; 0 with a core of host version 16
+// or older, whose screen the frames then take as ever.
+int MH_Overlay(int on);
+// The game's files are not there: its logo and "Checking Game Data...", before
+// the message naming them (MH_UI_Message() with MH_UI_WAIT). MH_PickGame()
+// does it for a game's menu entry.
+void MH_GameLogoMissing(const char* id);
 
 // Screens every hybrid core shares (mister_ui.c), drawn straight to the core;
 // they work before the game has set up anything.
