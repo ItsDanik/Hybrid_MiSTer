@@ -11,7 +11,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 | Path | |
 |---|---|
 | `rtl/` | The FPGA side. `hybrid_host.sv`: scanout from DDR3 in the video mode the game sets (8bpp paletted or RGB565, triple buffered), at 15.6kHz / 59.6Hz wherever the mode allows it, 44.1kHz audio ring, keyboard, mouse, joysticks and OSD status published every vblank. Its header documents the shared memory layout and the video timings. `hybrid_vclk.sv` and `pll_vid` make its video clock, which changes with the mode and the CRT options. `hybrid_fm.sv` is the FM chip (a YM3812, with [JTOPL](https://github.com/jotego/jtopl) in `rtl/jtopl/`): see [The FM chip](#the-fm-chip). A core takes all of it with `hybrid.qip`. `sim/run.sh` runs the testbenches. |
-| `hps/` | The ARM side as a small C library (`mister_hybrid.h`): attach to the core, present frames, palette, input, audio, the Menu OK/Back resolution, and the shared screens (game list, error message). |
+| `hps/` | The ARM side as a small C library (`mister_hybrid.h`): attach to the core, present frames, palette, input, audio, the Menu OK/Back resolution, the shared screens (game list, error message), the MIDI synthesizer's voices (`mister_midi.c`) and the diagnostic report (`mister_diag.c`). |
 | `sdl2/` | SDL2 video, audio and input drivers on top of `hps/`, and the script that builds a static SDL2, SDL2_mixer and SDL2_net with them. An SDL2 game needs little more than a recompile. |
 | `launcher/distribution.py` | Publishes ports to the database update_all installs them from (`dnk_Distribution_MiSTer`): see [Distribution](#conventions). |
 | `launcher/danik_hybrid_ports.sh` | What starts the games on the MiSTer: a daemon that runs `games/dnk/<engine>/danik_hybrid_launch.sh` while the port's core is loaded, and moves ports of the old layout into the new one (see [The launcher](#the-launcher)). `danik_hybrid_cores.sh` is the launcher before it, in its last version (3), which hands a running one over to it |
@@ -19,6 +19,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 | `template/`, `new_core.sh` | The start of a new core repository: FPGA core, build, package and deploy scripts, launch script and READMEs with the name filled in. See [Porting a game](#porting-a-game). |
 | `tools/fakecore.c` | Stand-in for the FPGA core on the PC: runs the game against a file instead of the DDR3 window, feeds scripted input, takes screenshots and records audio. Its FM chip is a software one (Nuked OPL3, `tools/nuked/`). |
 | `tools/fmtest.c` | Plays a scale on the FM chip, on the PC with `fakecore` or on the MiSTer: the test that the chip is there and in tune. |
+| `tools/diag_read.py` | Reads a player's diagnostic report: its summary, a graph of the 60 seconds, two reports side by side. See [Diagnostic report](#diagnostic-report). |
 | `tools/*.py` | For tests on the MiSTer over ssh: `uinput_kbd.py` and `uinput_pad.py` press keys and gamepad buttons through Main_MiSTer, `status.py` prints what the core publishes. |
 
 ## The launcher
@@ -86,7 +87,7 @@ if (MH_FMAvailable()) {            // 0 with a core older than host version 10
 
 ## MIDI and the MT32-pi
 
-Since host version 16 the core has a MIDI synthesizer of its own (`rtl/hybrid_midi.sv`, [`docs/midi_synth.md`](docs/midi_synth.md)): 128 voices playing a SoundFont 2 from the DDR3 (reverb and chorus are still to come: phase 4 of the spec), sample-exact with its C model (`tools/midisynth/`). The game's code is the same for it and for the MT32-pi below; the player picks in the OSD.
+Since host version 16 the core has a MIDI synthesizer of its own (`rtl/hybrid_midi.sv`, [`docs/midi_synth.md`](docs/midi_synth.md)): 128 voices playing a SoundFont 2 from the DDR3, with FluidSynth's reverb and chorus, sample-exact with its C model (`tools/midisynth/`). The game's code is the same for it and for the MT32-pi below; the player picks in the OSD.
 
 Since host version 15 a game with General MIDI music (Doom's, Shadow Warrior's) can play it on an [MT32-pi](https://github.com/dwhinham/mt32-pi): a MIDI synthesizer on a Raspberry Pi (FluidSynth with SoundFonts, Munt for the Roland MT-32 and CM-32L) that MiSTer players connect to the user port for ao486, with its I2S sound going back to the MiSTer. The core has MiSTer's own module for it (`sys/mt32pi.sv`, as ao486 has it): the game's MIDI messages go to the Pi at 31250 baud, and its sound is mixed into the core's audio.
 
@@ -110,7 +111,8 @@ else
 - `MH_MidiVolume()` is the level in the mix of the Pi and of the synthesizer, 32 as it comes; the game's music volume applies with it. The Pi's sound is mono or stereo as it makes it.
 - Not there: the MT32-pi's display drawn over the picture (ao486's *Show Info: LCD*), and MIDI to a USB synthesizer.
 - On the PC, `FAKECORE_MT32=1` gives `fakecore` an MT32-pi (its OSD line is the script's `osd2`), and `FAKECORE_MIDILOG=<file>` logs what it is sent, by audio frame; `tools/midilog2mid.py` makes a MIDI file of that, to play with `fluidsynth -F out.wav <font.sf2> out.mid`. The synthesizer is its C model there, its sound in `audio.raw`; `FAKECORE_SYNTHLOG=<file>` logs its commands, and the script's `music` and `soundfont` lines are the OSD's. `tools/midiplay.c` plays a MIDI file through the library, on the PC and on the MiSTer.
-- A core takes the template's lines in `core/<Name>.sv` (no `USER_OUT = '1`; the ports `clk_audio`, `user_in`, `user_out`, `mt32_on`, `info_req`, `info` of `hybrid_host`; menu mask bit 6; hps_io's `info_req` / `info`) and, if its games play MIDI, the *Music* and *SoundFont* lines and the MT32-pi's four after its music option, and the `"I,"` line.
+- **Memory and size** (host version 16): the library writes the synthesizer's commands to the MIDI ring in the shared memory (0x030000, 1024 commands of 16 words; the layout is in `hybrid_host.sv`'s header) and the SoundFont's samples to a DDR3 region of their own, 64 MB at 0x31000000 to 0x34FFFFFF, mapped only while the synthesizer is used (0x30400000 to 0x30FFFFFF stays free for later). The commands, the parameter block and the formats are in [`docs/midi_synth.md`](docs/midi_synth.md). In the FPGA the synthesizer with its effects takes about 9,500 ALMs, 316 M10K blocks and 20 DSP blocks, on a 100 MHz clock of its own (`pll_midi`): CrispyDoom with it uses 54% of the logic, 82% of the memory blocks and 92% of the DSP blocks, with about 0.1 ns of timing margin at 100 MHz (2026-10-21). So it is only in a core whose games play MIDI (Danik, 2026-10-22): `MIDI_SYNTH` 1 in `core/<Name>.sv` (`hybrid_host`'s parameter, the template's `GAME:` line), 0 in the others, which leave the synthesizer and its PLL out; status word 1 bit 28 says which, and without it `MH_MidiWanted()` is the MT32-pi's alone, as with a core of host version 15. `FAKECORE_SYNTH=0` is such a core on the PC.
+- A core takes the template's lines in `core/<Name>.sv` (no `USER_OUT = '1`; the ports `clk_audio`, `user_in`, `user_out`, `mt32_on`, `info_req`, `info` of `hybrid_host`; menu mask bit 6; hps_io's `info_req` / `info`) and, if its games play MIDI, the *Music* and *SoundFont* lines and the MT32-pi's four after its music option, and the `"I,"` line. The `"I,"` line stays after the last line of the OSD's main page, where the template has it: Main_MiSTer counts it as a line when Enter is pressed but does not draw it, so a line of the main page below it runs the line above it.
 
 ## Video modes
 
@@ -144,17 +146,18 @@ CRT Options -> Horizontal Size
                Horizontal Pos
                Vertical Pos
 
-               HUD (Top)       0..24, 10 by default
-               HUD (Bottom)    0..24, 10 by default
+               HUD (Top)       0..24, 0 by default
+               HUD (Bottom)    0..24, 0 by default
 ```
 
 - The number is the pixels between the HUD and that edge of a 240-line screen: 0 puts the HUD at the very edge (HDMI, which shows all of the picture), 24 leaves 24 lines. In a 480-line mode it is twice that. The same number puts the HUD in the same place in every game. Above 20 the HUD is further in than in the game's own 200-line layout, over the view.
+- 0 is the default (host version 16; Danik, 2026-10-21): a player without overscan (HDMI, a scaler) sees every pixel, and a HUD away from the edge looked wrong to them. A player with a CRT moves it in until it is in view.
 - In a 200-line mode there is no room to move the HUD: the lines do nothing there, and the game greys them out with `MH_SetMenuMask()` (`D` flags) while one is used.
 - The game reads them with `MH_HudMargins(&top, &bottom)` (or `MiSTer_HudRows()` of `template/game/mister_port.c`, which gives the rows for a screen of 240 or 480 lines) every frame and draws its HUD there: the player sees a change at once, while the OSD is still open. Nothing else moves: the view stays 240 lines, and full-screen pictures stay centred at their own size (artwork is only ever scaled by whole numbers, for the 640-wide modes).
-- The lines are only in the OSD of a game that has a HUD at that edge: ECWolf has a bottom HUD only, so it has *HUD (Bottom)* and no *HUD (Top)*. A game without a HUD has neither, nor the empty line above them. In a core with several games of which only some have a HUD at an edge, the game hides the line with `MH_SetMenuMask()` (`H0`..`H3` in front of it).
+- A game with a HUD has both lines, and the line of an edge it has no HUD at is greyed out (Danik, 2026-10-21): ECWolf has a bottom HUD only, so *HUD (Top)* is there but greyed out. The core says which edges in `HUD_EDGES` (`template/core/@NAME@.sv`, a `GAME:` line), which sets menu mask bits 7 (no HUD at the top) and 8 (at the bottom), and the lines carry `D7` and `D8`; so they are greyed out from the moment the core is loaded, before the game runs. A game without a HUD has neither line, nor the empty line above them. In a core with several games of which only some have a HUD at an edge, `HUD_EDGES` names every edge one of them has, and a game with none there greys the line out with `MH_SetMenuMask()` (a `D0`..`D3` of its own in front of it).
 - They are saved with the other options, per game: a game started from its own menu entry (an MGL with a set name) has its own settings file.
-- `MH_HUD_DEFAULT` (10) is what an older core without the lines gives. `MISTER_HYBRID_HUD=<top>,<bottom>` in the game's environment fixes them, for a test or a screenshot. In `fakecore`: `hud <top> <bottom>`.
-- The option's entries start at 10, its default (the first entry of an option is its default): entry n is (n + 10) mod 25 pixels.
+- `MH_HUD_DEFAULT` (0) is what an older core without the lines gives. `MISTER_HYBRID_HUD=<top>,<bottom>` in the game's environment fixes them, for a test or a screenshot. In `fakecore`: `hud <top> <bottom>`.
+- Entry n of the option is n pixels (the first entry of an option is its default). Up to host version 15 the entries started at 10, the default then: entry n was (n + 10) mod 25 pixels, and the library reads a core of those versions that way. A core built again with host version 16 takes the template's lines; a player who had set a margin other than 10 in it sets it again (the saved number now means that many pixels).
 
 ## Several games in one core
 
@@ -185,6 +188,18 @@ Since host version 13 a message is shown on the core's own picture (the purple s
 | the core itself | no game in 12 seconds after it was loaded (`WALL_TIMEOUT` of `hybrid_host.sv`) | "Game not running. Please run danik_hybrid_ports.sh from the Scripts folder.": the launcher is not running |
 
 A message is a block in the shared memory at 0x001800 (`hybrid_host.sv`). The core picture comes back at once for it, without the 3 seconds of black after a game has left and without the intro.
+
+## Diagnostic report
+
+Every core's OSD ends with *Save Diagnostic Report* (host version 16; `docs/diagnostics.md`, the decisions). A player who has a problem picks it while the game runs; the library saves `games/dnk/diagnostics/<Engine>_<YYYYMMDD>_<HHMMSS>.zip` on the SD card and Main_MiSTer's info box says so (texts 17 and 18 of the template's `"I,"` line, `MH_INFO_DIAG_SAVED` / `MH_INFO_DIAG_FAILED`). The game needs no code for it and keeps running.
+
+- **The line**: `"T[16],Save Diagnostic Report;"`, the last of the template's `CONF_STR` (after the game's options and the music lines, before `J1`). Bit 16 was *Menu OK* up to host version 13: `hybrid_host.sv` flips the bit at the end of each pulse, so a saved setting with the bit set does no harm.
+- **The record**: a thread of the library (`hps/mister_diag.c`, on CPU1, at a lower priority) keeps 60 one-second slots all the time: fields, frames, frames never shown and shown twice (from the same count as `MISTER_HYBRID_PACE`; interlaced, a frame every second field is meant), the latest a frame came in its field, the CPU time of the game thread and of the others, how busy CPU0 and CPU1 were, the audio ring running dry, where the music went. It wakes ten times a second to look at bit 16. Nothing is written until the line is picked.
+- **The zip** (stored, written by the library): `summary.txt` (the numbers and what stands out), `pacing.csv` (a line a second), `setup.txt` (versions: Main_MiSTer's build date from its program, `/tmp/RBFNAME`, host version, the library's build; the video, audio and input keys of the ini Main_MiSTer reads (`MiSTer.ini`, or the `MiSTer_*.ini` the player picked: its number is in the memory Main_MiSTer keeps, `altcfg()`; never the others), only those and only in the sections that apply to the core: the list is `ini_keys` in `mister_diag.c`; the video mode, its clock, free space, the game thread's CPUs, the `MISTER_HYBRID_*` and `SDL_*` environment), `osd.txt` (the framework's lines by name, the game's bits in hex), `system.txt` (kernel, load, memory, the processes using the most CPU over a second, the input devices' names and ids, how the SD card and USB drives are mounted), `log.txt` (the end of what the game printed: the launch script's file in `/tmp`), `screenshot.png` (the frame on the screen, at the game's resolution; none while the core's own picture is there) and `game/<name>` from `MH_DiagAdd()`.
+- **Never in it**: network files and settings, addresses (the input devices' `Uniq` and `Phys` lines hold Bluetooth addresses and are left out; network shares are not listed), keys of `MiSTer.ini` outside the list, saved games, game data, folder listings.
+- **A game** may add what it knows of its own state with `MH_DiagAdd(name, text)` (its settings file, the level): the last text given for a name goes in as `game/<name>`.
+- **Reading one**: `tools/diag_read.py <zip>` prints the summary and a graph of the 60 seconds; `tools/diag_read.py <zip> <zip>` puts two side by side.
+- **Tests**: `fakecore`'s script line `diag` picks the line; `MISTER_HYBRID_DIAG_ROOT=<dir>` stands for `/media/fat` (where `MiSTer.ini` is read and the report is written); `MISTER_HYBRID_DIAG=0` turns the record off.
 
 ## Conventions
 
@@ -252,9 +267,9 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 "P1O[68:64],Horizontal Size,0,+1,...,+7,-24,...,-1;",
 "P1O[72:69],Horizontal Pos,0,+1,...,+7,-8,...,-1;",
 "P1O[76:73],Vertical Pos,0,+1,...,+7,-8,...,-1;",
-"P1-;",                                        the HUD lines: only for an edge the game has a HUD at,
-"P1O[81:77],HUD (Top),10,11,...,24,0,...,9;",   none of the three without a HUD (see HUD margins)
-"P1O[86:82],HUD (Bottom),10,11,...,24,0,...,9;",
+"P1-;",                                        the HUD lines: both in a game with a HUD, greyed out
+"D7P1O[81:77],HUD (Top),0,1,...,24;",           at an edge it has none at (HUD_EDGES), none of the
+"D8P1O[86:82],HUD (Bottom),0,1,...,24;",        three without a HUD (see HUD margins)
 "O[6:5],Stereo Mix,None,25%,50%,100%;",
 "O[15],FPS Counter,Off,On;",
 "-;",
@@ -269,8 +284,8 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 ```
 
 - **Triggers**, lines that do something once each time they are selected (a cheat, "next level"): `T[56]` to `T[59]` only, which the game reads with `MH_OSDTriggers()` (host version 13; Main_MiSTer sets a trigger's bit for microseconds, so the core flips it instead and the game sees the change).
-- Status bits 0..23 mean the same in every core (`MH_OSD_*` in `mister_hybrid.h`), bits 24..63 belong to the game, bits 64..86 are the *CRT Options* page, the same in every core, 87..90 *Music* and *SoundFont* (host version 16) and 96..104 the MT32-pi's lines (host version 15), both in a core whose games play MIDI ([MIDI and the MT32-pi](#midi-and-the-mt32-pi)); the game reads them with `MH_OSDStatusHigh()` (host version 13), for the HUD margins. Bit 15 is the *FPS Counter*: the library draws the frames shown in the last second into the top left corner of every frame it hands to the core (`MH_Present()`, so SDL games too), and the game does nothing for it. Bits 16..23 are unused (*Menu OK* / *Menu Back* up to host version 13).
-- *HDMI Only* and *CRT Options* are the same lines in every core, whether or not its game has a mode they matter for: see [Video modes](#video-modes). *HDMI Only* is bit 1 since host version 13. Bit 0 is never an option: Main_MiSTer holds it as the core's reset while it loads the core and clears it after, so *HDMI Only*, which was there, was off after every load. The menu mask bits 4 and 5 that hide them are the core's; a game has bits 0..3 (`MH_SetMenuMask()`).
+- Status bits 0..23 mean the same in every core (`MH_OSD_*` in `mister_hybrid.h`), bits 24..63 belong to the game, bits 64..86 are the *CRT Options* page, the same in every core, 87..90 *Music* and *SoundFont* (host version 16) and 96..104 the MT32-pi's lines (host version 15), both in a core whose games play MIDI ([MIDI and the MT32-pi](#midi-and-the-mt32-pi)); the game reads them with `MH_OSDStatusHigh()` (host version 13), for the HUD margins. Bit 15 is the *FPS Counter*: the library draws the frames shown in the last second into the top left corner of every frame it hands to the core (`MH_Present()`, so SDL games too), and the game does nothing for it. Bits 16..23 were *Menu OK* / *Menu Back* up to host version 13; bit 16 is *Save Diagnostic Report* since host version 16 ([Diagnostic report](#diagnostic-report)), 17..23 are unused.
+- *HDMI Only* and *CRT Options* are the same lines in every core, whether or not its game has a mode they matter for: see [Video modes](#video-modes). *HDMI Only* is bit 1 since host version 13. Bit 0 is never an option: Main_MiSTer holds it as the core's reset while it loads the core and clears it after, so *HDMI Only*, which was there, was off after every load. The menu mask bits 4 and 5 that hide them are the core's, as are 6 (an MT32-pi is there) and 7 and 8 (no HUD at the top / the bottom, `HUD_EDGES`); a game has bits 0..3 (`MH_SetMenuMask()`).
 - The first entry of every option is its default, so a fresh install needs no settings.
 - An option the game cannot honour is left out. One that depends on the data the player installed (a resolution this copy of the game has no graphics for) is replaced by a greyed line that says what is in use, with `MH_SetMenuMask()` and `H`/`D` flags in the `CONF_STR` (see VanillaConquer's *Resolution*).
 - *Resolution* is the game's to read: it sizes its window (or calls `MH_SetMode()`) and the core follows. It applies while the game runs, without a restart. The shared screens are always 320x200.

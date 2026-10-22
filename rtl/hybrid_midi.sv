@@ -54,8 +54,10 @@ module hybrid_midi
 	output reg [127:0] st_bits = 0,
 	output reg  [31:0] st_frame = 0,
 
-	// for the testbench: the four sums of the frame last made, and which
+	// for the testbench: the four sums of the frame last made, left and
+	// right with the effects, and which
 	output reg [159:0] dbg_sums = 0,
+	output reg  [79:0] dbg_fx = 0,
 	output reg  [31:0] dbg_out = 0,
 	output reg  [31:0] dbg_frame = 0,
 	output reg         dbg_tgl = 0
@@ -651,6 +653,9 @@ reg   [6:0] sn[0:3];
 wire  [7:0] s_next = ffs128(s_todo);
 reg  [47:0] sums[0:3];
 reg   [2:0] fin_st;
+reg         fx_go = 0;            // the effects (below): start, and their end
+wire        fx_done;
+wire signed [39:0] fx_l, fx_r;
 
 // the sample engine's per-voice work and values carried from stage to stage
 typedef struct packed {
@@ -703,6 +708,7 @@ always @(posedge mclk) begin : engine
 	fq_we   <= 0;
 	k_go    <= 0;
 	cj      <= 0;
+	fx_go   <= 0;
 
 	if (fpulse) begin
 		if (ph == P_IDLE) begin
@@ -936,10 +942,12 @@ always @(posedge mclk) begin : engine
 		P_S: if (sc == 3'd7 && sv[2:0] == 0 && s_todo == 0) begin
 			ph     <= P_FIN;
 			fin_st <= 0;
+			fx_go  <= 1;
 		end
 
+		// ---- the effects, then the output
 		P_FIN: begin
-			fin_st <= fin_st + 1'd1;
+			if (fin_st != 3'd0 || fx_done) fin_st <= fin_st + 1'd1;
 			if (fin_st == 3'd3) begin
 				m_under  <= under;
 				m_voices <= v_count;
@@ -947,6 +955,7 @@ always @(posedge mclk) begin : engine
 				m_frame  <= F + 1'd1;
 				stgl     <= ~stgl;
 				dbg_sums <= {sums_c[3], sums_c[2], sums_c[1], sums_c[0]};
+				dbg_fx   <= {fo_r, fo_l};
 				dbg_out  <= {o_r, o_l};
 				dbg_frame <= F;
 				dbg_tgl  <= ~dbg_tgl;
@@ -1023,15 +1032,28 @@ generate
 	end
 endgenerate
 
-// in three clocks: held, scaled, held
+// the reverb and the chorus (hybrid_midi_fx.sv): their sends in, what they
+// add to the left and the right out
+hybrid_midi_fx #(.TABLES(TABLES)) fx
+(
+	.clk(mclk), .clr(mclr),
+	.go(fx_go), .rev_in(sums_c[2]), .cho_in(sums_c[3]),
+	.done(fx_done), .wet_l(fx_l), .wet_r(fx_r)
+);
+
+function automatic signed [39:0] hold40(input signed [40:0] v);
+	hold40 = v > 41'sh7FFFFFFFFF ? 40'sh7FFFFFFFFF : v < -41'sh8000000000 ? -40'sh8000000000 : v[39:0];
+endfunction
+
+// in three clocks after the effects: with them and held, scaled, held
 reg [15:0] o_l = 0, o_r = 0;
-reg signed [39:0] fo_l, fo_r;
+reg signed [39:0] fo_l = 0, fo_r = 0;
 reg signed [47:0] fo_pl, fo_pr;
 always @(posedge mclk) begin : outputs
 	reg signed [47:0] l, r;
-	if (ph == P_FIN && fin_st == 3'd0) begin
-		fo_l <= sums_c[0];
-		fo_r <= sums_c[1];
+	if (ph == P_FIN && fin_st == 3'd0 && fx_done) begin
+		fo_l <= hold40(41'(sums_c[0]) + 41'(fx_l));
+		fo_r <= hold40(41'(sums_c[1]) + 41'(fx_r));
 	end
 	if (ph == P_FIN && fin_st == 3'd1) begin
 		fo_pl <= 48'(fo_l) * $signed({1'b0, vol});

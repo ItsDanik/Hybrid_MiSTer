@@ -22,6 +22,9 @@ int ms_queued(const midisynth* ms);
 // every voice. sums: left, right, reverb, chorus; Q.14 of a 16-bit sample,
 // 40 bits.
 void ms_frame(midisynth* ms, uint32_t frame, int64_t* sums);
+// The reverb and the chorus of the frame's sums (from ms_frame()): their
+// sound added to the left and the right, held at 40 bits again.
+void ms_effects(midisynth* ms, int64_t* sums);
 // Left and right for the core's output at `volume` (32 as it comes), held
 // at 16 bits.
 void ms_output(const int64_t* sums, int volume, int16_t* out);

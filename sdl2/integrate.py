@@ -41,6 +41,8 @@ copy(here.parent / "hps/mister_games.c", "src/core/mister/mister_games.c")
 copy(here.parent / "hps/mister_triggers.c", "src/core/mister/mister_triggers.c")
 copy(here.parent / "hps/mister_midi.c", "src/core/mister/mister_midi.c")
 copy(here.parent / "hps/mister_midi.h", "src/core/mister/mister_midi.h")
+copy(here.parent / "hps/mister_diag.c", "src/core/mister/mister_diag.c")
+copy(here.parent / "hps/mister_diag.h", "src/core/mister/mister_diag.h")
 copy(here.parent / "hps/mister_font.h", "src/core/mister/mister_font.h")
 copy(here.parent / "hps/mister_hybrid.h", "include/mister_hybrid.h")
 

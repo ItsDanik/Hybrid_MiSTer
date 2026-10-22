@@ -11,6 +11,7 @@
 //   (fluid_player_callback(): whole milliseconds at the start of each block
 //   of 64 frames, track by track), every voice's control update at those
 //   blocks too. Not what the core does: for comparing sample by sample.
+//   MIDISYNTH_FX=0: without the reverb and the chorus (FluidSynth's -R 0 -C 0).
 // It prints the most voices playing at once, the voices taken from notes
 // still playing for new ones, the commands sent and the samples held at
 // the 16-bit limits.
@@ -135,6 +136,7 @@ int main(int argc, char** argv) {
     double sum2 = 0;
     int peak = 0;
     int fluid = getenv("MIDISYNTH_FLUID") != NULL && atoi(getenv("MIDISYNTH_FLUID")) != 0;
+    int fx = getenv("MIDISYNTH_FX") == NULL || atoi(getenv("MIDISYNTH_FX")) != 0;
     fluid_player pl;
 
     if (argc < 4) {
@@ -185,6 +187,9 @@ int main(int argc, char** argv) {
             mh_midi_voices(m, frame, bits);
         }
         ms_frame(c.ms, frame, sums);
+        if (fx) {
+            ms_effects(c.ms, sums);
+        }
         ms_output(sums, volume, lr);
         for (n = 0; n < 2; n++) {
             int a = lr[n] < 0 ? -lr[n] : lr[n];

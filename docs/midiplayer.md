@@ -47,7 +47,7 @@ Danik's idea, 2026-10-21. The interview and its mockups are at https://claude.ai
   - where it plays and with which font;
   - play order and repeat;
   - the 16 channels: number, mute or solo mark, instrument, and level.
-- Under the panes are two rows of buttons, each a key and what it does. A lit button is a setting that is on: *repeat all*, *shuffle*. Their labels change with what the key would do (*A pause* or *A play*).
+- Under the panes are two rows of buttons, each a key and what it does. A lit button is a setting that is on: *repeat all*, *shuffle*. Their labels change with what the key would do (*A pause* or *A play*). Buttons and the selected tab have the badge's rounded corners (radius 5, the corners smoothed; Danik, 2026-10-22).
 
 ## The Player page
 
@@ -61,7 +61,7 @@ Danik's idea, 2026-10-21. The interview and its mockups are at https://claude.ai
     - The other ports have no MIDI music: ECWolf's is OPL (IMF), Dethrace, YQuake2 and Xash3D use CD audio, OGG or MP3.
   - A game that is not installed is not listed.
 - A port's songs are named:
-  - Doom and Doom II by map and title ("E1M1 At Doom's Gate"), from a table in the player;
+  - Doom, Doom II and Final Doom by map and title ("E1M1  At Doom's Gate", "MAP01  Running from Evil"), the maps' music first in the order of the maps, then the rest by what it plays for ("Title", "Intermission", "Victory", "Endgame", "Text screen"), with the title where it has one. The titles are the Doom Wiki's ("Doom music", "Doom II music", "Final Doom TNT music"), in `names.c`; an untitled track has its label alone (Doom's E2M9 / E3M1, Doom II's title and intermission music). TNT has titles of its own. Plutonia has no music of its own: each of its lumps is a Doom or Doom II lump byte for byte (checked by MD5, 2026-10-22), and has that lump's title (MAP11 "Sweet Little Dead Bunny"). Doom's unused `D_INTROA` is "Title (unused)".
   - Hexen by map and the map's name from `MAPINFO`;
   - the others by their lump or file name.
 - The lengths are computed when a folder is opened: the tempo map read through, no sound.
@@ -98,10 +98,10 @@ Danik's idea, 2026-10-21. The interview and its mockups are at https://claude.ai
 - On the right are the fonts of `games/dnk/SoundFonts/` (`MH_SoundFontDir()`), each with its slot.
   - A font over 64 MB of samples is faint and says *too big*; one that is no SoundFont 2 says *damaged*. Neither can be chosen.
   - The selected font's file name, sample size and number of presets are shown under the list.
-- **Choosing a font (A, or a double-click) loads it, and the song playing goes on with it.** That is the preview. The player keeps that font as its own and remembers it.
+- **A on a font (or a double-click) while music plays loads it, and the song goes on with it** (Danik, 2026-10-22). That is the preview. The player keeps that font as its own and remembers it.
   - While the font loads (seconds for a big one), the pane says "Loading <font>...", and the music is faded out meanwhile, as when a game's slot changes.
   - Loading a named file needs `MH_MidiLoadSoundFont(path)`, host version 17.
-- *Put in a slot* (A on a font, then the slot chosen on the left, as in mockup H) and *clear slot* (X on a slot).
+- *Put in a slot*: A on a font while no music plays (stopped or paused), then the slot chosen on the left, as in mockup H; or a slot chosen first on the left (Left / Right move between the two lists) and A puts the font selected on the right in it. *Clear slot*: X on a slot.
   - Any slot can be set, *Default* included. A font can be in more than one slot.
   - Each change writes `slots.txt` at once.
 - Every core reads the slots when its game loads a font, so a change reaches a game the next time it is started.
@@ -126,7 +126,7 @@ Danik's idea, 2026-10-21. The interview and its mockups are at https://claude.ai
 
 | | Pad | Keyboard | Mouse |
 |---|---|---|---|
-| Move | d-pad, stick | arrows, PgUp / PgDn, Home / End, a letter jumps to the next name with it | wheel scrolls |
+| Move | d-pad, stick | arrows, PgUp / PgDn, Home / End | wheel scrolls |
 | Select | | | click |
 | Play / open | A (*Menu OK*) | Enter | double-click |
 | Back up a folder | B (*Menu Back*) | Backspace | `..`, or the *B back* button |
@@ -136,10 +136,11 @@ Danik's idea, 2026-10-21. The interview and its mockups are at https://claude.ai
 | Shuffle | Y | `S` | button |
 | Go to the song playing | Start | `G` | button |
 | Switch page | Select | Tab | the tabs |
-| Synthesizer / MT32-pi | Select on the Player page, with a Pi | `P` | the switch |
+| Synthesizer / MT32-pi | | `P` | the switch |
 | Seek | | Left / Right (5 s) while the song playing is selected | click on the progress bar |
 | Mute / solo a channel | | `1`..`9`, `0` (10), with Shift solo; channels 11..16 by mouse | click / right-click |
 
+- Select always switches pages, also with an MT32-pi connected; the switch to the Pi is `P` and the mouse. Keys that are no command do nothing: no letter jumps to a name (Danik, 2026-10-22).
 - *Menu OK* and *Menu Back* are the MiSTer menu's (SDL buttons 28 / 29 and the core's `J1` list; the rule "menus work with Menu OK and Menu Back"). The pad keys above are the core's defaults, in its `J1` list.
 - Every key that goes down comes up, and nothing is read while the OSD menu is open (the library does it).
 - The mouse is `MH_ReadInput()`'s, which Main_MiSTer gives the core (USB or PS/2).

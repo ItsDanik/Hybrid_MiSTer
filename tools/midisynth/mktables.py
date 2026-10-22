@@ -89,6 +89,48 @@ def fres_ramp():
         inv.append(round((1 << 32) / b))
     return n, inv
 
+def fxsin():
+    # a quarter of a sine wave, 1025 points, Q0.18: the chorus's LFOs,
+    # interpolated
+    return [round(math.sin(i / 1024.0 * math.pi / 2) * (1 << 18)) for i in range(1025)]
+
+def fx_consts():
+    # FluidSynth 2.6.1's reverb "free" (Freeverb, fluid_rev_freeverb.cpp) and
+    # its chorus (fluid_chorus.c) with their defaults (fluid_synth.h): room
+    # size 0.5, damping 0.2, width 0.8, level 0.7; 3 blocks, level 0.6,
+    # speed 0.2 Hz, depth 4.25 ms, sine
+    room, damp, width, level = 0.5, 0.2, 0.8, 0.7
+    wet = level * 3.0 / (1.0 + width * 0.2)
+    c_level, c_speed, c_depth, c_width = 0.6, 0.2, 4.25, 10
+    c_wet = c_level / (1.0 + c_width * 0.2)
+    mod_depth = int(c_depth / 1000.0 * RATE) // 2
+    mod_rate = 5
+    damp1 = round(damp * 32768)
+    return {
+        # the reverb's input: Freeverb's fixed gain 0.015 of twice the mono input, Q.16
+        'MS_REV_IN': round(2 * 0.015 * 65536),
+        # the combs: feedback (room size), damping and its complement, Q.15
+        'MS_REV_FB': round((room * 0.28 + 0.7) * 32768),
+        'MS_REV_DAMP1': damp1,
+        'MS_REV_DAMP2': 32768 - damp1,
+        # the output: wet1 and wet2, Q.15
+        'MS_REV_WET1': round(wet * (width / 2 + 0.5) * 32768),
+        'MS_REV_WET2': round(wet * ((1 - width) / 2) * 32768),
+        # the chorus: its delay line (2048 samples and 1 for the
+        # interpolation), half the modulation's depth in samples, the
+        # modulation's rate (an LFO step every 5 samples)
+        'MS_CHO_SIZE': 2048 + 1,
+        'MS_CHO_DEPTH': mod_depth,
+        'MS_CHO_RATE': mod_rate,
+        # an LFO's step at each of its updates, Q.48 of a turn (with Q.32
+        # the rounding of the step moved the position 0.09 samples off
+        # FluidSynth's in three minutes)
+        'MS_CHO_STEP': round(c_speed * mod_rate / RATE * (1 << 48)),
+        # the output: wet1 and wet2, Q.15
+        'MS_CHO_WET1': round(c_wet * (c_width / 2 + 0.5) * 32768),
+        'MS_CHO_WET2': round(c_wet * ((1 - c_width) / 2) * 32768),
+    }
+
 def consts():
     max_fc = 6900 + 1200 * math.log2(0.45 * RATE / 440.0)
     # the exclusive class's release (FluidSynth: -2000 timecents)
@@ -111,7 +153,7 @@ def consts():
 # the widths of the RTL's tables: signed where a value can be negative
 HEX_BITS = {'ms_interp': 18, 'ms_pitch': 33, 'ms_amp': 27, 'ms_cb2amp': 27, 'ms_log2': 16,
             'ms_convex': 24, 'ms_sin': 24, 'ms_cos': 25, 'ms_inv2q': 24, 'ms_isq': 25,
-            'ms_fres_n': 9, 'ms_fres_inv': 27}
+            'ms_fres_n': 9, 'ms_fres_inv': 27, 'ms_fxsin': 19}
 
 def c_array(name, ctype, vals, per=12):
     lines = ['static const %s %s[%d] = {' % (ctype, name, len(vals))]
@@ -139,10 +181,11 @@ def main():
         ('ms_isq', 'int32_t', isq),
         ('ms_fres_n', 'uint16_t', rn),
         ('ms_fres_inv', 'uint32_t', rinv),
+        ('ms_fxsin', 'int32_t', fxsin()),
     ]
     out = ['// Made by tools/midisynth/mktables.py: do not edit.',
            '#ifndef MIDISYNTH_TABLES_H', '#define MIDISYNTH_TABLES_H', '#include <stdint.h>', '']
-    for k, v in consts().items():
+    for k, v in list(consts().items()) + list(fx_consts().items()):
         out.append('#define %s %d' % (k, v))
     out.append('')
     for name, ctype, vals in tables:
@@ -164,6 +207,10 @@ def main():
             if name == 'ms_interp':
                 vals = [sum(vals[4 * r + k] << (bits * k) for k in range(4)) for r in range(len(vals) // 4)]
                 bits *= 4
+            if name == 'ms_fxsin':
+                # the last point, 1.0, is a constant in rtl/hybrid_midi_fx.sv
+                assert vals[1024] == 1 << 18
+                vals = vals[:1024]
             with open(os.path.join(d, name + '.hex'), 'w') as f:
                 for v in vals:
                     f.write('%0*x\n' % ((bits + 3) // 4, v))

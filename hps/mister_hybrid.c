@@ -11,6 +11,7 @@
 
 #define _GNU_SOURCE
 #include "mister_hybrid.h"
+#include "mister_diag.h"
 #include "mister_font.h"
 #include "mister_midi.h"
 
@@ -24,6 +25,7 @@
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -54,6 +56,7 @@
 #define STATUS_MSG (1u << 20)
 #define STATUS_ALONE (1u << 21)
 #define STATUS_MT32 (1u << 23)
+#define STATUS_SYNTH (1u << 28) // the MIDI synthesizer is in the core (host version 16)
 
 static const struct {
     short width, height;
@@ -87,6 +90,7 @@ static volatile int detached;
 static int reloaded; // detached because the core started over
 
 static int cpu1_allowed;
+static pid_t game_tid; // the thread that called MH_Open()
 // the CPUs the game thread had before MH_Open() pinned it to CPU0, given back
 // by MH_Close(): a program started in its place (execv) inherits them
 // (CrispyDoom's Heretic, Hexen and Strife ran with CPU0 alone, everything the
@@ -311,6 +315,8 @@ int MH_Open(void) {
     }
     printf("mister: %s core found (host version %u)%s\n", core_name[0] ? core_name : "hybrid", status[3],
         cpu1_allowed ? ", helper threads on CPU1" : "");
+    game_tid = (pid_t)syscall(SYS_gettid);
+    mh_diag_start();
     return 1;
 }
 
@@ -343,6 +349,7 @@ static void stop_present_thread(void) {
 static int close_pending = 0;
 
 void MH_Close(void) {
+    mh_diag_stop();
     stop_present_thread();
     if (open_cpus_saved) {
         sched_setaffinity(0, sizeof(open_cpus), &open_cpus);
@@ -586,22 +593,51 @@ static void midi_stamp(volatile uint8_t* dst, int row, int height, int line) {
 // shown twice: the stutter of a game that is at 60 frames per second by its
 // own count. Also how long after the start of a field (as the game saw it in
 // MH_WaitFrame() or MH_FieldCounter()) frames were handed over, at most.
+// The diagnostic report (mister_diag.c) counts the same all the time.
 static int pace_on = -1;
 static uint32_t pace_field_seen;
 static struct timespec pace_field_time;
 
+// The diagnostic report's counts since mh_diag_take(): the present thread
+// (or the game thread) and the audio thread add to them
+static struct {
+    uint32_t frames, never, twice, late_us, underruns;
+    int ahead;
+} diag;
+
 static void pace_field(uint32_t field) {
-    if (pace_on && field != pace_field_seen) {
+    if (field != pace_field_seen) {
         pace_field_seen = field;
         clock_gettime(CLOCK_MONOTONIC, &pace_field_time);
     }
 }
 
 static void pace_flip(uint32_t field) {
-    static uint32_t last;
+    static uint32_t last, diag_last;
+    static int diag_started;
     static unsigned frames, same, next, later;
     static double latest;
+    // interlaced, the core takes a frame every second field
+    uint32_t step = (status[2] & STATUS_LACE) ? 2 : 1;
+    uint32_t late_us = 0;
     struct timespec now;
+
+    if (field == pace_field_seen) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        late_us = (uint32_t)((now.tv_sec - pace_field_time.tv_sec) * 1000000
+                             + (now.tv_nsec - pace_field_time.tv_nsec) / 1000);
+    }
+    __atomic_fetch_add(&diag.frames, 1, __ATOMIC_RELAXED);
+    if (diag_started && field - diag_last < step) {
+        __atomic_fetch_add(&diag.never, 1, __ATOMIC_RELAXED);
+    } else if (diag_started && field - diag_last > step) {
+        __atomic_fetch_add(&diag.twice, 1, __ATOMIC_RELAXED);
+    }
+    diag_started = 1;
+    diag_last = field;
+    if (late_us > __atomic_load_n(&diag.late_us, __ATOMIC_RELAXED)) {
+        __atomic_store_n(&diag.late_us, late_us, __ATOMIC_RELAXED);
+    }
 
     if (pace_on < 0) {
         pace_on = getenv("MISTER_HYBRID_PACE") != NULL;
@@ -619,14 +655,8 @@ static void pace_flip(uint32_t field) {
         }
     }
     last = field;
-    if (field == pace_field_seen) {
-        double ms;
-
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        ms = (now.tv_sec - pace_field_time.tv_sec) * 1e3 + (now.tv_nsec - pace_field_time.tv_nsec) * 1e-6;
-        if (ms > latest) {
-            latest = ms;
-        }
+    if (field == pace_field_seen && late_us * 1e-3 > latest) {
+        latest = late_us * 1e-3;
     }
     if (++frames == 300) {
         fprintf(stderr, "mister: 300 frames to the core: in the same field as the one before %u, the next %u, later %u; "
@@ -1066,6 +1096,9 @@ void MH_PresentAtField(uint32_t field) {
         ahead = !getenv("MISTER_HYBRID_AHEAD") || atoi(getenv("MISTER_HYBRID_AHEAD")) != 0;
     }
     present_at = ahead ? field : 0;
+    if (ahead) {
+        diag.ahead = 1;
+    }
 }
 
 int MH_Interlaced(void) {
@@ -1283,10 +1316,16 @@ uint64_t MH_OSDStatusHigh(void) {
     return status[34] | ((uint64_t)status[35] << 32);
 }
 
-// The option's entries start at the default: entry n is (n + 10) % 25 pixels
+// The option's entry n is n pixels (host version 16; 0 the default). Up to
+// host version 15 the entries started at 10, the default then: entry n was
+// (n + 10) % 25 pixels
 static int hud_margin(uint64_t high, int lsb) {
     int entry = (int)((high >> (lsb - 64)) & 31);
-    return entry > MH_HUD_MAX ? MH_HUD_DEFAULT : (entry + MH_HUD_DEFAULT) % (MH_HUD_MAX + 1);
+
+    if (!MH_IsOpen() || status[3] < 13 || entry > MH_HUD_MAX) {
+        return MH_HUD_DEFAULT;
+    }
+    return status[3] >= 16 ? entry : (entry + 10) % (MH_HUD_MAX + 1);
 }
 
 void MH_HudMargins(int* top, int* bottom) {
@@ -1412,6 +1451,7 @@ void MH_AudioWrite(const uint32_t* frames, int count, int lead) {
     if (ahead < 0 || ahead > MH_AUDIO_RING_FRAMES - count) {
         // fell behind (the core repeats its last sample meanwhile): skip ahead
         audio_wr = *fetch_ptr + 64;
+        __atomic_fetch_add(&diag.underruns, 1, __ATOMIC_RELAXED);
     }
     for (i = 0; i < count; i++) {
         ring[(audio_wr + i) % MH_AUDIO_RING_FRAMES] = frames[i];
@@ -1552,9 +1592,9 @@ int MH_MidiAvailable(void) {
     return MH_IsOpen() && status[3] >= 15;
 }
 
-// the core has the synthesizer
+// the core has the synthesizer: host version 16, built with MIDI_SYNTH
 static int midi_synth_there(void) {
-    return MH_IsOpen() && status[3] >= 16;
+    return MH_IsOpen() && status[3] >= 16 && (status[2] & STATUS_SYNTH) != 0;
 }
 
 static int midi_dest(void) {
@@ -2215,4 +2255,52 @@ int MH_KeyToHID(int key_index) {
         return code < 0x80 ? set2_extended[code] : 0;
     }
     return code < 0x84 ? set2_normal[code] : 0;
+}
+
+// The diagnostic report (mister_diag.c, docs/diagnostics.md)
+void mh_diag_take(mh_diag_counts* c) {
+    memset(c, 0, sizeof(*c));
+    c->frames = __atomic_exchange_n(&diag.frames, 0, __ATOMIC_RELAXED);
+    c->never = __atomic_exchange_n(&diag.never, 0, __ATOMIC_RELAXED);
+    c->twice = __atomic_exchange_n(&diag.twice, 0, __ATOMIC_RELAXED);
+    c->late_us = __atomic_exchange_n(&diag.late_us, 0, __ATOMIC_RELAXED);
+    c->underruns = __atomic_exchange_n(&diag.underruns, 0, __ATOMIC_RELAXED);
+    c->ahead = diag.ahead;
+    if (!MH_IsOpen()) {
+        return;
+    }
+    c->field = status[1];
+    c->status2 = status[2];
+    c->clock = status[14];
+    c->osd = MH_OSDOpen();
+    c->music = midi_to == MIDI_PI ? MH_DIAG_MUSIC_PI
+        : midi_to == MIDI_SYNTH ? MH_DIAG_MUSIC_SYNTH
+        : fm_enabled ? MH_DIAG_MUSIC_FM : MH_DIAG_MUSIC_NONE;
+}
+
+int mh_diag_frame(uint8_t** pixels, int* width, int* height, int* format, uint32_t palette[256]) {
+    volatile uint32_t* pal;
+    int bytes, i;
+
+    if (!MH_IsOpen() || !(status[2] & STATUS_GAME) || (status[2] & STATUS_MSG)) {
+        return 0;
+    }
+    bytes = frame_bytes();
+    *pixels = malloc(bytes);
+    if (*pixels == NULL) {
+        return 0;
+    }
+    memcpy(*pixels, (const void*)framebuffer(fb_current), bytes);
+    *width = MH_Width();
+    *height = MH_Height();
+    *format = fb_format;
+    pal = (volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
+    for (i = 0; i < 256; i++) {
+        palette[i] = pal[i];
+    }
+    return 1;
+}
+
+int mh_diag_game_tid(void) {
+    return (int)game_tid;
 }

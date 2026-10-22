@@ -6,6 +6,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) h
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_midi_lib.sv ]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_midi_ctrl.sv ]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_midi_coef.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_midi_fx.sv ]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) hybrid_midi_fetch.sv ]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) jtopl/jtopl.v ]
 set_global_assignment -name VERILOG_FILE       [file join $::quartus(qip_path) jtopl/jtopl2.v ]

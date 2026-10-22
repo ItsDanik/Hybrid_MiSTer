@@ -57,6 +57,47 @@ typedef struct {
     int ran;                    // frames since the control update
 } voice_t;
 
+// The effects (docs/midi_synth.md, "The effects"): FluidSynth's reverb
+// "free" (Freeverb) and its chorus, every delay line in one memory of 24-bit
+// words. The reverb works in units of the sums >> REV_SHIFT (its allpasses'
+// lines in twice that), the chorus's line in units of the sums >> CHO_SHIFT
+// (its input is not scaled down).
+// Every product is rounded to the nearest, half up: rounding down left a
+// bias the combs' feedback made into an error of -28 dB.
+#define REV_SHIFT 6
+#define CHO_SHIFT 8
+#define FX_MAX ((1 << 23) - 1)
+#ifdef FX_PEAKS
+static int64_t fx_peak[4];      // stored: comb, allpass, chorus; the allpasses' output
+#define FX_PEAK(k, v) do { int64_t a_ = (v) < 0 ? -(v) : (v); if (a_ > fx_peak[k]) fx_peak[k] = a_; } while (0)
+#else
+#define FX_PEAK(k, v) do { } while (0)
+#endif
+#define REV_LINES 24            // the combs, left then right, then the allpasses
+#define FX_WORDS 27499          // all the delay lines: 25,450 the reverb's, 2,049 the chorus's
+
+static const uint16_t rev_len[REV_LINES] = {
+    1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617,
+    1139, 1211, 1300, 1379, 1445, 1514, 1580, 1640,
+    556, 441, 341, 225,
+    579, 464, 364, 248,
+};
+
+typedef struct {
+    int32_t mem[FX_WORDS];
+    uint16_t base[REV_LINES];   // where each reverb line starts in mem
+    uint16_t ptr[REV_LINES];
+    int32_t store[16];          // the combs' low-pass filters
+    // the chorus, its line at FX_WORDS - MS_CHO_SIZE
+    int cin;                    // where the next input goes
+    int center;                 // the modulation's centre
+    int rate;                   // samples since the LFOs' last step
+    uint64_t phase[3];          // the LFOs, Q.48 of a turn
+    int out[3];                 // each block's read position
+    int32_t frac[3];            // its fraction, Q.18
+    int64_t last[3];            // its interpolator's last output
+} fx_t;
+
 struct midisynth {
     const int16_t* smp;
     uint32_t nsmp;
@@ -64,6 +105,7 @@ struct midisynth {
     uint64_t (*q)[MH_MIDI_CMD_WORDS];
     int qhead, qcount;
     int aligned;
+    fx_t fx;
 };
 
 #ifdef MS_CONTROL_HOOK
@@ -468,6 +510,56 @@ static void update(voice_t* v, const mh_midi_params* p) {
     v->p = *p;
 }
 
+// The effects as after a reset: every line silent
+static void fx_reset(fx_t* f) {
+    int n, at = 0;
+
+    memset(f, 0, sizeof(*f));
+    for (n = 0; n < REV_LINES; n++) {
+        f->base[n] = (uint16_t)at;
+        at += rev_len[n];
+    }
+    // as FluidSynth's: the centre the depth and one sample behind the input,
+    // and the LFOs a third of a turn apart, stepped at the first sample
+    f->center = MS_CHO_SIZE - 1 - MS_CHO_DEPTH;
+    f->rate = MS_CHO_RATE;
+    f->phase[1] = 0x555555555555ull;
+    f->phase[2] = 0xAAAAAAAAAAABull;
+}
+
+// v >> n, rounded to the nearest (half up)
+static int64_t fx_round(int64_t v, int n) {
+    return floor_shift(v + (1ll << (n - 1)), n);
+}
+
+static int32_t fx_hold(int64_t v) {
+    return (int32_t)(v > FX_MAX ? FX_MAX : v < -FX_MAX - 1 ? -FX_MAX - 1 : v);
+}
+
+// held at `bits` bits, signed: the RTL's registers
+static int64_t fx_held(int64_t v, int bits) {
+    const int64_t lim = (1ll << (bits - 1)) - 1;
+
+    return v > lim ? lim : v < -lim - 1 ? -lim - 1 : v;
+}
+
+// sin of a phase (Q.32 of a turn), Q.18: a quarter wave, interpolated
+static int32_t fx_sine(uint32_t ph) {
+    uint32_t x = ph & 0x3FFFFFFFu;
+    int32_t v;
+    int i;
+
+    if (ph & 0x40000000u) {
+        x = 0x40000000u - x;
+    }
+    i = (int)(x >> 20);
+    v = ms_fxsin[i];
+    if (i < 1024) {
+        v += (int32_t)floor_shift((int64_t)(ms_fxsin[i + 1] - ms_fxsin[i]) * (x & 0xFFFFF), 20);
+    }
+    return ph & 0x80000000u ? -v : v;
+}
+
 midisynth* ms_new(const int16_t* samples, uint32_t nsamples) {
     midisynth* ms = calloc(1, sizeof(*ms));
 
@@ -481,6 +573,7 @@ midisynth* ms_new(const int16_t* samples, uint32_t nsamples) {
     }
     ms->smp = samples;
     ms->nsmp = nsamples;
+    fx_reset(&ms->fx);
     return ms;
 }
 
@@ -494,6 +587,7 @@ void ms_free(midisynth* ms) {
 void ms_reset(midisynth* ms) {
     memset(ms->v, 0, sizeof(ms->v));
     ms->qhead = ms->qcount = 0;
+    fx_reset(&ms->fx);
 }
 
 int ms_push(midisynth* ms, const uint64_t* cmd) {
@@ -590,6 +684,98 @@ void ms_frame(midisynth* ms, uint32_t frame, int64_t* sums) {
         const int64_t lim = (1ll << 39) - 1;
 
         sums[n] = sums[n] > lim ? lim : sums[n] < -lim - 1 ? -lim - 1 : sums[n];
+    }
+}
+
+void ms_effects(midisynth* ms, int64_t* sums) {
+    fx_t* f = &ms->fx;
+    int32_t* cho = f->mem + FX_WORDS - MS_CHO_SIZE;
+    int64_t x, side[2], d[2] = {0, 0}, o = 0, wet[2];
+    int n, k, step;
+
+    // the reverb: in parallel the eight combs of a side, then in series its
+    // four allpasses
+    x = fx_hold(fx_round(sums[2] * MS_REV_IN, 16 + REV_SHIFT));
+    for (k = 0; k < 2; k++) {
+        int64_t acc = 0;
+
+        for (n = 8 * k; n < 8 * k + 8; n++) {
+            int32_t* w = &f->mem[f->base[n] + f->ptr[n]];
+            int32_t b = *w;
+
+            f->store[n] = (int32_t)fx_round((int64_t)b * MS_REV_DAMP2 + (int64_t)f->store[n] * MS_REV_DAMP1, 15);
+            *w = fx_hold(x + fx_round((int64_t)f->store[n] * MS_REV_FB, 15));
+            FX_PEAK(0, x + fx_round((int64_t)f->store[n] * MS_REV_FB, 15));
+            acc += b;
+        }
+        for (n = 16 + 4 * k; n < 20 + 4 * k; n++) {
+            int32_t* w = &f->mem[f->base[n] + f->ptr[n]];
+            int32_t b = *w;
+
+            // Freeverb's allpass: feedback 0.5, the output the delay's less
+            // the input. Its line holds half the value: the sum of eight
+            // combs comes near the 24 bits in a loud song (The HYBRID
+            // Collage at 0.92 of them)
+            int64_t in = acc;
+
+            *w = fx_hold(fx_round(in + b, 1));
+            FX_PEAK(1, fx_round(in + b, 1));
+            acc = fx_held(2 * (int64_t)b - in, 27);
+        }
+        FX_PEAK(3, acc);
+        side[k] = acc;
+    }
+    for (n = 0; n < REV_LINES; n++) {
+        f->ptr[n] = (uint16_t)(f->ptr[n] + 1 == rev_len[n] ? 0 : f->ptr[n] + 1);
+    }
+    wet[0] = fx_round(side[0] * MS_REV_WET1 + side[1] * MS_REV_WET2, 15) * (1 << REV_SHIFT);
+    wet[1] = fx_round(side[1] * MS_REV_WET1 + side[0] * MS_REV_WET2, 15) * (1 << REV_SHIFT);
+
+    // the chorus: three blocks reading the line at a position an LFO
+    // moves, first-order allpass interpolated; the LFOs and the centre
+    // stepped every MS_CHO_RATE samples
+    step = ++f->rate >= MS_CHO_RATE;
+    for (n = 0; n < 3; n++) {
+        int at;
+
+        if (step) {
+            int64_t pos;
+
+            f->phase[n] = (f->phase[n] + MS_CHO_STEP) & ((1ull << 48) - 1);
+            pos = ((int64_t)f->center << 18) + (int64_t)fx_sine((uint32_t)(f->phase[n] >> 16)) * MS_CHO_DEPTH;
+            at = (int)(pos >> 18);
+            f->frac[n] = (int32_t)(pos & 0x3FFFF);
+            f->out[n] = at < 0 ? at + MS_CHO_SIZE : at >= MS_CHO_SIZE ? at - MS_CHO_SIZE : at;
+        }
+        at = f->out[n];
+        o = cho[at];
+        at = at + 1 == MS_CHO_SIZE ? 0 : at + 1;
+        f->out[n] = at;
+        o = fx_held(o + fx_round(f->frac[n] * (cho[at] - f->last[n]), 18), 26);
+        f->last[n] = o;
+        d[n & 1] += o;
+    }
+    if (step) {
+        f->rate = 0;
+        f->center += MS_CHO_RATE;
+        if (f->center >= MS_CHO_SIZE) {
+            f->center -= MS_CHO_SIZE;
+        }
+    }
+    // FluidSynth's balance of an odd number of blocks: the last one on the
+    // right too
+    d[1] += o;
+    cho[f->cin] = fx_hold(fx_round(sums[3], CHO_SHIFT));
+    FX_PEAK(2, fx_round(sums[3], CHO_SHIFT));
+    f->cin = f->cin + 1 == MS_CHO_SIZE ? 0 : f->cin + 1;
+    wet[0] += fx_round(d[0] * MS_CHO_WET1 + d[1] * MS_CHO_WET2, 15) * (1 << CHO_SHIFT);
+    wet[1] += fx_round(d[1] * MS_CHO_WET1 + d[0] * MS_CHO_WET2, 15) * (1 << CHO_SHIFT);
+
+    for (k = 0; k < 2; k++) {
+        const int64_t lim = (1ll << 39) - 1;
+        int64_t s = sums[k] + wet[k];
+
+        sums[k] = s > lim ? lim : s < -lim - 1 ? -lim - 1 : s;
     }
 }
 

@@ -35,6 +35,13 @@ module hybrid_vclk
 endmodule
 
 module tb_host;
+// a core without the MIDI synthesizer with -DNO_SYNTH (MIDI_SYNTH 0; run it
+// with +trigonly, which checks the status bit that says so)
+`ifdef NO_SYNTH
+localparam SYNTH = 0;
+`else
+localparam SYNTH = 1;
+`endif
 
 reg clk = 0;
 always #10 clk = ~clk; // 50MHz
@@ -59,6 +66,7 @@ wire clk_vid, ce_pix, hsync, vsync, hblank, vblank, hires, fast, f1;
 wire [3:0] menumask;
 reg  vga31 = 0;
 reg  [3:0] trig = 0;      // OSD triggers, status bits 56..59
+reg        diag = 0;      // 16: Save Diagnostic Report
 reg        osd_open = 0;  // the OSD menu is shown
 reg  [5:0] crt_hsize = 0;
 reg  [3:0] crt_hpos = 0, crt_vpos = 0;
@@ -80,14 +88,14 @@ always #20.345 clk_audio = ~clk_audio; // 24.576MHz
 
 hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_DOTS("rtl/hybrid_wall_dots.hex"),
 	.WALL_EASE("rtl/hybrid_wall_ease.hex"), .WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"),
-	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000)) dut
+	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(joystick_0), .joystick_1(joystick_1),
 	.joy_l_analog_0(16'h1122), .joy_r_analog_0(16'h3344), .joy_l_analog_1(16'h5566), .joy_r_analog_1(16'h7788),
-	.osd_status({23'h091A, notes_trig, osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0, trig, 56'hCAFE}), .osd_open(osd_open), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
+	.osd_status({23'h091A, notes_trig, osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0, trig, 39'h0, diag, 16'hCAFE}), .osd_open(osd_open), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(vga31), .crt_hsize(crt_hsize), .crt_hpos(crt_hpos), .crt_vpos(crt_vpos),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(menumask),
@@ -493,6 +501,37 @@ task test_mt32;
 	if (aud_errors != aud_errors0) errors = errors + 1;
 endtask
 
+task test_triggers;
+begin
+	// an OSD trigger: a pulse of a few clocks flips its bit in the status
+	trig = 4'b0010;
+	repeat (3) @(posedge clk);
+	trig = 0;
+	wait_fields(2);
+	if (mem[12] != {4'h0, 4'b0010, 56'hCAFE}) begin $display("FAIL: OSD trigger %h", mem[12]); errors = errors + 1; end
+	trig = 4'b0010;
+	repeat (3) @(posedge clk);
+	trig = 0;
+	wait_fields(2);
+	if (mem[12] != 64'hCAFE) begin $display("FAIL: OSD trigger again %h", mem[12]); errors = errors + 1; end
+	// Save Diagnostic Report (bit 16): flipped at the pulse's end, also when
+	// the bit was 1 before (a saved setting of the old Menu OK)
+	diag = 1;
+	repeat (3) @(posedge clk);
+	diag = 0;
+	wait_fields(2);
+	if (mem[12] != 64'h1CAFE) begin $display("FAIL: diagnostic trigger %h", mem[12]); errors = errors + 1; end
+	diag = 1;
+	wait_fields(2);
+	if (mem[12] != 64'h1CAFE) begin $display("FAIL: diagnostic trigger flipped while held %h", mem[12]); errors = errors + 1; end
+	diag = 0;
+	wait_fields(2);
+	if (mem[12] != 64'hCAFE) begin $display("FAIL: diagnostic trigger again %h", mem[12]); errors = errors + 1; end
+	// status word 1 bit 28: the synthesizer is there
+	if (mem[9][28] != (SYNTH != 0)) begin $display("FAIL: synthesizer bit %b, built with %0d", mem[9][28], SYNTH); errors = errors + 1; end
+end
+endtask
+
 task test_intro;
 	integer n, hold;
 	begin
@@ -668,6 +707,14 @@ initial begin
 	wait_fields(1);
 	// +mt32only: the MT32-pi test alone, without the rest (it is near the end
 	// and the whole run takes long). fm_takes as the FM test leaves it.
+	// +trigonly: the OSD triggers' toggles alone
+	if ($test$plusargs("trigonly")) begin
+		wait_fields(2);
+		test_triggers;
+		if (errors != 0) $display("FAIL: %0d errors", errors);
+		else $display("PASS");
+		$finish;
+	end
 	if ($test$plusargs("mt32only")) begin
 		fm_takes = 3;
 		test_mt32;
@@ -727,17 +774,7 @@ initial begin
 	if (mem[12] != 64'hCAFE) begin $display("FAIL: status osd %h", mem[12]); $finish; end
 	// OSD status [127:64] at 0xC8, next to the audio fetch pointer (checked below)
 	if (mem[25] != 64'h0012_3402_781A_BCDE) begin $display("FAIL: status osd high %h", mem[25]); $finish; end
-	// an OSD trigger: a pulse of a few clocks flips its bit in the status
-	trig = 4'b0010;
-	repeat (3) @(posedge clk);
-	trig = 0;
-	wait_fields(2);
-	if (mem[12] != {4'h0, 4'b0010, 56'hCAFE}) begin $display("FAIL: OSD trigger %h", mem[12]); errors = errors + 1; end
-	trig = 4'b0010;
-	repeat (3) @(posedge clk);
-	trig = 0;
-	wait_fields(2);
-	if (mem[12] != 64'hCAFE) begin $display("FAIL: OSD trigger again %h", mem[12]); errors = errors + 1; end
+	test_triggers;
 	// the OSD menu opened and closed again: bit 22 of the status word 1
 	if (mem[9][22]) begin $display("FAIL: OSD open without the OSD"); errors = errors + 1; end
 	osd_open = 1;
@@ -959,20 +996,21 @@ initial begin
 	// samples it asks for; its status in the status block, its sound in the
 	// mix (the audio checker adds it). Without the enable again its count
 	// starts anew.
+`ifndef NO_SYNTH
 	begin : midi_test
 		midi_cmds(0, 40);
 		cur_midiw = 40;
 		set_ctrl(1, 0, 0, 10);
 		wait_fields(4);
-		if (dut.midi.rd != 0 || dut.midi_en) begin $display("FAIL: MIDI read without the enable"); errors = errors + 1; end
+		if (dut.midi_synth.midi.rd != 0 || dut.midi_en) begin $display("FAIL: MIDI read without the enable"); errors = errors + 1; end
 		if (mem[29'h1A] != 0 || mem[29'h1B] != 0) begin $display("FAIL: MIDI status without the enable %h", mem[29'h1A]); errors = errors + 1; end
 		cur_midi = 1; cur_midivol = 77;
 		set_ctrl(1, 0, 0, 10);
 		wait_fields(4);
 		$display("midi: %0d commands read, %0d sample reads, status %h %h %h frame %0d (playing %0d), errors %0d, frame errors %0d",
-			dut.midi.rd, dut.midi.smp_reads, mem[29'h1A], mem[29'h1B], mem[29'h1C], mem[29'h1D][31:0], dut.aud_play,
-			dut.midi.errors, dut.midi.frame_errors);
-		if (dut.midi.rd != 40 || dut.midi.smp_reads != 40 || dut.midi_vol != 77
+			dut.midi_synth.midi.rd, dut.midi_synth.midi.smp_reads, mem[29'h1A], mem[29'h1B], mem[29'h1C], mem[29'h1D][31:0], dut.aud_play,
+			dut.midi_synth.midi.errors, dut.midi_synth.midi.frame_errors);
+		if (dut.midi_synth.midi.rd != 40 || dut.midi_synth.midi.smp_reads != 40 || dut.midi_vol != 77
 			|| mem[29'h1A] != {8'd0, 8'd5, 16'd7, 32'd40} || mem[29'h1B] != 64'h0123_4567_89AB_CDEF
 			|| mem[29'h1C] != 64'hFEDC_BA98_7654_3210 || mem[29'h1D][31:0] > dut.aud_play + 1 || mem[29'h1D][31:0] + 2000 < dut.aud_play) begin
 			$display("FAIL: MIDI reads or status"); errors = errors + 1;
@@ -986,19 +1024,20 @@ initial begin
 		cur_midiw = 1100;
 		set_ctrl(1, 0, 0, 10);
 		wait_fields(4);
-		$display("midi: %0d commands read across the ring's end, errors %0d", dut.midi.rd, dut.midi.errors);
-		if (dut.midi.rd != 1100 || dut.midi.smp_reads != 1100 || mem[29'h1A][31:0] != 1100) begin
+		$display("midi: %0d commands read across the ring's end, errors %0d", dut.midi_synth.midi.rd, dut.midi_synth.midi.errors);
+		if (dut.midi_synth.midi.rd != 1100 || dut.midi_synth.midi.smp_reads != 1100 || mem[29'h1A][31:0] != 1100) begin
 			$display("FAIL: MIDI ring's end"); errors = errors + 1;
 		end
 		cur_midi = 0;
 		set_ctrl(1, 0, 0, 10);
 		wait_fields(3);
-		if (dut.midi.rd != 0 || mem[29'h1A] != 0 || mem[29'h1B] != 0 || mem[29'h1C] != 0 || dut.midi_l != 0) begin
+		if (dut.midi_synth.midi.rd != 0 || mem[29'h1A] != 0 || mem[29'h1B] != 0 || mem[29'h1C] != 0 || dut.midi_l != 0) begin
 			$display("FAIL: MIDI after the enable went"); errors = errors + 1;
 		end
-		if (dut.midi.errors != 0 || dut.midi.frame_errors != 0) begin $display("FAIL: MIDI reads"); errors = errors + 1; end
+		if (dut.midi_synth.midi.errors != 0 || dut.midi_synth.midi.frame_errors != 0) begin $display("FAIL: MIDI reads"); errors = errors + 1; end
 		cur_midiw = 0;
 	end
+`endif
 
 	// The info box: asked for while the OSD menu is open, shown once it has
 	// closed, once; the same count again or a text of 0 shows nothing

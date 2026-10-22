@@ -44,7 +44,7 @@ static void clk_cycle() {
     } while ((t5 & 3) != 0);
 }
 
-static int64_t s40(const VlWide<5>& w, int k) {
+template <class W> static int64_t s40(const W& w, int k) {
     // bits 40k .. 40k + 39
     uint64_t v = 0;
     for (int b = 0; b < 40; b++) {
@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
     midisynth* ms;
     uint32_t cf = 0;                  // the C model's next frame
     long compared = 0, differ = 0, late = 0;
-    int64_t sums[4];
+    int64_t sums[4], fx[4];
     int dbg_tgl = 0, frame_now = -1, waiting = 0;
     uint32_t aud_acc = 0, gap = 0;
     int busy = 0, beats_left = 0, delay = 0, kind = 0;
@@ -112,7 +112,6 @@ int main(int argc, char** argv) {
 
         // the audio frames
         if (fast) {
-            if (waiting && (int)top->dbg_tgl != dbg_tgl) waiting = 0;
             if (!waiting && ++gap >= 60) {
                 gap = 0;
                 waiting = 1;
@@ -184,6 +183,7 @@ int main(int argc, char** argv) {
             uint32_t fr = top->dbg_frame;
 
             dbg_tgl = top->dbg_tgl;
+            waiting = 0;                // fast: the next strobe
             // clocks of 100MHz from the strobe to the frame made
             if ((t5 - stb_t) / 2 > busy_max) busy_max = (t5 - stb_t) / 2;
             if (fr != cf) {
@@ -192,14 +192,18 @@ int main(int argc, char** argv) {
             }
             while (cf <= fr) {
                 ms_frame(ms, cf, sums);
+                // the effects added to the left and the right
+                memcpy(fx, sums, sizeof(fx));
+                ms_effects(ms, fx);
                 cf++;
             }
             compared++;
             int bad = 0;
             for (int k = 0; k < 4; k++) bad |= s40(top->dbg_sums, k) != sums[k];
+            for (int k = 0; k < 2; k++) bad |= s40(top->dbg_fx, k) != fx[k];
             // the output: left and right at the volume (32), held at 16 bits
             for (int k = 0; k < 2; k++) {
-                int64_t o = (sums[k] * 32) >> 20;
+                int64_t o = (fx[k] * 32) >> 20;
                 o = o > 32767 ? 32767 : o < -32768 ? -32768 : o;
                 bad |= (int16_t)(top->dbg_out >> (16 * k)) != o;
             }
@@ -208,9 +212,11 @@ int main(int argc, char** argv) {
                 if (differ <= 10) {
                     printf("frame %u: rtl", fr);
                     for (int k = 0; k < 4; k++) printf(" %lld", (long long)s40(top->dbg_sums, k));
+                    printf(" fx %lld %lld", (long long)s40(top->dbg_fx, 0), (long long)s40(top->dbg_fx, 1));
                     printf(" out %d %d", (int16_t)top->dbg_out, (int16_t)(top->dbg_out >> 16));
                     printf(", c");
                     for (int k = 0; k < 4; k++) printf(" %lld", (long long)sums[k]);
+                    printf(" fx %lld %lld", (long long)fx[0], (long long)fx[1]);
                     printf("\n");
                 }
             }

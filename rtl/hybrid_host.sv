@@ -86,6 +86,9 @@
 //                   SoundFont (when it has loaded it), and after "Reset
 //                   Hanging Notes". It then has none of the song's settings:
 //                   the game sends them again (MH_MidiSynthChanged()).
+//                   bit 28: the core has the MIDI synthesizer (host version
+//                   16; MIDI_SYNTH). Without it the MIDI music goes to an
+//                   MT32-pi, or the game plays its FM music.
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -100,7 +103,10 @@
 //                  (host version 13): an OSD trigger ("T[56]".."T[59]") is
 //                  a pulse of microseconds, which a game reading the status
 //                  once a field would miss; the core flips the bit at each
-//                  one instead
+//                  one instead. Bit 16 the same for "Save Diagnostic Report"
+//                  (host version 16, docs/diagnostics.md), flipped at the
+//                  pulse's end: a saved setting of the old Menu OK may hold
+//                  the bit at 1, and the trigger then only clears it
 //              w5  {mouse y accumulator, mouse x accumulator}
 //              w6  {video lines late[15:0], 16'b0, wheel accumulator[15:0],
 //                   13'b0, mouse buttons[2:0]}: a line is late when the
@@ -178,7 +184,11 @@ module hybrid_host
 	parameter WALL_TIMEOUT = 716,
 	// the MT32-pi counts as gone when it has not polled for that many clocks
 	// (1 second; it polls every 50ms)
-	parameter MT32_QUIET   = 50_000_000
+	parameter MT32_QUIET   = 50_000_000,
+	// the MIDI synthesizer (host version 16): 1 in a core whose games play
+	// MIDI music, 0 leaves it and its 100MHz PLL out (about 9,500 ALMs, 316
+	// M10K and 20 DSP blocks); status word 1 bit 28 says which
+	parameter MIDI_SYNTH   = 1
 )
 (
 	input             clk,          // 50MHz
@@ -1302,51 +1312,73 @@ wire  [7:0] midi_voices;
 wire [127:0] midi_bits;
 wire       clk_midi;
 
-pll_midi pll_midi
-(
-	.refclk(refclk),
-	.rst(1'b0),
-	.outclk_0(clk_midi),
-	.locked()
-);
+generate
+if (MIDI_SYNTH) begin : midi_synth
+	pll_midi pll_midi
+	(
+		.refclk(refclk),
+		.rst(1'b0),
+		.outclk_0(clk_midi),
+		.locked()
+	);
 
-hybrid_midi midi
-(
-	.clk       (clk),
-	.mclk      (clk_midi),
-	.en        (midi_en),
-	.wcount    (midi_wcount),
-	.volume    (midi_vol),
-	.frame_stb (aud_tick2 && audio_en && afifo_level != 0),
-	.frame     (aud_play + 1'd1),
-	.cmd_req   (midi_cmd_req),
-	.cmd_addr  (midi_cmd_addr),
-	.cmd_ack   (midi_cmd_ack),
-	.smp_req   (midi_smp_req),
-	.smp_addr  (midi_smp_addr),
-	.smp_len   (midi_smp_len),
-	.smp_ack   (midi_smp_ack),
-	.beat      (midi_beat),
-	.dout      (ddr_dout),
-	.out_l     (midi_l),
-	.out_r     (midi_r),
-	.st_read   (midi_read),
-	.st_under  (midi_under),
-	.st_voices (midi_voices),
-	.st_bits   (midi_bits),
-	.st_frame  (midi_frame),
-	.dbg_sums  (),
-	.dbg_out   (),
-	.dbg_frame (),
-	.dbg_tgl   ()
-);
+	hybrid_midi midi
+	(
+		.clk       (clk),
+		.mclk      (clk_midi),
+		.en        (midi_en),
+		.wcount    (midi_wcount),
+		.volume    (midi_vol),
+		.frame_stb (aud_tick2 && audio_en && afifo_level != 0),
+		.frame     (aud_play + 1'd1),
+		.cmd_req   (midi_cmd_req),
+		.cmd_addr  (midi_cmd_addr),
+		.cmd_ack   (midi_cmd_ack),
+		.smp_req   (midi_smp_req),
+		.smp_addr  (midi_smp_addr),
+		.smp_len   (midi_smp_len),
+		.smp_ack   (midi_smp_ack),
+		.beat      (midi_beat),
+		.dout      (ddr_dout),
+		.out_l     (midi_l),
+		.out_r     (midi_r),
+		.st_read   (midi_read),
+		.st_under  (midi_under),
+		.st_voices (midi_voices),
+		.st_bits   (midi_bits),
+		.st_frame  (midi_frame),
+		.dbg_sums  (),
+		.dbg_out   (),
+		.dbg_frame (),
+		.dbg_tgl   ()
+	);
+end else begin : no_midi_synth
+	// no synthesizer: no commands or samples asked for, silence, and its
+	// status 0 (the library uses it only with status word 1 bit 28)
+	assign clk_midi      = 1'b0;
+	assign midi_cmd_req  = 1'b0;
+	assign midi_cmd_addr = 14'd0;
+	assign midi_smp_req  = 1'b0;
+	assign midi_smp_addr = 23'd0;
+	assign midi_smp_len  = 4'd0;
+	assign midi_l        = 16'sd0;
+	assign midi_r        = 16'sd0;
+	assign midi_read     = 32'd0;
+	assign midi_under    = 16'd0;
+	assign midi_voices   = 8'd0;
+	assign midi_bits     = 128'd0;
+	assign midi_frame    = 32'd0;
+end
+endgenerate
 
 //////////////////////////////////////////////////////////////////
 // Input state
 
 reg [511:0] keys = 0;
-// OSD triggers, bits 56..59: flipped at each pulse
+// OSD triggers, bits 56..59: flipped at each pulse; bit 16 (Save Diagnostic
+// Report) at each pulse's end
 reg   [3:0] trig_toggle = 0, trig_prev = 0;
+reg         diag_toggle = 0, diag_prev = 0;
 // OSD_STATUS comes from the framework's clock
 reg   [1:0] osd_open_s = 0;
 reg         old_key_stb = 0;
@@ -1358,6 +1390,8 @@ reg         old_mouse_stb = 0;
 always @(posedge clk) begin
 	trig_prev   <= osd_status[59:56];
 	trig_toggle <= trig_toggle ^ (osd_status[59:56] & ~trig_prev);
+	diag_prev   <= osd_status[16];
+	diag_toggle <= diag_toggle ^ (diag_prev & ~osd_status[16]);
 	osd_open_s  <= {osd_open_s[0], osd_open};
 	old_key_stb <= ps2_key[10];
 	if (old_key_stb != ps2_key[10]) keys[{ps2_key[8], ps2_key[7:0]}] <= ps2_key[9];
@@ -1432,10 +1466,10 @@ reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 4'd0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, 3'd0, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
-		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:0]};
+		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:17], diag_toggle, osd_status[15:0]};
 		4'd5:  stat_word = {mouse_y, mouse_x};
 		4'd6:  stat_word = {late_lines, 16'd0, mouse_wheel, 13'd0, mouse_btn};
 		4'd7:  stat_word = {fm_fetch, 3'd0, vclk_count, 8'd0, vclk_code};

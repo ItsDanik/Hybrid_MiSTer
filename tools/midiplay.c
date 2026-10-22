@@ -6,7 +6,7 @@
 //   PC:      gcc -O2 -o fakecore tools/fakecore.c
 //            gcc -O2 -Ihps -o midiplay tools/midiplay.c tools/midisynth/smf.c hps/mister_hybrid.c
 //                hps/mister_joymap.c hps/mister_ui.c hps/mister_triggers.c hps/mister_games.c
-//                hps/mister_midi.c -lpthread -lm
+//                hps/mister_midi.c hps/mister_diag.c -lpthread -lm
 //            ./fakecore /tmp/shm script audio.raw &
 //            MISTER_HYBRID_SHM=/tmp/shm MISTER_HYBRID_SOUNDFONTS=<folder> ./midiplay song.mid
 //   MiSTer:  build it with the toolchain, load any hybrid core of host

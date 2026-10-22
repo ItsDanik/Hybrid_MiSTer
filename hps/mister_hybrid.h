@@ -81,8 +81,9 @@ extern "C" {
 // option is 0 and so is the default.
 #define MH_OSD_SOUND_VOLUME(s) ((int)(((s) >> 7) & 0xF))  // 0 = 100%, 10 = 0%
 #define MH_OSD_MUSIC_VOLUME(s) ((int)(((s) >> 11) & 0xF)) // 0 = 100%, 10 = 0%
-// Bits 16..23 were the options Menu OK / Menu Back up to host version 13:
-// unused (a saved setting may still have them set)
+// Bits 16..23 were the options Menu OK / Menu Back up to host version 13 (a
+// saved setting may still have them set): 16 is Save Diagnostic Report since
+// host version 16, which the library reads itself (MH_DiagAdd()), 17..23 unused
 // "O[15],FPS Counter,Off,On;": the library draws the number of frames shown in
 // the last second in the top left corner of every frame, the game does nothing
 #define MH_OSD_FPS(s) ((int)(((s) >> 15) & 1))
@@ -213,6 +214,15 @@ void MH_OSDInfo(int n);
 #define MH_INFO_NO_SOUNDFONT      14 // no .sf2 in games/dnk/SoundFonts/
 #define MH_INFO_SOUNDFONT_DAMAGED 15 // the slot's file is no SoundFont 2, or damaged
 #define MH_INFO_SOUNDFONT_TOO_BIG 16 // more samples than the 64 MB of sample memory
+#define MH_INFO_DIAG_SAVED        17 // the diagnostic report is saved (docs/diagnostics.md)
+#define MH_INFO_DIAG_FAILED       18 // it could not be
+// The diagnostic report (docs/diagnostics.md): the OSD line "Save
+// Diagnostic Report" saves the setup and the last 60 seconds in
+// games/dnk/diagnostics/ (host version 16), with no code in the game. A game
+// that knows more about its own state (its settings, the level) may add a
+// file to it: `text` as the report's game/<name>, the last text given for a
+// name (copied; NULL takes it out). At most 8.
+void MH_DiagAdd(const char* name, const char* text);
 // OSD triggers: lines "T[56],<label>;" .. "T[59],<label>;" of the core's
 // CONF_STR, which do something once each time the player selects them (a
 // cheat, "next level"). Bit n set: trigger 56 + n was selected since the
@@ -229,9 +239,11 @@ uint64_t MH_OSDStatusHigh(void);
 // for a 240-line screen (twice that in a 480-line mode), from the OSD's CRT
 // Options. A game that draws its view in 240 lines puts its top HUD that far
 // from the top and its bottom HUD that far from the bottom, every frame, so a
-// change shows at once. A screen with overscan hides the edges; HDMI has none.
-// Without the core's lines for it (an older core) both are MH_HUD_DEFAULT.
-#define MH_HUD_DEFAULT 10
+// change shows at once. A screen with overscan hides the edges; HDMI has none:
+// 0 by default (Danik, 2026-10-21: any other default confused players without
+// overscan), a CRT's player moves them in. Without the core's lines for it (an
+// older core) both are MH_HUD_DEFAULT.
+#define MH_HUD_DEFAULT 0
 #define MH_HUD_MAX 24
 void MH_HudMargins(int* top, int* bottom);
 // Core buttons (MH_JOY_BUTTON bits) driven by the physical buttons of the

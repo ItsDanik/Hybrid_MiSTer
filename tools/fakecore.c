@@ -20,6 +20,8 @@
 // Its reports (status bits 24..27) are counted when the script's osd2
 // changes the synth, ROM or SoundFont (bits 97..103) or sets bit 104 (Reset
 // Hanging Notes), as the Pi's when it has switched: logged "# reports n".
+// FAKECORE_SYNTH=0 is a core built without the synthesizer (MIDI_SYNTH 0,
+// status word 1 bit 28 clear).
 //
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
@@ -38,8 +40,10 @@
 //                           script's joy and key lines still do)
 //   trigger <0..3>          an OSD trigger, T[56]..T[59], selected (the core
 //                           flips status bit 56 + n)
+//   diag                    Save Diagnostic Report selected (the core flips
+//                           status bit 16, host version 16)
 //   hud <top> <bottom>      the HUD margins of the CRT Options page, 0..24
-//                           pixels (OSD status bits 77..86; 10 at the start)
+//                           pixels (OSD status bits 77..86; 0 at the start)
 //   shot <file.ppm>         save the picture the core would show, in the
 //                           size of the video mode (not stretched to 4:3)
 //   vga31 <0|1>             whether 640x400 and 640x480 are progressive at
@@ -83,7 +87,7 @@ static uint32_t audio_fetch;
 static uint64_t audio_frac;
 static FILE* audio_out;
 static opl3_chip fm_chip;
-static int fm_on, midi_out, mt32;
+static int fm_on, midi_out, mt32, synth = 1;
 static unsigned mt32_reports;
 static uint32_t fm_fetch;
 static FILE* fm_log;
@@ -119,6 +123,7 @@ static void midi_frame(uint32_t frame, uint32_t wcount, int volume, int* l, int*
         midi_fetch++;
     }
     ms_frame(midi_ms, frame, sums);
+    ms_effects(midi_ms, sums);
     ms_output(sums, volume, out);
     *l += out[0];
     *r += out[1];
@@ -301,7 +306,7 @@ static void tick(void) {
     // the game has the screen (bit 19) at once: nothing fades here
     status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
         | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (ctrl_valid << 19) | ((msg_shown && !ctrl_valid) << 20) | (osd_open << 22)
-        | (mt32 << 23) | ((mt32_reports & 15) << 24);
+        | (mt32 << 23) | ((mt32_reports & 15) << 24) | ((unsigned)synth << 28);
     status[3] = 16;
     status[15] = fm_fetch;
     // the MIDI synthesizer: commands read, voices playing and which, at the
@@ -400,6 +405,7 @@ int main(int argc, char** argv) {
         fm_log = fopen(getenv("FAKECORE_FMLOG"), "w");
     }
     mt32 = getenv("FAKECORE_MT32") != NULL && atoi(getenv("FAKECORE_MT32")) != 0;
+    synth = getenv("FAKECORE_SYNTH") == NULL || atoi(getenv("FAKECORE_SYNTH")) != 0;
     if (getenv("FAKECORE_MIDILOG")) {
         midi_log = fopen(getenv("FAKECORE_MIDILOG"), "w");
         setvbuf(midi_log, NULL, _IOLBF, 0);
@@ -437,9 +443,12 @@ int main(int argc, char** argv) {
             status[12] = (status[12] & ~7u) | (c & 7);
         } else if (sscanf(line, "trigger %d", &a) == 1 && a >= 0 && a < 4) {
             status[9] ^= 1u << (24 + a);
+        } else if (strncmp(line, "diag", 4) == 0) {
+            status[8] ^= 1u << 16;
         } else if (sscanf(line, "hud %d %d", &a, &b) == 2) {
-            // OSD status bits 64..95 are status[34]; entry n is (n + 10) % 25 pixels
-            status[34] = (status[34] & ~(0x3ffu << 13)) | ((uint32_t)((a + 15) % 25) << 13) | ((uint32_t)((b + 15) % 25) << 18);
+            // OSD status bits 64..95 are status[34]; entry n is n pixels
+            // (host version 16)
+            status[34] = (status[34] & ~(0x3ffu << 13)) | ((uint32_t)(a & 31) << 13) | ((uint32_t)(b & 31) << 18);
         } else if (sscanf(line, "osd2 %llx", &osd) == 1) {
             // the Pi reports what it plays when it has switched, or after a
             // mute
