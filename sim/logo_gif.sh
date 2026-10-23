@@ -11,7 +11,7 @@
 #               the overlay (the MIDI Player's), 640x480 with a palette (PNG
 #               of mode P, index 0 transparent): the logo goes out after its
 #               2 seconds and the page comes in (tb_wall's PAGE)
-#   FIRST=<field> LAST=<field>: only that part of the timeline (0, 512)
+#   FIRST=<field> LAST=<field>: only that part of the timeline (0, 576)
 #   paths as seen from the framework's directory
 cd "$(dirname "$0")/.."
 OUT=$1
@@ -65,7 +65,7 @@ END
 PAGE=0
 [ -f "$WORK/page" ] && PAGE=1
 STEP=32       # fields per piece: 16 frames
-LAST=${LAST:-512}  # the timeline's end: the game's first frame is there (tb_wall.sv, L_*)
+LAST=${LAST:-576}  # the timeline's end: the game's first frame is there (tb_wall.sv, L_*)
 s=${FIRST:-0}
 while [ "$s" -lt "$LAST" ]; do
   docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c "

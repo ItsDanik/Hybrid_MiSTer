@@ -24,8 +24,9 @@
 // status word 1 bit 28 clear).
 //
 // The overlay (host version 17, w0[58]; the game's logo, docs/game_logo.md):
-// its handover begins in the first field it is asked for (the intro is over
-// here), status bit 29 from then on. Given up, the core's picture goes out in
+// its handover begins in the first field it is asked for once the intro is
+// over (field 300 here, as on the MiSTer, where the counter counts from the
+// core's load), status bit 29 from then on. Given up, the core's picture goes out in
 // 43 fields before the game has the screen (bit 19); without it the game has
 // it at once, nothing fades. Each step is printed with its field. w2[58]
 // takes the overlay out as the core does (its fade-in backwards, status bit 30
@@ -208,7 +209,7 @@ static void tick(void) {
 
         int out = want && ((c5 >> 26) & 1);
 
-        if (want && !ovl_on && !game_on) {
+        if (want && !ovl_on && !game_on && field >= 300) {
             ovl_on = 1;
             ovl_t = 0;
             ovl_gone = 0;

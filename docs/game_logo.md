@@ -6,22 +6,23 @@ Danik's idea, 2026-10-22; the answers below are Danik's of the same day. It is p
 
 1. The purple screen with its intro, as now (4.1 seconds).
 2. The game is known: the menu entry's, or picked from the list. **A core started by itself with several games shows the list first, under the MiSTer logo, and the game's logo comes after the pick.**
-3. The handover (the overlay's, `docs/midiplayer.md`, "The screen"):
-   - the MiSTer logo goes as it came, its intro step backwards: fading out while it sinks 16 pixels, 31 fields (0.5 s); the dots and any message go with it;
-   - 30 fields (0.5 s) of the background and the badge alone;
-   - **the game's logo** comes as the MiSTer logo came: it fades in while it rises 16 pixels into its place, on the same curve, 31 fields (0.5 s). Its bottom edge ends where the MiSTer logo's was (Danik, 2026-10-22).
-4. Under the logo, where messages are, the lines pile up, each shown for at least 0.4 seconds before the next comes:
+3. **Under the MiSTer logo**, once the intro is over, the first two lines, each shown for at least 0.4 seconds before what comes next (Danik, 2026-10-23: the check is said where the core is, and the game's logo comes only once the game is starting):
    ```
    Checking Game Data...
    Game Data OK
-   Loading Doom...
    ```
-   The title is the game's of `package/games.txt`.
-   - **Data missing:** the logo stays, and "Checking Game Data..." is replaced by the message there is now, naming the files and where they go (the rule "missing game files are said on the purple screen"). It waits until the player leaves the core.
+   - **Data missing:** "Checking Game Data..." is replaced by the message there is now, naming the files and where they go (the rule "missing game files are said on the purple screen"), under the MiSTer logo. No game logo comes. The message waits until the player leaves the core.
+   - A game without files to check (the MIDI Player) has neither line.
+4. The handover (the overlay's, `docs/midiplayer.md`, "The screen"):
+   - the MiSTer logo goes as it came, its intro step backwards: fading out while it sinks 16 pixels, 31 fields (0.5 s); the dots and the two lines go with it;
+   - 30 fields (0.5 s) of the background and the badge alone, and **"Loading Doom..."** comes in the first row, where "Checking Game Data..." was. The title is the game's of `package/games.txt`;
+   - **the game's logo** comes as the MiSTer logo came: it fades in while it rises 16 pixels into its place, on the same curve, 31 fields (0.5 s). Its bottom edge ends where the MiSTer logo's was (Danik, 2026-10-22).
 5. **The logo stays at least 2 seconds from the moment it is fully faded in**, even if the game is ready sooner. The game loads meanwhile.
-6. The fade-out there is now (0.7 s to black, logo and lines with everything else), then the game's first frame.
+6. The fade-out there is now (0.7 s to black, logo and line with everything else), then the game's first frame.
 
-From the core's start to the game's first frame that is about 8.3 seconds at the least, instead of 4.8 now.
+The first order (2026-10-22) had all three lines under the game's logo, and with data missing the game's logo came before the message; Danik changed it on 2026-10-23.
+
+From the core's start to the game's first frame that is about 9.1 seconds at the least (the intro 4.1, the two lines 0.8, the handover 1.5, the 2 seconds, the fade-out 0.7), instead of 4.8 before host version 17.
 
 ## The logo files
 
@@ -44,15 +45,16 @@ From the core's start to the game's first frame that is about 8.3 seconds at the
 
 As built (`hps/mister_hybrid.c`, `hps/mister_games.c`):
 
-- `MH_PickGame()` does it all on a core of host version 17: its data check (the `files` patterns) is done before it picks, so the game is never kept waiting. With the game it returns it calls `MH_GameLogo(id, title)` (the title is the game's `name`), which
-  1. draws the logo into a framebuffer the core does not show, its colours into the palette slot it does not use, and asks for the overlay (`w0[58]`, mode 640x480, 8bpp),
-  2. starts a thread that waits for the handover (status bit 29: the logo is fully in 92 fields later, `OVL_T_IN + OVL_D_IN`), clears the message there (the list goes out with the MiSTer logo), and shows the lines at 0, 24 and 48 fields from the logo fully in,
-  3. returns, and the game loads.
+- `MH_PickGame()` does it all on a core of host version 17: its data check (the `files` patterns) is done before it picks, so the game is never kept waiting, and the lines say what it found. With the game it returns it calls `MH_GameLogo(id, title)` (the title is the game's `name`), which checks that the logo's file is there and starts a thread that
+  1. waits for the intro's end: the core's field counter counts from its load, and the intro is over at field 300 (`LOGO_INTRO`; on the MiSTer the handover began at fields 298 to 310, CrispyDoom 2026-10-22). The core reports no such bit, so a change to the intro's length changes `LOGO_INTRO` too;
+  2. shows "Checking Game Data...", 24 fields later "Game Data OK", and 24 fields after that
+  3. draws the logo into a framebuffer the core does not show, its colours into the palette slot it does not use, and asks for the overlay (`w0[58]`, mode 640x480, 8bpp). Until then the library writes no control block (the magic alone would have the picture go out for a game);
+  4. sees the handover begin (status bit 29) and clears the message: the core keeps the lines it had (`msg_keep`) and fades them with the MiSTer logo. 32 fields into the handover, the MiSTer logo gone, it shows "Loading <title>..." alone, in the first row; the logo is fully in 92 fields into the handover (`OVL_T_IN + OVL_D_IN`).
 
-  A game needs no code. The template's `MiSTer_PickGame()` lost its own "Loading <title>..." message, which is the third line now. A port with its own pick code calls `MH_GameLogo(id, title)` once it knows the game, and `MH_GameLogoMissing(id)` before the message naming missing files (`MH_PickGame()` does that for a menu entry: the logo comes in, "Checking Game Data..." for 24 fields, then the message, which waits).
+  `MH_GameLogo()` returns at once and the game loads. A game without files to check (`MH_GameLogoLoading()`) has its overlay asked for at once (the core begins the handover when its intro is over) and the third line alone. A port with its own pick code calls `MH_GameLogo(id, title)` once it knows the game, and `MH_GameLogoMissing(id)` before the message naming missing files (`MH_PickGame()` does that for a menu entry: once the intro is over "Checking Game Data..." for 24 fields under the MiSTer logo, then the message, which waits; no logo). The template's `MiSTer_PickGame()` lost its own "Loading <title>..." message, which is the third line now.
 - **The first frame waits:** a game's first `MH_Present()` or `MH_PresentBuffer()` waits until the three lines are there and the logo has been in for 120 fields (2 seconds). Then the overlay is given up with the game's mode but still read at 8bpp (the core's picture goes out with it, 43 fields), and once the core gives the game the screen the game's palette, format and frame follow. `MH_SetPalette()`, `MH_SetMode()` and `MH_SetFormat()` before that only note what the game wants and return at once: loading is never held up by them.
-- A message of the game's own meanwhile (`MiSTer_ShowError()`) takes the lines' place under the logo, and they stop.
-- **A program started in its place** (`execv()` after `MH_Close()`: CrispyDoom's Heretic, Hexen and Strife): `MH_Close()` leaves the overlay on and puts the logo's state in `MISTER_HYBRID_LOGO`; the next `MH_Open()` takes it over (the lines and the 2 seconds go on where they were). A program that just ends with the logo up leaves it until the next one opens the core: `mh_message` of the launch script then turns it off.
+- A message of the game's own meanwhile (`MiSTer_ShowError()`) takes the lines' place, and they stop: before the overlay is asked for, no logo comes over it (the game goes on as without one); after, it is under the game's logo.
+- **A program started in its place** (`execv()` after `MH_Close()`: CrispyDoom's Heretic, Hexen and Strife): `MH_Close()` leaves the overlay on (once asked for) and puts the logo's state in `MISTER_HYBRID_LOGO` (the game's id, so that the next program can still ask for the overlay itself: CrispyDoom starts Heretic before the lines are done); the next `MH_Open()` takes it over (the lines, the handover and the 2 seconds go on where they were). A program that just ends with the logo up leaves it until the next one opens the core: `mh_message` of the launch script then turns it off.
 - No logo file, or a core of host version 16 or older: no overlay, "Loading <title>..." under the MiSTer logo, as before. A release cannot lack one (`package.sh`); this is for a test build. No handover within 15 seconds of asking for it (a core that does not begin it): the same, "Loading <title>..." alone.
 - The FPS counter is drawn into the game's frames only; the diagnostic report's screenshot is taken only while the game has the screen.
 
@@ -69,9 +71,9 @@ It is a port like the others: its logo and the 2 seconds, with "Loading MIDI Pla
 
 ## Tests
 
-- `sim/logo_gif.sh <out.gif> <logo.mhl> <frame.ppm>` (`sim/tb_wall.sv` with `LOGO`): the whole start at 480i, from the core's black fields to the game's first frame. Danik approved it with the Doom logo (2026-10-22).
+- `sim/logo_gif.sh <out.gif> <logo.mhl> <frame.ppm>` (`sim/tb_wall.sv` with `LOGO`): the whole start at 480i, from the core's black fields to the game's first frame. Danik approved the first order with the Doom logo (2026-10-22).
 - `sim/tb_host.sv`: a game of host version 16 (no `w0[58]`) starts as before, pixel for pixel; the overlay given up goes to the game.
-- fakecore (`tools/logo_test.sh <logo.mhl>`, `tools/logo_test.c`; fakecore knows the overlay's handover and fade): the lines' fields, the 2 seconds from the logo fully in, a load longer than that, the `execv()` takeover, a missing file's message under the logo, a game without a logo file, a core of host version 16, the MIDI Player's page. All 18 checks pass (2026-10-22).
+- fakecore (`tools/logo_test.sh <logo.mhl>`, `tools/logo_test.c`; fakecore knows the overlay's handover and fade, and begins it at field 300, its intro's end): the lines' fields (the first two from the intro's end, "Loading" alone 32 fields into the handover), the 2 seconds from the logo fully in, a load longer than that, the `execv()` takeover before the overlay is asked for, a missing file's message under the MiSTer logo with no overlay, a game without a logo file, a core of host version 16, the MIDI Player's page. All 19 checks pass (2026-10-23).
 - On the MiSTer (after asking), with `tools/test_on_mister.sh`:
   - every game of a core with several (CrispyDoom), from its menu entry and from the list;
   - `nodata`;

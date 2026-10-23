@@ -83,7 +83,7 @@ static int PickedFromList = 0;
 
 int MiSTer_PickGame(const struct mh_game *games, int count)
 {
-    // the game's logo and the lines under it ("Loading <name>..." the last)
+    // the lines under the MiSTer logo, then the game's logo ("Loading <name>..." under it)
     // come with the pick (MH_GameLogo(), host version 17)
     MH_Open();
     return MH_PickGame(games, count, NULL, NO_GAME, &PickedFromList);

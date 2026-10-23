@@ -94,11 +94,15 @@ static int audio_enabled;
 static volatile int detached;
 static int reloaded; // detached because the core started over
 
-// The game's logo at its start (host version 17, docs/game_logo.md): drawn
-// into a framebuffer the core shows over its picture (the overlay), where
-// the MiSTer logo was, the lines under it, and the game's first frame held
-// back until it has been there 2 seconds
+// The game's logo at its start (host version 17, docs/game_logo.md): once
+// the core's intro is over, "Checking Game Data..." and "Game Data OK" under
+// the MiSTer logo, which then goes with them; "Loading <title>..." while the
+// screen is empty, and the game's logo drawn into a framebuffer the core shows
+// over its picture (the overlay), where the MiSTer logo was. The game's first
+// frame is held back until the logo has been there 2 seconds.
 #define LOGO_BOTTOM 295 // the MiSTer logo's bottom edge, the game's logo's too
+#define LOGO_INTRO 300  // the field counter once the core's intro is over (it counts from the core's load; CrispyDoom on the MiSTer, 2026-10-22: the handover began at 298 to 310)
+#define LOGO_GAP 32     // fields from the handover's start to the screen empty (the MiSTer logo gone at OVL_T_GAP, 31)
 #define LOGO_IN 92      // fields from the handover's start to the logo fully in (OVL_T_IN + OVL_D_IN)
 #define LOGO_LINE 24    // fields a line is shown before the next comes (0.4 seconds)
 #define LOGO_HOLD 120   // fields the logo stays once it is in (2 seconds)
@@ -107,9 +111,12 @@ static int reloaded; // detached because the core started over
 static const char* const logo_text[LOGO_LINES] = { "Checking Game Data...", "Game Data OK", "Loading %s..." };
 static int overlay_mode; // MH_Overlay(1): the program's frames go on the overlay
 static struct {
-    int on;             // the overlay is asked for (w0[58]): the game's frames wait
+    int on;             // the game's logo is coming: the game's frames wait
+    int asked;          // the overlay is asked for (w0[58]); before, the lines under the MiSTer logo
     int out;            // the logo going out for the program's page (overlay_mode)
     int first;          // the first of the lines shown: LOGO_LINES - 1, "Loading" alone
+    uint32_t t0;        // the field "Checking Game Data..." was shown (0: not yet)
+    char id[32];
     int leaving;        // given up, the picture going out with it: still 8bpp
     int in_known;       // the handover was seen, `in` is the field the logo is fully in
     uint32_t in;
@@ -200,6 +207,8 @@ static void midi_close(void);
 static void midi_service(void);
 
 static void write_ctrl(void) {
+    int ovl = logo.on && logo.asked;
+
     // Palette/framebuffer writes must land before the FPGA can see the new control block
     pthread_mutex_lock(&ctrl_lock);
     __sync_synchronize();
@@ -209,15 +218,15 @@ static void write_ctrl(void) {
     ctrl[5] = (uint32_t)(midi_volume * midi_fade / 32) | ((uint32_t)(midi_enabled && audio_enabled) << 7)
         | ((uint32_t)info_n << 8) | ((uint32_t)(info_seq & 0xff) << 16)
         | ((uint32_t)(midi_program_dest != MH_MIDI_OSD) << 24) | ((uint32_t)(midi_program_dest == MH_MIDI_PI) << 25)
-        | (logo.out ? CTRL_OVL_OUT : 0) | (logo.on ? CTRL_OVL_RISE : 0);
+        | (logo.out ? CTRL_OVL_OUT : 0) | (ovl ? CTRL_OVL_RISE : 0);
     // the overlay is 640x480 at 8bpp; given up, the picture goes out with
     // it in the game's mode, still read at 8bpp. The logo rises into place
     // (ctrl[5] above), and goes out for a program's own page.
     ctrl[1] = fb_current
-        | ((logo.on || logo.leaving || overlay_mode ? MH_FORMAT_INDEX8 : fb_format) << 8)
-        | ((logo.on || overlay_mode ? MH_MODE_640x480 : fb_mode) << 12) | (palette_slot << 16) | (audio_enabled << 24)
+        | ((ovl || logo.leaving || overlay_mode ? MH_FORMAT_INDEX8 : fb_format) << 8)
+        | ((ovl || overlay_mode ? MH_MODE_640x480 : fb_mode) << 12) | (palette_slot << 16) | (audio_enabled << 24)
         | ((uint32_t)fm_volume << 17) | ((uint32_t)(fm_enabled && audio_enabled) << 25)
-        | (logo.on || overlay_mode ? CTRL_OVL : 0) | ((uint32_t)menu_mask << 28);
+        | (ovl || overlay_mode ? CTRL_OVL : 0) | ((uint32_t)menu_mask << 28);
     ctrl[0] = ctrl_enabled ? CTRL_MAGIC : 0;
     __sync_synchronize();
     pthread_mutex_unlock(&ctrl_lock);
@@ -353,21 +362,26 @@ int MH_Open(void) {
     }
     // a program started in the place of the one that showed the game's logo
     // (execv: CrispyDoom's Heretic, Hexen and Strife) takes the logo over, as
-    // MH_Close() left it
+    // MH_Close() left it: the lines under the MiSTer logo, or the overlay
     env = getenv("MISTER_HYBRID_LOGO");
     memset(&logo, 0, sizeof(logo));
-    if (env != NULL && ctrl[0] == CTRL_MAGIC && (ctrl[1] & CTRL_OVL) && status[3] >= 17
-        && sscanf(env, "%d %u %u %d %d %63[^\n]", &logo.in_known, &logo.in, &logo.start, &logo.first, &logo.lines,
-               logo.title) == 6) {
+    if (env != NULL && status[3] >= 17
+        && sscanf(env, "%d %d %u %u %u %d %d %31s %63[^\n]", &logo.asked, &logo.in_known, &logo.in, &logo.start,
+               &logo.t0, &logo.first, &logo.lines, logo.id, logo.title) == 9
+        && (!logo.asked || (ctrl[0] == CTRL_MAGIC && (ctrl[1] & CTRL_OVL)))) {
         logo.on = 1;
-        ctrl_enabled = 1;
-        fb_current = (int)(ctrl[1] & 0xff) % FB_COUNT;
+        if (logo.asked) {
+            ctrl_enabled = 1;
+            fb_current = (int)(ctrl[1] & 0xff) % FB_COUNT;
+        }
+    } else {
+        memset(&logo, 0, sizeof(logo));
     }
     unsetenv("MISTER_HYBRID_LOGO");
     alive_time.tv_sec = 0;
     for (i = 0; i < FB_COUNT; i++) {
         // all of it: whatever ran before us may have used a larger mode
-        if (!logo.on || i != fb_current) {
+        if (!logo.asked || i != fb_current) {
             clear_framebuffer(i, FB_SIZE);
         }
     }
@@ -430,10 +444,10 @@ void MH_Close(void) {
     // the game's logo still there: it stays for a program started in this
     // one's place (execv), which takes it over (MH_Open())
     if (logo.on && shm != NULL && !detached) {
-        char state[128];
+        char state[192];
 
-        snprintf(state, sizeof(state), "%d %u %u %d %d %s", logo.in_known, logo.in, logo.start, logo.first, logo.lines,
-            logo.title);
+        snprintf(state, sizeof(state), "%d %d %u %u %u %d %d %s %s", logo.asked, logo.in_known, logo.in, logo.start,
+            logo.t0, logo.first, logo.lines, logo.id, logo.title);
         setenv("MISTER_HYBRID_LOGO", state, 1);
     }
     stop_present_thread();
@@ -461,7 +475,7 @@ void MH_Close(void) {
             // back to the core's own picture, audio off. Not once another
             // core is loaded: the memory is its own then. The game's logo
             // stays (above)
-            ctrl_enabled = logo.on;
+            ctrl_enabled = logo.on && logo.asked;
             audio_enabled = 0;
             fm_enabled = 0;
             fm_wr = 0;
@@ -1086,27 +1100,38 @@ static int logo_load(const char* id, uint8_t* fb, uint32_t* palette) {
     return ok;
 }
 
-// The lines under the logo, `count` of them
-static void logo_lines(int count) {
+// The lines `from` up to `to` of logo_text, from the message's first row
+static void logo_lines(int from, int to) {
     char text[(MH_MSG_COLS + 1) * LOGO_LINES];
     size_t n = 0;
     int i;
 
-    for (i = logo.first; i < count && i < LOGO_LINES; i++) {
+    for (i = from; i < to && i < LOGO_LINES; i++) {
         n += snprintf(text + n, sizeof(text) - n, logo_text[i], logo.title);
         n += snprintf(text + n, sizeof(text) - n, "\n");
     }
     pthread_mutex_lock(&logo_lock);
     if (!logo.taken) {
         MH_ShowMessage(text, 0);
-        logo.lines = count;
+        logo.lines = to;
     }
     pthread_mutex_unlock(&logo_lock);
 }
 
-// Wait for field `at` (and for the handover to be seen first: `at` counts
-// from the logo fully in then). 0 when the logo is to go on without it: the
-// core is gone, the thread is to end, or no handover came.
+// Wait for field `at`. 0 when the core is gone or the thread is to end.
+static int logo_until(uint32_t at) {
+    while (MH_IsOpen() && !logo.stop) {
+        if ((int32_t)(status[1] - at) >= 0) {
+            return 1;
+        }
+        sleep_ms(5);
+    }
+    return 0;
+}
+
+// Wait for the handover to be seen, then for `after_in` fields from the logo
+// fully in. 0 when the logo is to go on without it: the core is gone, the
+// thread is to end, or no handover came.
 static int logo_wait(int after_in) {
     for (;;) {
         uint32_t now;
@@ -1117,11 +1142,12 @@ static int logo_wait(int after_in) {
         now = status[1];
         if (!logo.in_known) {
             if (status[2] & STATUS_OVL) {
-                // the handover has begun: the logo is in LOGO_IN fields. A
-                // message there (the list) goes out with the MiSTer logo
+                // the handover has begun: the logo is in LOGO_IN fields. The
+                // message there (the lines, the list) goes out with the
+                // MiSTer logo
                 logo.in = now + LOGO_IN;
                 logo.in_known = 1;
-                if (logo.lines == 0) {
+                if (logo.lines < LOGO_LINES) {
                     MH_ClearMessage();
                 }
             } else if ((int32_t)(now - (logo.start + LOGO_WAIT)) >= 0) {
@@ -1135,28 +1161,93 @@ static int logo_wait(int after_in) {
     }
 }
 
-// The lines pile up once the logo is in, each LOGO_LINE fields before the next
-static void* logo_main(void* arg) {
-    int k;
+// Ask for the overlay with the game's logo: 0 without its file
+static int logo_ask(void) {
+    uint32_t palette[256];
+    volatile uint32_t* pal;
+    uint8_t* image;
+    int fb, i;
 
+    if ((image = malloc(640 * 480)) == NULL || !logo_load(logo.id, image, palette)) {
+        free(image);
+        return 0;
+    }
+    present_flush();
+    // into a framebuffer the core does not show, and a palette slot
+    fb = (fb_current + 1) % FB_COUNT;
+    memcpy((void*)framebuffer(fb), image, 640 * 480);
+    free(image);
+    palette_slot ^= 1;
+    pal = (volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
+    for (i = 0; i < 256; i++) {
+        pal[i] = palette[i];
+    }
+    palette_seq++;
+    fb_current = fb;
+    logo.start = status[1];
+    logo.asked = 1;
+    ctrl_enabled = 1;
+    write_ctrl();
+    printf("mister: the logo of %s\n", logo.id);
+    return 1;
+}
+
+// "Loading <title>..." alone under the MiSTer logo: the game goes on without
+// its logo
+static void logo_loading_alone(void) {
+    char text[96];
+
+    pthread_mutex_lock(&logo_lock);
+    if (!logo.taken) {
+        snprintf(text, sizeof(text), logo_text[LOGO_LINES - 1], logo.title);
+        MH_ShowMessage(text, 0);
+    }
+    pthread_mutex_unlock(&logo_lock);
+}
+
+// Once the intro is over the first lines, each LOGO_LINE fields before the
+// next, under the MiSTer logo; then the handover, the MiSTer logo going out
+// with them, and "Loading" in the first row while the screen is empty
+static void* logo_main(void* arg) {
     (void)arg;
     MH_PinThreadToCPU1();
-    for (k = logo.lines > logo.first ? logo.lines : logo.first; k < LOGO_LINES; k++) {
-        if (!logo_wait((k - logo.first) * LOGO_LINE)) {
+    if (!logo.asked) {
+        if (logo.first == 0 && logo.t0 == 0) {
+            if (!logo_until(LOGO_INTRO)) {
+                goto done;
+            }
+            logo.t0 = status[1];
+            logo_lines(0, 1);
+        }
+        if (logo.first == 0 && logo.lines < 2) {
+            if (!logo_until(logo.t0 + LOGO_LINE)) {
+                goto done;
+            }
+            logo_lines(0, 2);
+        }
+        if (logo.first == 0 && !logo_until(logo.t0 + 2 * LOGO_LINE)) {
+            goto done;
+        }
+        // a message of the game's own meanwhile (an error): no logo over it
+        if (logo.taken) {
+            goto done;
+        }
+        if (!logo_ask()) {
+            logo_loading_alone();
+            goto done;
+        }
+    }
+    if (logo.lines < LOGO_LINES) {
+        if (!logo_wait(LOGO_GAP - LOGO_IN)) {
             // no handover: the last line alone, under the MiSTer logo
             if (!logo.stop && MH_IsOpen() && !logo.in_known) {
-                pthread_mutex_lock(&logo_lock);
-                if (!logo.taken) {
-                    char text[96];
-                    snprintf(text, sizeof(text), logo_text[LOGO_LINES - 1], logo.title);
-                    MH_ShowMessage(text, 0);
-                }
-                pthread_mutex_unlock(&logo_lock);
+                logo_loading_alone();
             }
-            break;
+            goto done;
         }
-        logo_lines(k + 1);
+        logo_lines(LOGO_LINES - 1, LOGO_LINES);
     }
+done:
     logo.done = 1;
     return NULL;
 }
@@ -1176,40 +1267,26 @@ static void logo_end_thread(void) {
     }
 }
 
-// Show the game's logo: 1 when it is there (host version 17, its file)
+// The game's logo is to come: 1 when it is there (host version 17, its file).
+// The thread shows the lines and asks for the overlay.
 static int logo_show(const char* id, const char* title, int first) {
     uint32_t palette[256];
-    volatile uint32_t* pal;
     uint8_t* image;
-    int fb, i;
+    int ok;
 
     if (!MH_IsOpen() || status[3] < 17 || logo.on || screen_ours || (image = malloc(640 * 480)) == NULL) {
         return 0;
     }
-    if (!logo_load(id, image, palette)) {
-        free(image);
+    ok = logo_load(id, image, palette);
+    free(image);
+    if (!ok) {
         return 0;
     }
-    present_flush();
-    // into a framebuffer the core does not show, and a palette slot
-    fb = (fb_current + 1) % FB_COUNT;
-    memcpy((void*)framebuffer(fb), image, 640 * 480);
-    free(image);
-    palette_slot ^= 1;
-    pal = (volatile uint32_t*)(shm + PALETTE_OFFSET + palette_slot * PALETTE_SLOT_SIZE);
-    for (i = 0; i < 256; i++) {
-        pal[i] = palette[i];
-    }
-    palette_seq++;
     memset(&logo, 0, sizeof(logo));
+    snprintf(logo.id, sizeof(logo.id), "%s", id);
     snprintf(logo.title, sizeof(logo.title), "%s", title);
     logo.first = first;
-    logo.start = status[1];
     logo.on = 1;
-    fb_current = fb;
-    ctrl_enabled = 1;
-    write_ctrl();
-    printf("mister: the logo of %s\n", id);
     return 1;
 }
 
@@ -1243,13 +1320,22 @@ int MH_Overlay(int on) {
     return 1;
 }
 
+// The game's files are not there: no logo, "Checking Game Data..." under the
+// MiSTer logo once its intro is over, before the message naming them
 void MH_GameLogoMissing(const char* id) {
-    if (!logo_show(id, "", 0)) {
+    uint32_t at;
+
+    (void)id;
+    if (!MH_IsOpen() || status[3] < 17) {
         return;
     }
-    if (logo_wait(0)) {
-        logo_lines(1);
-        logo_wait(LOGO_LINE);
+    while (MH_IsOpen() && (int32_t)(status[1] - LOGO_INTRO) < 0) {
+        sleep_ms(5);
+    }
+    at = status[1];
+    MH_ShowMessage(logo_text[0], 0);
+    while (MH_IsOpen() && (int32_t)(status[1] - (at + LOGO_LINE)) < 0) {
+        sleep_ms(5);
     }
 }
 
@@ -1272,6 +1358,17 @@ static void logo_release(void) {
     logo_end_thread();
     if (!MH_IsOpen()) {
         logo.on = 0;
+        return;
+    }
+    // it never came (no file, a message of the game's own): the game as
+    // without it
+    if (!logo.asked) {
+        logo.on = 0;
+        write_ctrl();
+        if (logo.palette_held) {
+            logo.palette_held = 0;
+            MH_SetPalette(logo.palette);
+        }
         return;
     }
     if (overlay_mode) {

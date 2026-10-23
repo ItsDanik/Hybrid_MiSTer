@@ -505,14 +505,16 @@ int MH_GameFound(const mh_game* game, const char* dir);
 // in it is the game's folder (MH_GamePath()). The game it returns gets its
 // logo (MH_GameLogo(), its `name` the title; a shareware its full game's
 // logo; MH_GameLogoLoading() for a game without files to check), as does one
-// whose files are missing (MH_GameLogoMissing()).
+// whose files are missing has "Checking Game Data..." before the message
+// (MH_GameLogoMissing()).
 int MH_PickGame(const mh_game* games, int count, const char* dir, const char* none, int* listed);
 
-// The game's logo at its start (host version 17, docs/game_logo.md): the
-// core's MiSTer logo goes, the game's comes in its place (logos/<id>.mhl next
-// to the program, made by package.sh with tools/make_logo.py), and under it
-// the lines "Checking Game Data...", "Game Data OK", "Loading <title>...". The
-// game loads meanwhile; its first frame (MH_Present(), MH_PresentBuffer())
+// The game's logo at its start (host version 17, docs/game_logo.md): once the
+// core's intro is over, "Checking Game Data..." and "Game Data OK" under the
+// MiSTer logo; it goes with them, "Loading <title>..." comes on the empty
+// screen and the game's logo in the MiSTer logo's place (logos/<id>.mhl next
+// to the program, made by package.sh with tools/make_logo.py). The game loads
+// meanwhile; its first frame (MH_Present(), MH_PresentBuffer())
 // waits until the logo has been there 2 seconds, and its palette and mode are
 // taken with that frame. MH_PickGame() calls it with the game it returns: a
 // port with pick code of its own calls it once it knows the game. Without the
@@ -521,7 +523,8 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
 // MH_Close()) takes the logo over in MH_Open().
 int MH_GameLogo(const char* id, const char* title);
 // A game without files to check (MH_PickGame() with none, the MIDI Player):
-// its logo and "Loading <title>..." alone
+// the MiSTer logo goes once the intro is over, then "Loading <title>..." alone
+// and its logo
 int MH_GameLogoLoading(const char* id, const char* title);
 // The overlay (host version 17): the program's frames, 640x480 at 8bpp (its
 // mode and format are taken as that), are drawn over the core's picture
@@ -532,8 +535,9 @@ int MH_GameLogoLoading(const char* id, const char* title);
 // gone out. Called before the first frame; 0 with a core of host version 16
 // or older, whose screen the frames then take as ever.
 int MH_Overlay(int on);
-// The game's files are not there: its logo and "Checking Game Data...", before
-// the message naming them (MH_UI_Message() with MH_UI_WAIT). MH_PickGame()
+// The game's files are not there: no logo, "Checking Game Data..." under the
+// MiSTer logo once its intro is over, for 0.4 seconds, before the message
+// naming them (MH_UI_Message() with MH_UI_WAIT) takes its place. MH_PickGame()
 // does it for a game's menu entry.
 void MH_GameLogoMissing(const char* id);
 

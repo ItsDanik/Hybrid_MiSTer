@@ -60,10 +60,17 @@ module tb_wall
 	parameter PAGE      = 0
 );
 
-// the timeline of a game starting with its logo, in fields from the intro's start
-localparam L_HAND  = 243;             // the handover begins (the intro is over)
-localparam L_IN    = L_HAND + 92;     // the logo is all there: the first line
+// the timeline of a game starting with its logo, in fields from the intro's
+// start: once the intro is over the two lines under the MiSTer logo, then the
+// handover (the lines going out with the MiSTer logo), "Loading" alone once
+// the screen is empty. PAGE (no files to check): "Loading" alone, the
+// handover as soon as the intro is over.
+localparam L_CHECK = 243;             // the intro is over: "Checking Game Data..."
 localparam L_LINE  = 24;              // each line at least 0.4 s
+localparam L_HAND  = PAGE ? L_CHECK : L_CHECK + 2 * L_LINE;  // the handover begins
+localparam L_GONE  = L_HAND + 31;     // the MiSTer logo is gone
+localparam L_LOAD  = L_HAND + 32;     // "Loading Doom..."
+localparam L_IN    = L_HAND + 92;     // the logo is all there
 localparam L_OUT   = L_IN + 120;      // 2 s later the overlay is given up
 localparam L_DARK  = L_OUT + 43;      // the picture has gone out
 // PAGE: the overlay out 31 fields after L_OUT, the line cleared, then the page
@@ -89,7 +96,7 @@ reg  [63:0] ovl_fb[0:38399], ovl_pal[0:127], game_fb[0:7999], game_pal[0:127];
 reg  [63:0] page_fb[0:38399], page_pal[0:127];
 wire        swapped = PAGE && tl >= L_SWAP;
 integer     tl = -1;                  // the field of its timeline, -1: not running
-integer     lines = 0;                // the lines under the logo
+integer     lines = 0;                // the lines: 1, 2 the first ones, 3 "Loading" alone
 reg         game_frame = 0;           // the library has put the game's first frame up
 initial begin
 	for (at = 0; at < 41; at = at + 1) msg[at] = 0;
@@ -112,9 +119,16 @@ function [63:0] line_word(input integer w, input integer n);
 	integer l;
 	begin
 		l = (w - 1) / 10;
-		text = PAGE ? "Loading MIDI Player..." : (l == 0) ? "Checking Game Data..." : (l == 1) ? "Game Data OK" : "Loading Doom...";
+		text = PAGE ? "Loading MIDI Player..." : (n == 3) ? "Loading Doom..." : (l == 0) ? "Checking Game Data..." : "Game Data OK";
 		if (w == 0) line_word = n == 0 ? 64'd0 : {16'd0, n[15:0], 32'h534D484D};
-		else line_word = l < n ? text_word(text, (w - 1) % 10) : 64'd0;
+		else line_word = l < (n == 3 ? 1 : n) ? text_word(text, (w - 1) % 10) : 64'd0;
+	end
+endfunction
+// the lines the library shows at field t of the timeline
+function integer timeline_lines(input integer t);
+	begin
+		if (PAGE) timeline_lines = (t < L_LOAD || t >= L_CLEAR) ? 0 : 1;
+		else timeline_lines = (t < L_CHECK) ? 0 : (t < L_CHECK + L_LINE) ? 1 : (t < L_HAND) ? 2 : (t < L_LOAD) ? 0 : 3;
 	end
 endfunction
 // a string's characters come right-aligned: character i of it at byte i
@@ -143,6 +157,7 @@ function [63:0] ctrl_word(input integer w);
 			else ctrl_word = {4'd0, !swapped, tl >= L_OUT && !swapped, 58'd0};
 		end
 		else if (w == 0) ctrl_word = game_frame ? {15'd0, 1'b1, 4'd0, 4'd0, 8'd1, 32'h4259484D}
+		                      : (tl < L_HAND) ? 64'd0   // no control block while the lines are under the MiSTer logo
 		                      : {5'd0, tl < L_OUT, 9'd0, 1'b0, tl < L_OUT ? 4'd4 : 4'd0, 4'd0, 8'd0, 32'h4259484D};
 		else if (w == 1) ctrl_word = game_frame ? 64'd2 : 64'd1;
 		else ctrl_word = {4'd0, 1'b1, 59'd0};   // [59] the logo rises
@@ -231,8 +246,7 @@ always @(posedge clk_vid) if (ce_pix) begin
 		// the logo's timeline: what the library does at each field
 		if (tl >= 0) begin
 			tl = tl + 1;
-			lines = (tl < L_IN) ? 0 : (tl < L_IN + L_LINE) ? 1 : (tl < L_IN + 2 * L_LINE) ? 2 : 3;
-			if (PAGE) lines = (tl < L_IN || tl >= L_CLEAR) ? 0 : 1;
+			lines = timeline_lines(tl);
 			// the game's first frame, once the library has seen the screen is the game's
 			if (dut.game_on) game_frame = 1;
 		end
@@ -263,8 +277,10 @@ initial begin
 		repeat (100) @(posedge clk);
 		// 6 fields early: the levels and the palette settle before the first frame
 		tl = START - 6;
-		lines = (tl < L_IN) ? 0 : (tl < L_IN + L_LINE) ? 1 : (tl < L_IN + 2 * L_LINE) ? 2 : 3;
-		if (PAGE) lines = (tl < L_IN || tl >= L_CLEAR) ? 0 : 1;
+		// not in the MiSTer logo's going out: the lines going with it are
+		// the core's (msg_keep), from the handover's start
+		if (!PAGE && tl >= L_HAND - 2 && tl < L_GONE) tl = L_HAND - 2;
+		lines = timeline_lines(tl);
 		dut.wall_hold  = 0;
 		dut.intro_on   = 1;
 		dut.attached   = 1;
@@ -279,7 +295,7 @@ initial begin
 				dut.ovl_t = (tl >= L_SWAP) ? ((tl - L_SWAP + 61 > 127) ? 127 : tl - L_SWAP + 61)
 				          : (91 - (tl - L_OUT) < 61) ? 61 : 91 - (tl - L_OUT);
 		end
-		wait_fields(6);
+		wait_fields(START - tl);
 	end else begin
 		// the intro from field START, as the core would be there: set in the
 		// middle of a field, the vblank after it takes it on
