@@ -160,6 +160,14 @@ static struct timespec alive_time;
 
 static uint32_t audio_wr;
 
+// The MT32-pi's cable, for MH_MidiBacklog(): the core sends a message's bytes
+// once the audio has reached its frame, at 31250 baud (10 bits a byte, 320us:
+// 14.112 audio frames), so a burst (a reset, a song's settings sent again)
+// holds back what comes after it. pi_free is the audio frame at which the
+// last byte put in the ring will have gone out, pi_free_frac its thousandths.
+#define PI_BYTE_MILLIFRAMES 14112
+static uint32_t pi_free, pi_free_frac;
+
 // FM chip: ring of register writes at FM_RING_OFFSET, 64 bits each
 // {16'b0, reg, value, audio frame}. Since host version 15 it also carries
 // MIDI messages for the MT32-pi: {6'b0, n, byte 2, byte 1, byte 0, audio
@@ -1780,6 +1788,8 @@ void MH_AudioEnable(int enabled) {
         }
         *(volatile uint32_t*)(shm + AUDIO_PTR_OFFSET) = 0;
         audio_wr = 0;
+        pi_free = 0;
+        pi_free_frac = 0;
     }
     if (!enabled) {
         // the chip and MIDI go with the audio (the core tells the MT32-pi
@@ -2580,8 +2590,35 @@ static uint32_t midi_frame(int ahead) {
 
 // n bytes of MIDI (1..3) in one entry of the FM ring, for the MT32-pi
 static void pi_put(int ahead, const uint8_t* b, int n) {
-    ring_put(ahead, (uint32_t)b[0] | (n > 1 ? (uint32_t)b[1] << 8 : 0) | (n > 2 ? (uint32_t)b[2] << 16 : 0)
-        | ((uint32_t)n << 24));
+    uint32_t at;
+
+    if (!ring_put(ahead, (uint32_t)b[0] | (n > 1 ? (uint32_t)b[1] << 8 : 0) | (n > 2 ? (uint32_t)b[2] << 16 : 0)
+            | ((uint32_t)n << 24))) {
+        return;
+    }
+    pthread_mutex_lock(&ring_lock);
+    at = audio_wr + (uint32_t)(ahead < 0 ? 0 : ahead);
+    // the cable idle before the message's frame: it starts then
+    if ((int32_t)(pi_free - at) < 0) {
+        pi_free = at;
+        pi_free_frac = 0;
+    }
+    pi_free_frac += (uint32_t)n * PI_BYTE_MILLIFRAMES;
+    pi_free += pi_free_frac / 1000;
+    pi_free_frac %= 1000;
+    pthread_mutex_unlock(&ring_lock);
+}
+
+int MH_MidiBacklog(void) {
+    int32_t left;
+
+    if (midi_dest() != MIDI_PI) {
+        return 0;
+    }
+    pthread_mutex_lock(&ring_lock);
+    left = (int32_t)(pi_free - audio_wr);
+    pthread_mutex_unlock(&ring_lock);
+    return left > 0 ? left : 0;
 }
 
 static void pi_event(int ahead, int status_byte, int data1, int data2) {

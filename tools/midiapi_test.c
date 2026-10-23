@@ -11,9 +11,9 @@
 //       GeneralUser-GS.sf2 and Roland SC-55.sf2, no slots.txt; fakecore's
 //       script sets the OSD's slot to 2 after 10 s ("wait 600", "soundfont 2").
 //   midiapi_test dest <fakecore's MIDI log>
-//       MH_MidiDest() against fakecore with FAKECORE_MT32=1 and
-//       FAKECORE_MIDILOG=<log>; its script turns the OSD's MT32-pi line off
-//       after 10 s ("wait 600", "osd2 1").
+//       MH_MidiDest() and MH_MidiBacklog() against fakecore with
+//       FAKECORE_MT32=1 and FAKECORE_MIDILOG=<log>; its script turns the
+//       OSD's MT32-pi line off after 10 s ("wait 600", "osd2 1").
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -230,9 +230,21 @@ static int test_load(void) {
 static int test_dest(const char* log) {
     double start = now();
     long a, b;
+    int backlog;
 
     check(MH_MidiPiConnected(), "the MT32-pi is connected");
     wait_state(MH_SF_LOADED, 10, NULL, 0);
+
+    // MH_MidiBacklog(): a reset is 144 bytes on the cable, 2032 audio frames
+    // (the audio thread may have queued a block or two since)
+    usleep(300000);
+    check(MH_MidiBacklog() == 0, "nothing sent: no backlog");
+    MH_MidiReset(0);
+    backlog = MH_MidiBacklog();
+    printf("      backlog after a reset: %d frames\n", backlog);
+    check(backlog > 2032 - 2 * BLOCK && backlog <= 2033, "a reset: 144 bytes, 2032 frames on the cable");
+    usleep(200000);
+    check(MH_MidiBacklog() == 0, "gone out 0.2 s later");
     notes = 1;
     MH_MidiSynthChanged();
 
@@ -248,6 +260,8 @@ static int test_dest(const char* log) {
     usleep(1000000);
     b = file_size(log);
     check(b == a && MH_MidiReady(), "the program's choice, the synthesizer: nothing goes to the Pi");
+    MH_MidiReset(0);
+    check(MH_MidiBacklog() == 0, "the synthesizer: no backlog");
 
     MH_MidiDest(MH_MIDI_PI);
     usleep(300000);

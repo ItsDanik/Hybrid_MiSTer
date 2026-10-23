@@ -398,6 +398,14 @@ void MH_MidiEvent(int ahead, int status, int data1, int data2);
 void MH_MidiSysEx(int ahead, const uint8_t* data, int length);
 // All sound and notes off, controllers reset, on all 16 channels
 void MH_MidiReset(int ahead);
+// Audio frames, counted as `ahead` is, until what was sent to the MT32-pi has
+// gone out on its cable (31250 baud: 320us, about 14 frames, a byte); 0 while
+// the music goes to the synthesizer, which takes it at its frame. A song that
+// starts (or goes on after a seek, a pause, a switch of synthesizer) behind a
+// burst of its own (MH_MidiReset() alone is 144 bytes, 46ms) holds its events
+// back that long: otherwise its first notes go out late and their ends nearly
+// on time, and are cut short (CrispyDoom, a player's report, 2026-10-23).
+int MH_MidiBacklog(void);
 // Where the synthesizer's SoundFonts are: games/dnk/SoundFonts on the first
 // USB drive that has it, else on the SD card (MISTER_HYBRID_SOUNDFONTS in the
 // environment for another folder)
