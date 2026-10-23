@@ -454,7 +454,8 @@ def main():
         if not sys.stdout.isatty():
             print("jobs.py -i needs a terminal")
             return 2
-        return interactive(float(args[1]) if len(args) > 1 else 3)
+        every = [a for a in args[1:] if re.fullmatch(r"\d+(\.\d*)?", a)]    # qjobs is jobs.py -i: qjobs -i too
+        return interactive(float(every[0]) if every else 3)
     elif args[0] == "watch":
         every = float(args[1]) if len(args) > 1 else 5
         try:
