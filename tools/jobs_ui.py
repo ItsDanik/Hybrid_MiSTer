@@ -105,15 +105,16 @@ class Confirm(ModalScreen):
     Confirm { align: center middle; }
     #box { width: auto; max-width: 80%; height: auto; border: thick $error; background: $panel; padding: 1 2; }
     """
-    BINDINGS = [Binding("y", "yes", "End it"), Binding("n,escape", "no", "Keep it")]
+    BINDINGS = [Binding("y", "yes", "Yes"), Binding("n,escape", "no", "No")]
 
-    def __init__(self, item):
+    def __init__(self, question, yes="end it"):
         super().__init__()
-        self.item = item
+        self.question = question
+        self.yes = yes
 
     def compose(self) -> ComposeResult:
-        yield Static(id="box", content=Text.assemble("End ", (jobs.label(self.item), "bold"), "?\n\n",
-                                                     ("y", "bold"), " end it    ", ("n", "bold"), " keep it"),
+        yield Static(id="box", content=Text.assemble(*self.question, "?\n\n",
+                                                     ("y", "bold"), " %s    " % self.yes, ("n", "bold"), " keep it"),
                      expand=False)
 
     def action_yes(self):
@@ -131,7 +132,8 @@ class JobsApp(App):
     #detail-scroll { width: 1fr; border-left: solid $primary; padding: 0 1; }
     """
     BINDINGS = [
-        Binding("k,delete", "end", "End"),
+        Binding("k,delete", "end", "End / remove"),
+        Binding("c", "clear", "Clear all"),
         Binding("h", "history", "History"),
         Binding("r", "refresh", "Refresh"),
         Binding("q", "quit", "Quit"),
@@ -243,7 +245,7 @@ class JobsApp(App):
         if item is None:
             return
         if item["what"] == "ended":
-            self.notify("an ended job cannot be ended", severity="warning")
+            self.clear_ended(item)
             return
 
         def answer(yes):
@@ -251,7 +253,31 @@ class JobsApp(App):
                 self.end_item(item)
             else:
                 self.notify("nothing ended")
-        self.push_screen(Confirm(item), answer)
+        self.push_screen(Confirm(("End ", (jobs.label(item), "bold"))), answer)
+
+    def action_clear(self):
+        if not any(item["what"] == "ended" for item, _ in self.items.values()):
+            self.notify("no ended job on the list")
+            return
+        self.clear_ended(None)
+
+    def clear_ended(self, item):
+        """Take an ended job (None: every one) off the list, after asking;
+        history.tsv keeps it"""
+        def answer(yes):
+            if not yes:
+                return
+            msg = jobs.clear(item)
+            self.notify(msg, severity="information" if msg.startswith("took") else "warning")
+            gone = [k for k, (it, _) in self.items.items()
+                    if it["what"] == "ended" and (item is None or k == item["key"])]
+            for k in gone:    # at once; the next reading may bring older ones up
+                del self.items[k]
+            self.show_rows()
+            self.wake.set()
+        question = (("Take ", (jobs.label(item), "bold"), " off the list") if item
+                    else ("Take every ended job off the list",))
+        self.push_screen(Confirm(question, "take it off" if item else "take them off"), answer)
 
     def action_history(self):
         self.ended = 10 if self.ended is None else None

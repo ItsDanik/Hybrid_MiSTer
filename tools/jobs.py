@@ -9,10 +9,13 @@ usage: tools/jobs.py                  the table once
        tools/jobs.py -i [seconds]     interactive (Textual, the look of
                                       mister-repos), refreshed every few
                                       seconds (3): the row picked's details
-                                      on the right, k to end it, h for the
-                                      whole history
+                                      on the right, k to end it (on an ended
+                                      job: take it off the list), c to take
+                                      every ended job off, h for the whole
+                                      history
        tools/jobs.py watch [seconds]  again every few seconds (5)
-       tools/jobs.py history [n]      the last n jobs that ended (20)
+       tools/jobs.py history [n]      the last n jobs that ended (20), those
+                                      taken off the list too
        tools/jobs.py kill <what>      end a job (its id or its repository's
                                       name), a container (its id) or a
                                       program (its pid)
@@ -89,6 +92,58 @@ def read_history():
     except OSError:
         pass
     return rows
+
+
+def read_cleared():
+    """The ended jobs taken off the list (jobs.py -i): all that ended up to a
+    time, and single ones by their end, repository and name. history.tsv
+    keeps them, for the typical times."""
+    upto, keys = 0, set()
+    try:
+        with open(os.path.join(DIR, "cleared")) as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t")
+                try:
+                    if p[0] == "upto" and len(p) == 2:
+                        upto = max(upto, int(p[1]))
+                    elif len(p) == 3:
+                        keys.add((int(p[0]), p[1], p[2]))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    return upto, keys
+
+
+def listed(history):
+    """The ended jobs not taken off the list"""
+    upto, keys = read_cleared()
+    return [r for r in history if r["end"] > upto and (r["end"], r["repo"], r["name"]) not in keys]
+
+
+def clear(item=None):
+    """Take an ended job off the list, or all of them (item None); what
+    happened, in a line"""
+    path = os.path.join(DIR, "cleared")
+    try:
+        os.makedirs(DIR, exist_ok=True)
+        if item is not None:
+            r = item["ended"]
+            with open(path, "a") as f:
+                f.write("%d\t%s\t%s\n" % (r["end"], r["repo"], r["name"]))
+            return "took %s off the list" % label(item)
+        history = read_history()
+        if not history:
+            return "no job has ended yet"
+        upto, keys = read_cleared()
+        upto = max(upto, max(r["end"] for r in history))
+        with open(path + ".new", "w") as f:    # what the new line covers is left out
+            f.write("upto\t%d\n" % upto)
+            f.writelines("%d\t%s\t%s\n" % k for k in sorted(keys) if k[0] > upto)
+        os.replace(path + ".new", path)
+        return "took every ended job off the list"
+    except OSError as e:
+        return "could not take it off the list: %s" % e
 
 
 def flow_elapsed(repo, name):
@@ -305,8 +360,9 @@ def collect(ended=6):
                          note="orphan: what started it has gone; probably left over from a test"
                          if any(p["orphan"] for p in progs) else ""))
 
-    shown = history if ended is None else history[-ended:] if ended else []
-    sections.append(dict(title="ENDED" if ended is not None else "ENDED, ALL %d" % len(history),
+    left = listed(history)
+    shown = left if ended is None else left[-ended:] if ended else []
+    sections.append(dict(title="ENDED" if ended is not None else "ENDED, ALL %d" % len(left),
                          columns=ENDED_COLUMNS, rows=ended_rows(shown), note=""))
     return dict(head=head, sections=sections)
 
