@@ -6,10 +6,13 @@ programs of the framework running outside any container (fakecore, a game
 against it), and the jobs that ended.
 
 usage: tools/jobs.py                  the table once
-       tools/jobs.py -i [seconds]     interactive, refreshed every few
-                                      seconds (3): pick a row with the
-                                      arrows, Enter for its details, k to
-                                      end it, h for the whole history
+       tools/jobs.py -i [seconds]     interactive (Textual, the look of
+                                      mister-repos), refreshed every few
+                                      seconds (3): the row picked's details
+                                      on the right, k to end it, h for the
+                                      whole history; the version of each
+                                      port installed on the MiSTer at
+                                      $MISTER, if it answers (m: again)
        tools/jobs.py watch [seconds]  again every few seconds (5)
        tools/jobs.py history [n]      the last n jobs that ended (20)
        tools/jobs.py kill <what>      end a job (its id or its repository's
@@ -18,7 +21,7 @@ usage: tools/jobs.py                  the table once
        tools/jobs.py status           one short line for a status line
                                       (no docker; empty when nothing runs)
 """
-import calendar, json, os, re, signal, statistics, subprocess, sys, threading, time
+import calendar, json, os, re, signal, statistics, subprocess, sys, time
 
 DIR = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "dnk-jobs")
 SLOTS = {"quartus": 3, "sim": 4}
@@ -359,7 +362,7 @@ def end(item):
 
 
 def details(item):
-    """The lines of a row's details page"""
+    """The lines of a row's details: (what, value) pairs"""
     if item["what"] == "job":
         j = item["job"]
         lines = [("job", j["id"]), ("kind", j["kind"]), ("name", j["name"]), ("repository", j["repo"]),
@@ -386,155 +389,20 @@ def details(item):
                  ("started", when(r["started"])), ("took", duration(r["seconds"])),
                  ("waited", duration(r["queued"])), ("exit code", r["rc"]), ("result", r["result"] or "-"),
                  ("session", r["session"] or "-")]
-    return ["%-11s %s" % (k, v) for k, v in lines]
+    return lines
 
 
 def interactive(every):
-    """The table refreshed in the background, its rows picked with the keys"""
-    import curses, locale
-    locale.setlocale(locale.LC_CTYPE, "")    # the arrows of the help line
-    os.environ.setdefault("ESCDELAY", "25")
-    state = dict(data=None, ended=6, wake=threading.Event(), error="")
-
-    def collector():
-        while True:
-            try:
-                state["data"] = collect(state["ended"])
-                state["error"] = ""
-            except Exception as e:    # the screen goes on with what it had
-                state["error"] = "could not read everything: %s" % e
-            state["wake"].wait(every)
-            state["wake"].clear()
-
-    threading.Thread(target=collector, daemon=True).start()
+    """The look of mister-repos: tools/jobs_ui.py (Textual)"""
+    sys.dont_write_bytecode = True    # no __pycache__ in tools/
     try:
-        curses.wrapper(screen, state)
-    except KeyboardInterrupt:
-        pass
-
-
-def screen(scr, state):
-    import curses
-    try:
-        curses.curs_set(0)
-    except curses.error:    # a terminal that cannot hide it
-        pass
-    scr.timeout(200)
-    tones = {"": 0}
-    if curses.has_colors():
-        curses.use_default_colors()
-        for n, (tone, colour) in enumerate((("bad", curses.COLOR_RED), ("wait", curses.COLOR_YELLOW)), 1):
-            curses.init_pair(n, colour, -1)
-            tones[tone] = curses.color_pair(n)
-    key, view, confirm, message, top = None, None, None, "", 0
-    was = None    # the page shown last: a new one is drawn from a clear screen
-
-    def put(y, text, attr=0, fill=False):
-        h, w = scr.getmaxyx()
-        if 0 <= y < h and w > 1:
-            try:
-                scr.addnstr(y, 0, text.ljust(w - 1) if fill else text, w - 1, attr)
-            except curses.error:
-                pass
-
-    while True:
-        data = state["data"]
-        h, w = scr.getmaxyx()
-        lines = []    # (text, attribute, the row's item)
-        if data is None:
-            lines.append(("reading docker...", 0, None))
-        else:
-            lines.append((data["head"], curses.A_BOLD, None))
-            for sec in data["sections"]:
-                if not sec["rows"] and sec["title"] != "RUNNING":
-                    continue
-                lines.append(("", 0, None))
-                if not sec["rows"]:
-                    lines.append(("RUNNING  nothing", curses.A_BOLD, None))
-                    continue
-                lines.append((sec["title"], curses.A_BOLD, None))
-                text = table([r[0] for r in sec["rows"]], sec["columns"])
-                lines.append((text[0], curses.A_DIM, None))
-                for t, (_, item) in zip(text[1:], sec["rows"]):
-                    lines.append((t, tones.get(item["tone"], 0), item))
-                for note in sec["note"].split("\n") if sec["note"] else []:
-                    lines.append((note, curses.A_DIM, None))
-        picks = [n for n, l in enumerate(lines) if l[2]]
-        keys = [lines[n][2]["key"] for n in picks]
-        if key not in keys:
-            key = keys[0] if keys else None
-        sel = picks[keys.index(key)] if key is not None else None
-        item = lines[sel][2] if sel is not None else None
-
-        if (view is None) != (was is None):
-            scr.clear()
-        else:
-            scr.erase()
-        body = h - 1
-        if view is not None:
-            # the details of the row picked, kept up to date while it is there
-            view = next((l[2] for l in lines if l[2] and l[2]["key"] == view["key"]), None)
-            if view is None:
-                message = message or "it has ended"
-        if view is not None:
-            put(0, label(view), curses.A_BOLD)
-            for y, t in enumerate(details(view), 2):
-                put(y, t)
-        else:
-            if sel is not None:
-                if sel < top:
-                    top = sel
-                if sel >= top + body:
-                    top = sel - body + 1
-            top = max(0, min(top, len(lines) - body))
-            for y, (t, attr, it) in enumerate(lines[top:top + body]):
-                picked = top + y == sel
-                put(y, t, attr | (curses.A_REVERSE if picked else 0), picked)
-        if confirm is not None:
-            put(h - 1, "End %s? y / n" % label(confirm), curses.A_BOLD | tones["bad"], True)
-        else:
-            keys_help = ("Enter/Esc back  k end it  q quit" if view is not None else
-                         "↑↓ pick  Enter details  k end  h %s  r refresh  q quit"
-                         % ("last 6 ended" if state["ended"] is None else "all ended"))
-            put(h - 1, (message or state["error"] or keys_help), curses.A_REVERSE, True)
-        scr.refresh()
-        was = view
-
-        c = scr.getch()
-        if c == -1:
-            continue
-        if c != curses.KEY_RESIZE:
-            message = ""
-        if confirm is not None:    # anything but y is no
-            if c in (ord("y"), ord("Y")):
-                message = end(confirm)
-                state["wake"].set()
-            else:
-                message = "nothing ended"
-            confirm = None
-        elif c in (ord("q"), ord("Q")):
-            return
-        elif c == 27 or (view is not None and c in (10, 13, curses.KEY_ENTER)):
-            view = None    # Esc never quits: a key the terminal sends that curses does not know starts with it
-        elif c in (10, 13, curses.KEY_ENTER):
-            view = item
-        elif c in (ord("k"), curses.KEY_DC):
-            it = view or item
-            if it is not None and it["what"] != "ended":
-                confirm = it
-            elif it is not None:
-                message = "an ended job cannot be ended"
-        elif c in (ord("h"), ord("H")):
-            state["ended"] = 6 if state["ended"] is None else None
-            state["wake"].set()
-        elif c in (ord("r"), ord("R")):
-            state["wake"].set()
-            message = "refreshing"
-        elif keys and view is None:
-            n = keys.index(key) if key in keys else 0
-            step = {curses.KEY_UP: -1, curses.KEY_DOWN: 1, curses.KEY_PPAGE: -(body // 2),
-                    curses.KEY_NPAGE: body // 2, curses.KEY_HOME: -len(keys), curses.KEY_END: len(keys)}.get(c, 0)
-            key = keys[max(0, min(len(keys) - 1, n + step))]
+        import jobs_ui
+    except ImportError as e:
+        print("jobs.py -i needs the Python package textual (Arch: pacman -S python-textual; "
+              "elsewhere: pip install --user textual): %s" % e)
+        return 2
+    jobs_ui.run(every)
+    return 0
 
 
 def status():
@@ -586,7 +454,7 @@ def main():
         if not sys.stdout.isatty():
             print("jobs.py -i needs a terminal")
             return 2
-        interactive(float(args[1]) if len(args) > 1 else 3)
+        return interactive(float(args[1]) if len(args) > 1 else 3)
     elif args[0] == "watch":
         every = float(args[1]) if len(args) > 1 else 5
         try:
