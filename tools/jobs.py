@@ -10,9 +10,7 @@ usage: tools/jobs.py                  the table once
                                       mister-repos), refreshed every few
                                       seconds (3): the row picked's details
                                       on the right, k to end it, h for the
-                                      whole history; the version of each
-                                      port installed on the MiSTer at
-                                      $MISTER, if it answers (m: again)
+                                      whole history
        tools/jobs.py watch [seconds]  again every few seconds (5)
        tools/jobs.py history [n]      the last n jobs that ended (20)
        tools/jobs.py kill <what>      end a job (its id or its repository's
