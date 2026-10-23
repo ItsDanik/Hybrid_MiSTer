@@ -10,3 +10,6 @@ jtopl.raw
 
 # danik_hybrid_ports_ui as launcher/ui/build.sh makes it (it goes into the releases)
 /launcher/ui/danik_hybrid_ports_ui
+
+# what Python makes of the tools it runs (launcher/test_db.py)
+__pycache__/
