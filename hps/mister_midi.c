@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE). Follows FluidSynth (LGPL-2.1-or-later),
+// taken here under the GPL as its section 3 allows.
+//
 // The MIDI synthesizer's ARM side: see mister_midi.h and docs/midi_synth.md.
 // What a note sounds like is FluidSynth 2.6.1's: its SoundFont loader, its
 // generators and modulators, its default modulators, its voice allocation;

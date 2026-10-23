@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // Internal to the library: the diagnostic report (docs/diagnostics.md),
 // between mister_hybrid.c, which counts, and mister_diag.c, which keeps the
 // record and writes the report.

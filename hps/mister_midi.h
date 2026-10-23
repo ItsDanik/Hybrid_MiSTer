@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // The MIDI synthesizer's ARM side, inside the library (docs/midi_synth.md):
 // a SoundFont's presets, the MIDI channels and the 128 voices, which become
 // commands for the core's voice engine. Not for games: they use MH_Midi*()

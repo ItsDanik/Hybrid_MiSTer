@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE); the glyphs are public domain.
+//
 // 8x8 font for the hybrid core screens (mister_ui.c): ASCII 32..126, 8 rows per
 // character, bit 0 is the leftmost pixel. Public domain glyphs, taken from the
 // font in SDL's test library (SDL_test_font.c).

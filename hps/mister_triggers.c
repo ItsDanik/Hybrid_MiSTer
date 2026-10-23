@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // Analog triggers (L2 / R2), the stick clicks (L3 / R3) and rumble, for
 // MH_ReadTriggers(), MH_ReadStickButtons() and MH_Rumble() (mister_hybrid.h):
 // what a gamepad has that MiSTer does not pass on.

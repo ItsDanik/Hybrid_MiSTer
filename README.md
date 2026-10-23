@@ -334,4 +334,6 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 
 ## License
 
-[GPL-3.0](LICENSE), except where a file says otherwise: `rtl/hybrid_host.sv` is GPL-2.0-or-later like the MiSTer framework it is built into, and the SDL drivers in `sdl2/` are under the zlib license like SDL.
+[GPL-3.0](LICENSE), except where a file says otherwise: `rtl/hybrid_host.sv` is GPL-2.0-or-later like the MiSTer framework it is built into, the SDL drivers in `sdl2/` are under the zlib license like SDL, and the library in `hps/` is GPL-2.0-or-later ([`hps/LICENSE`](hps/LICENSE)).
+
+Everything a game's program is linked with must allow GPL-2.0: some games are GPL-2.0 only (EDuke32), and GPL-3.0 code cannot be linked into them. So `hps/` (in every game, inside the static SDL2) is GPL-2.0-or-later since 2026-10-24, which every core's game can take, under GPL-2.0 or GPL-3.0; it is all the framework's own code (its font's glyphs are public domain, its MIDI voices follow FluidSynth, LGPL-2.1-or-later).

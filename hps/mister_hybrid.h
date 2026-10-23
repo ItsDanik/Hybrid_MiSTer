@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
 #ifndef MISTER_HYBRID_H
 #define MISTER_HYBRID_H
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // Screens every hybrid core shares: a list to pick from (which game to start)
 // and a message (what is missing). They are drawn straight to the FPGA core,
 // 40x25 characters at 320x200, and work before the game has set up anything.

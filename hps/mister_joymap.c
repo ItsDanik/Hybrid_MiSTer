@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // Resolves physical gamepad buttons to core buttons through Main_MiSTer's
 // mapping files, for MH_MenuButtons() (mister_hybrid.h).
 //

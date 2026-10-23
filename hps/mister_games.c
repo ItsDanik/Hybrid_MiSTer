@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // Which game of a core with several (hybrid/README.md, "Several games in one
 // core"): from the menu entry the core was started with, or a list of the
 // games whose files are there.

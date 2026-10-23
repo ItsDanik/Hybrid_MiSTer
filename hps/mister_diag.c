@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Part of Hybrid_MiSTer (hps/LICENSE).
+//
 // The diagnostic report (docs/diagnostics.md): the OSD line "Save Diagnostic
 // Report" (status bit 16, which the core flips at each pulse, host version
 // 16) saves a zip in games/dnk/diagnostics/ with the setup and how the last
