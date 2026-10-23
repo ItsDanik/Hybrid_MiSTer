@@ -13,6 +13,8 @@
 #               2 seconds and the page comes in (tb_wall's PAGE)
 #   FIRST=<field> LAST=<field>: only that part of the timeline (0, 576)
 #   paths as seen from the framework's directory
+# a slot of this PC's simulations, hybrid/tools/jobs.py shows them
+[ -n "$DNK_JOB" ] || exec "$(dirname "$0")/../tools/job.sh" sim "$(basename "$0" .sh)" "$0" "$@"
 cd "$(dirname "$0")/.."
 OUT=$1
 LOGO=$2
@@ -68,7 +70,7 @@ STEP=32       # fields per piece: 16 frames
 LAST=${LAST:-576}  # the timeline's end: the game's first frame is there (tb_wall.sv, L_*)
 s=${FIRST:-0}
 while [ "$s" -lt "$LAST" ]; do
-  docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c "
+  docker run --rm ${DNK_JOB:+--label dnk.job=$DNK_JOB} -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c "
     iverilog -g2012 -o /tmp/tbw -Ptb_wall.LOGO=\\\"${WORK#$PWD/}\\\" -Ptb_wall.PAGE=$PAGE -Ptb_wall.START=$s -Ptb_wall.FRAMES=$((STEP / 2)) \
       -Ptb_wall.OUT=\\\"/src/${WORK#$PWD/}/f$(printf %04d "$s")\\\" \
       sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v sim/hybrid_midi_stub.sv template/core/sys/mt32pi.sv 2>/dev/null &&

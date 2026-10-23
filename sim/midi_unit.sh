@@ -2,6 +2,8 @@
 # The MIDI synthesizer's control engine and filter coefficients (RTL, in
 # Verilator) against the C model, at every control update of the songs.
 # usage: sim/midi_unit.sh <font.sf2> <song.mid>...
+# a slot of this PC's simulations, hybrid/tools/jobs.py shows them
+[ -n "$DNK_JOB" ] || exec "$(dirname "$0")/../tools/job.sh" sim "$(basename "$0" .sh)" "$0" "$@"
 files=() vols=()
 for f in "$@"; do
   f=$(realpath "$f")
@@ -9,7 +11,7 @@ for f in "$@"; do
   vols+=(-v "$f:$f:ro")
 done
 cd "$(dirname "$0")/.."
-docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src "${vols[@]}" -w /src mister-hybrid-sim sh -c '
+docker run --rm ${DNK_JOB:+--label dnk.job=$DNK_JOB} -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src "${vols[@]}" -w /src mister-hybrid-sim sh -c '
   mkdir -p /tmp/u && cd /tmp/u &&
   gcc -O2 -c -I/src/sim /src/sim/midi_unit_shim.c -o shim.o &&
   gcc -O2 -c -Dmain=render_main /src/tools/midisynth/render.c -o render.o &&

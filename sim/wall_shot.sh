@@ -10,6 +10,8 @@
 #   MESSAGE=timeout: with the core's own.
 #   START=<field of the intro>: from there instead of the end (242: the end
 #   at once)
+# a slot of this PC's simulations, hybrid/tools/jobs.py shows them
+[ -n "$DNK_JOB" ] || exec "$(dirname "$0")/../tools/job.sh" sim "$(basename "$0" .sh)" "$0" "$@"
 cd "$(dirname "$0")/.."
 OUT=$1
 DIR=${2:-rtl}
@@ -31,7 +33,7 @@ if sys.argv[4]: words[0] |= (2 | int(sys.argv[4]) << 2) << 48
 words += [int.from_bytes(text[n:n + 8], 'little') for n in range(0, 320, 8)]
 open(sys.argv[3], 'w').write(''.join('%016X\\n' % w for w in words))" "$MESSAGE" "$ERROR" "$MSGFILE" "$LIST"
 fi
-docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c '
+docker run --rm ${DNK_JOB:+--label dnk.job=$DNK_JOB} -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c '
   iverilog -g2012 -o /tmp/tbw -Ptb_wall.WALL=\"$1/hybrid_wall.hex\" -Ptb_wall.WALL_PAL=\"$1/hybrid_wall_pal.hex\" \
     -Ptb_wall.WALL_DOTS=\"$1/hybrid_wall_dots.hex\" -Ptb_wall.WALL_EASE=\"$1/hybrid_wall_ease.hex\" \
     -Ptb_wall.OUT=\"/tmp/wall\" -Ptb_wall.VGA31=$2 -Ptb_wall.MSG=\"$3\" -Ptb_wall.TIMEOUT=$4 -Ptb_wall.START=$5 \

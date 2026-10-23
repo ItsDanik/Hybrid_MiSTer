@@ -2,10 +2,12 @@
 # The MIDI synthesizer's RTL (Verilator) against the C model, frame by frame.
 # usage: sim/midi_engine.sh <font.sf2> <song.mid> [seconds] [fast] [ahead=N] [lat=N]
 #   (sim/midi_engine.cpp)
+# a slot of this PC's simulations, hybrid/tools/jobs.py shows them
+[ -n "$DNK_JOB" ] || exec "$(dirname "$0")/../tools/job.sh" sim "$(basename "$0" .sh)" "$0" "$@"
 font=$(realpath "$1") song=$(realpath "$2")
 shift 2
 cd "$(dirname "$0")/.."
-docker run --rm -e VFLAGS -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src -v "$font:$font:ro" -v "$song:$song:ro" \
+docker run --rm ${DNK_JOB:+--label dnk.job=$DNK_JOB} -e VFLAGS -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/src -v "$font:$font:ro" -v "$song:$song:ro" \
   -w /src mister-hybrid-sim sh -c '
   mkdir -p /tmp/e && cd /tmp/e &&
   gcc -O2 -c /src/sim/midi_engine_gen.c -o gen.o &&

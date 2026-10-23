@@ -6,6 +6,8 @@
 # usage: sim/wall_gif.sh <out.gif> [<first field> <last field>]   (0 270)
 #   the path as seen from the framework's directory; the fields are those of
 #   the intro (hybrid_host.sv, "Picture without a game"), 242 its end
+# a slot of this PC's simulations, hybrid/tools/jobs.py shows them
+[ -n "$DNK_JOB" ] || exec "$(dirname "$0")/../tools/job.sh" sim "$(basename "$0" .sh)" "$0" "$@"
 cd "$(dirname "$0")/.."
 OUT=$1
 FROM=${2:-0}
@@ -16,13 +18,13 @@ docker image inspect mister-hybrid-sim > /dev/null 2>&1 || docker build -t miste
 WORK=$(mktemp -d "$PWD/.wall_gif.XXXXXX")
 PER=$([ "$VGA31" = 1 ] && echo 1 || echo 2)   # fields per frame
 STEP=$((16 * PER))                            # fields per piece
-docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim \
+docker run --rm ${DNK_JOB:+--label dnk.job=$DNK_JOB} -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim \
   iverilog -g2012 -o "/src/${WORK#$PWD/}/tbw" -Ptb_wall.VGA31="$VGA31" -Ptb_wall.START=0 -Ptb_wall.FRAMES=1 \
   sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v sim/hybrid_midi_stub.sv template/core/sys/mt32pi.sv || exit 1
 s=$FROM
 while [ "$s" -le "$TO" ]; do
   # the start and the number of frames are run-time arguments of a build per piece
-  docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c "
+  docker run --rm ${DNK_JOB:+--label dnk.job=$DNK_JOB} -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src mister-hybrid-sim sh -c "
     iverilog -g2012 -o /tmp/tbw -Ptb_wall.VGA31=$VGA31 -Ptb_wall.START=$s -Ptb_wall.FRAMES=$((STEP / PER)) \
       -Ptb_wall.OUT=\\\"/src/${WORK#$PWD/}/f$(printf %04d "$s")\\\" \
       sim/tb_wall.sv rtl/hybrid_host.sv rtl/hybrid_fm.sv sim/jtopl2_stub.v sim/hybrid_midi_stub.sv template/core/sys/mt32pi.sv && vvp -n /tmp/tbw" &

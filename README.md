@@ -20,6 +20,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 | `tools/fakecore.c` | Stand-in for the FPGA core on the PC: runs the game against a file instead of the DDR3 window, feeds scripted input, takes screenshots and records audio. Its FM chip is a software one (Nuked OPL3, `tools/nuked/`). |
 | `tools/fmtest.c` | Plays a scale on the FM chip, on the PC with `fakecore` or on the MiSTer: the test that the chip is there and in tune. |
 | `tools/diag_read.py` | Reads a player's diagnostic report: its summary, a graph of the 60 seconds, two reports side by side. See [Diagnostic report](#diagnostic-report). |
+| `tools/job.sh`, `tools/jobs.py` | The Quartus builds and simulations of this PC take turns: `core/build_core.sh` and `sim/*.sh` run in a slot of `job.sh` (3 Quartus builds, 4 simulations at a time, first come first served). `tools/jobs.py` (`-i` interactive: pick a row, its details, end it; `watch`, `history`, `kill <job or repository>`, `status`) shows what runs, waits and ended, each Quartus build's stage and worst slack, other containers of the hybrid images and programs left running outside them (fakecore). |
 | `tools/*.py` | For tests on the MiSTer over ssh: `uinput_kbd.py` and `uinput_pad.py` press keys and gamepad buttons through Main_MiSTer, `status.py` prints what the core publishes. |
 
 ## The launcher
