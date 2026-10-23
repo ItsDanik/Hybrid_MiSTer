@@ -533,6 +533,54 @@ task test_mt32;
 	if (aud_errors != aud_errors0) errors = errors + 1;
 endtask
 
+// The MIDI synthesizer's test (the comment where it is called)
+task test_midi;
+`ifndef NO_SYNTH
+	midi_cmds(0, 40);
+	cur_midiw = 40;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(4);
+	if (dut.midi_synth.midi.rd != 0 || dut.midi_en) begin $display("FAIL: MIDI read without the enable"); errors = errors + 1; end
+	// w0[63:56] is the MT32-pi's synth (host version 17), written with or
+	// without the enable: the rest is 0
+	if (mem[29'h1A][55:0] != 0 || mem[29'h1B] != 0) begin $display("FAIL: MIDI status without the enable %h", mem[29'h1A]); errors = errors + 1; end
+	if (mem[29'h1A][63:56] != dut.pi_synth) begin $display("FAIL: the MT32-pi's synth in the MIDI status %h, not %h", mem[29'h1A][63:56], dut.pi_synth); errors = errors + 1; end
+	cur_midi = 1; cur_midivol = 77;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(4);
+	$display("midi: %0d commands read, %0d sample reads, status %h %h %h frame %0d (playing %0d), errors %0d, frame errors %0d",
+		dut.midi_synth.midi.rd, dut.midi_synth.midi.smp_reads, mem[29'h1A], mem[29'h1B], mem[29'h1C], mem[29'h1D][31:0], dut.aud_play,
+		dut.midi_synth.midi.errors, dut.midi_synth.midi.frame_errors);
+	if (dut.midi_synth.midi.rd != 40 || dut.midi_synth.midi.smp_reads != 40 || dut.midi_vol != 77
+		|| mem[29'h1A] != {dut.pi_synth, 8'd5, 16'd7, 32'd40} || mem[29'h1B] != 64'h0123_4567_89AB_CDEF
+		|| mem[29'h1C] != 64'hFEDC_BA98_7654_3210 || mem[29'h1D][31:0] > dut.aud_play + 1 || mem[29'h1D][31:0] + 2000 < dut.aud_play) begin
+		$display("FAIL: MIDI reads or status"); errors = errors + 1;
+	end
+	if (midi_samples == 0) begin $display("FAIL: no MIDI sound in the mix"); errors = errors + 1; end
+	midi_cmds(40, 1000);
+	cur_midiw = 1000;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(4);
+	midi_cmds(1000, 1100);
+	cur_midiw = 1100;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(4);
+	$display("midi: %0d commands read across the ring's end, errors %0d", dut.midi_synth.midi.rd, dut.midi_synth.midi.errors);
+	if (dut.midi_synth.midi.rd != 1100 || dut.midi_synth.midi.smp_reads != 1100 || mem[29'h1A][31:0] != 1100) begin
+		$display("FAIL: MIDI ring's end"); errors = errors + 1;
+	end
+	cur_midi = 0;
+	set_ctrl(1, 0, 0, 10);
+	wait_fields(3);
+	if (dut.midi_synth.midi.rd != 0 || mem[29'h1A][55:0] != 0 || mem[29'h1B] != 0 || mem[29'h1C] != 0 || dut.midi_l != 0) begin
+		$display("FAIL: MIDI after the enable went"); errors = errors + 1;
+	end
+	if (dut.midi_synth.midi.errors != 0 || dut.midi_synth.midi.frame_errors != 0) begin $display("FAIL: MIDI reads"); errors = errors + 1; end
+	cur_midiw = 0;
+`endif
+endtask
+
+
 task test_triggers;
 begin
 	// an OSD trigger: a pulse of a few clocks flips its bit in the status
@@ -737,7 +785,7 @@ initial begin
 	if (mem[0][31:0] != 0) begin $display("FAIL: magic of an earlier game not cleared: %h", mem[0]); errors = errors + 1; end
 	while (dut.ctrl_clear != 0) wait_fields(1);
 	wait_fields(1);
-	// +mt32only: the MT32-pi test alone, without the rest (it is near the end
+	// +mt32only: the MT32-pi test and the MIDI synthesizer's alone, without the rest (it is near the end
 	// and the whole run takes long). fm_takes as the FM test leaves it.
 	// +trigonly: the OSD triggers' toggles alone
 	if ($test$plusargs("trigonly")) begin
@@ -750,6 +798,7 @@ initial begin
 	if ($test$plusargs("mt32only")) begin
 		fm_takes = 3;
 		test_mt32;
+		test_midi;
 		if (errors != 0) $display("FAIL: %0d errors", errors);
 		else $display("PASS");
 		$finish;
@@ -1028,48 +1077,7 @@ initial begin
 	// samples it asks for; its status in the status block, its sound in the
 	// mix (the audio checker adds it). Without the enable again its count
 	// starts anew.
-`ifndef NO_SYNTH
-	begin : midi_test
-		midi_cmds(0, 40);
-		cur_midiw = 40;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(4);
-		if (dut.midi_synth.midi.rd != 0 || dut.midi_en) begin $display("FAIL: MIDI read without the enable"); errors = errors + 1; end
-		if (mem[29'h1A] != 0 || mem[29'h1B] != 0) begin $display("FAIL: MIDI status without the enable %h", mem[29'h1A]); errors = errors + 1; end
-		cur_midi = 1; cur_midivol = 77;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(4);
-		$display("midi: %0d commands read, %0d sample reads, status %h %h %h frame %0d (playing %0d), errors %0d, frame errors %0d",
-			dut.midi_synth.midi.rd, dut.midi_synth.midi.smp_reads, mem[29'h1A], mem[29'h1B], mem[29'h1C], mem[29'h1D][31:0], dut.aud_play,
-			dut.midi_synth.midi.errors, dut.midi_synth.midi.frame_errors);
-		if (dut.midi_synth.midi.rd != 40 || dut.midi_synth.midi.smp_reads != 40 || dut.midi_vol != 77
-			|| mem[29'h1A] != {8'd0, 8'd5, 16'd7, 32'd40} || mem[29'h1B] != 64'h0123_4567_89AB_CDEF
-			|| mem[29'h1C] != 64'hFEDC_BA98_7654_3210 || mem[29'h1D][31:0] > dut.aud_play + 1 || mem[29'h1D][31:0] + 2000 < dut.aud_play) begin
-			$display("FAIL: MIDI reads or status"); errors = errors + 1;
-		end
-		if (midi_samples == 0) begin $display("FAIL: no MIDI sound in the mix"); errors = errors + 1; end
-		midi_cmds(40, 1000);
-		cur_midiw = 1000;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(4);
-		midi_cmds(1000, 1100);
-		cur_midiw = 1100;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(4);
-		$display("midi: %0d commands read across the ring's end, errors %0d", dut.midi_synth.midi.rd, dut.midi_synth.midi.errors);
-		if (dut.midi_synth.midi.rd != 1100 || dut.midi_synth.midi.smp_reads != 1100 || mem[29'h1A][31:0] != 1100) begin
-			$display("FAIL: MIDI ring's end"); errors = errors + 1;
-		end
-		cur_midi = 0;
-		set_ctrl(1, 0, 0, 10);
-		wait_fields(3);
-		if (dut.midi_synth.midi.rd != 0 || mem[29'h1A] != 0 || mem[29'h1B] != 0 || mem[29'h1C] != 0 || dut.midi_l != 0) begin
-			$display("FAIL: MIDI after the enable went"); errors = errors + 1;
-		end
-		if (dut.midi_synth.midi.errors != 0 || dut.midi_synth.midi.frame_errors != 0) begin $display("FAIL: MIDI reads"); errors = errors + 1; end
-		cur_midiw = 0;
-	end
-`endif
+	test_midi;
 
 	// The info box: asked for while the OSD menu is open, shown once it has
 	// closed, once; the same count again or a text of 0 shows nothing
