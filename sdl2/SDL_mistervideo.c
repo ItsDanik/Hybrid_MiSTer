@@ -234,6 +234,16 @@ static void MISTER_QuitJoysticks(void)
 {
     int i;
 
+    /* SDL_Quit() shuts the joysticks down before the video, closing every
+       one: ours are gone then, and closing them again read freed memory
+       (found with valgrind and EDuke32, 2026-10-24) */
+    if (!SDL_WasInit(SDL_INIT_JOYSTICK)) {
+        for (i = 0; i < MISTER_NUM_JOYSTICKS; i++) {
+            joysticks[i] = NULL;
+            joystick_index[i] = -1;
+        }
+        return;
+    }
     for (i = MISTER_NUM_JOYSTICKS - 1; i >= 0; i--) {
         if (joysticks[i]) {
             SDL_JoystickClose(joysticks[i]);
