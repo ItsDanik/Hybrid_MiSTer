@@ -322,7 +322,7 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 
 **Documentation**
 
-- `README.md` in the repository and `README.txt` in the package have the same sections in the same order: Requirements, Installation, OSD options, Controls (keyboard, then a table of the default gamepad mapping with the MiSTer, Xbox and PlayStation names), Building, Credits, License. `README.md` also has a one line Support section with the Patreon link before Credits.
+- `README.md` in the repository is for players and laid out as [docs/readme.md](docs/readme.md) says, the same in every port (2026-10-24): the banner (`tools/make_banner.py`), the introduction, the Beta and AI notes, a screenshot of the title screen and one of the game being played, Requirements, Installation (through `update_all` only), OSD options, Controls, If something is wrong, a one-line Building pointing to `NOTES.md`, Support, Credits, License; many of its lines word for word. What is for developers (how the port works, building, the repository layout, development notes) is in `NOTES.md`. `README.txt` in the package is short, instructions and links (`docs/readme.md`, "README.txt").
 
 ## Credits
 

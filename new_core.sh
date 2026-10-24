@@ -29,7 +29,7 @@ esac
 [ -n "$TITLE" ] || { echo "the game's title is missing" >&2; exit 1; }
 [ "$(basename "$HYBRID")" = hybrid ] && [ -e "$ROOT/.git" ] ||
     { echo "$HYBRID is not the hybrid/ submodule of a repository" >&2; exit 1; }
-for f in core build.sh package.sh package CLAUDE.md README.md; do
+for f in core build.sh package.sh package CLAUDE.md README.md NOTES.md; do
     [ ! -e "$ROOT/$f" ] || { echo "$ROOT/$f exists: this repository already has a core" >&2; exit 1; }
 done
 
@@ -77,7 +77,10 @@ $NAME is set up in $ROOT. Next:
     hybrid/tools/make_logo.py <png> /tmp/logo.mhl --preview out.png --title "$TITLE"
   - core/$NAME.sv: the game's options, "J1" and "jn" in CONF_STR. Repeat "jn"
     in danik_hybrid_launch.sh (MISTER_HYBRID_JN).
-  - README.md and package/games/$NAME/README.txt: every TODO
+  - README.md, NOTES.md and package/games/$NAME/README.txt: every TODO. The
+    README is laid out as hybrid/docs/readme.md says, with docs/banner.png
+    (hybrid/tools/make_banner.py package/logos/$ID.png docs/banner.png) and
+    two screenshots, docs/screenshot1.png (title) and screenshot2.png (play)
   - hybrid/README.md has the conventions; ./core/build_core.sh builds the core
     as it is (the MiSTer logo until a game shows a frame).
 END
