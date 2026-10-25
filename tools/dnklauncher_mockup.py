@@ -13,10 +13,10 @@
 #   the colours  the core's purple (WALL_BG of hybrid_host.sv) as a gradient,
 #                the pink of "FPGA", and a few more (below)
 #
-# Per game: its logo (package/logos/<id>.png of its port), a screenshot (for
-# now the port's docs/screenshot2.png: the per-game ones are not taken yet),
-# and the text below (years, developers and descriptions only of the games a
-# mock-up shows).
+# Per game: its logo (package/logos/<id>.png of its port), its screenshot
+# (package/screens/<id>.png, or the port's docs/screenshot2.png while it has
+# none) and its year, developer and description (package/info.txt; INFO below
+# for a port without one).
 #
 # usage: dnklauncher_mockup.py <fonts dir> <out dir> [repositories...]
 #   the fonts dir: tools/dnklauncher_fonts.py's; the repositories: the ports'
@@ -48,6 +48,54 @@ GOLD = (0xFF, 0xD1, 0x66)       # a favourite's star
 CYAN = (0x7A, 0xDB, 0xEC)       # ports, years, the version
 CORAL = (0xFF, 0x7A, 0x63)      # no data
 VERSION = 17                    # of hybrid_host.sv, in the badge
+
+
+def rgb(h):
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+# The colour schemes, the player's choice in Options (Danik, 2026-10-26: "I
+# like all of the colour schemes, include all of them"; MiSTer Purple the
+# default). Each names every colour above, its bar too ("the bar should remain
+# the default colour for each colour scheme"): "bar" is PINK to PEACH, the
+# cursor's bar and the sort mode's pill, "sel" the ink on it. apply_theme()
+# makes one the colours of what is drawn.
+THEMES = {
+    "purple": dict(label="MiSTer Purple", bg=("8C3BB1", "581E73"), panel=("3E1255", 205), edge="C384E2",
+                   ink="F6F0FA", dim="BCA2CE", bar=("F28FBF", "FFBE8A"), sel="360C4A", gold="FFD166",
+                   accent="7ADBEC", alert="FF7A63"),
+    "midnight": dict(label="Midnight", bg=("27306E", "0B0F2E"), panel=("0E1440", 210), edge="7C93F0",
+                     ink="EEF2FF", dim="A0ABD6", bar=("6FE3F7", "8C9BFF"), sel="0A1236", gold="FFD166",
+                     accent="8EF0CE", alert="FF7F7F"),
+    "synthwave": dict(label="Synthwave", bg=("3A0E52", "0D0418"), panel=("1C0630", 215), edge="FF5FA2",
+                      ink="FDEBFF", dim="BC95CF", bar=("FF3D8B", "FFA445"), sel="2A0420", gold="FFE45E",
+                      accent="45E9FF", alert="FF6B6B"),
+    "arcade": dict(label="Arcade", bg=("34343C", "0E0E12"), panel=("16161B", 215), edge="8A8A99",
+                   ink="F5F5F5", dim="ABABB6", bar=("FFD23F", "FF8A00"), sel="2A1400", gold="FFD23F",
+                   accent="5FC9FF", alert="FF5A4E"),
+    "amber": dict(label="Amber Phosphor", bg=("33200A", "0E0802"), panel=("1A1004", 215), edge="B87A1E",
+                  ink="FFD892", dim="C29148", bar=("FFB000", "FFD060"), sel="2A1800", gold="FFE7A0",
+                  accent="FFC56B", alert="FF6A3D"),
+    "sunset": dict(label="Sunset", bg=("C04E62", "45174A"), panel=("3A1238", 205), edge="FFB38A",
+                   ink="FFF4EC", dim="E6BBBC", bar=("FFD27A", "FF8C69"), sel="4A1220", gold="FFE27A",
+                   accent="A2EBE3", alert="FF6F59"),
+    "ocean": dict(label="Ocean", bg=("13697A", "06222E"), panel=("06303B", 210), edge="7FD6CF",
+                  ink="EFFFFD", dim="9DCAC6", bar=("7FF0C8", "D5F27F"), sel="06302A", gold="FFD166",
+                  accent="FFB38A", alert="FF7A63"),
+    "lavender": dict(label="Lavender (light)", bg=("F2E9F9", "D6C1EA"), panel=("FFFFFF", 190), edge="A574C8",
+                     ink="2A1238", dim="6E5A80", bar=("8A35B0", "C051D6"), sel="FFFFFF", gold="E0A000",
+                     accent="1F7A99", alert="D9442F"),
+}
+
+
+def apply_theme(name):
+    global BG_TOP, BG_BOTTOM, PANEL, PANEL_ALPHA, EDGE, INK, DIM, PINK, PEACH, SEL_INK, GOLD, CYAN, CORAL
+    t = THEMES[name]
+    BG_TOP, BG_BOTTOM = rgb(t["bg"][0]), rgb(t["bg"][1])
+    PANEL, PANEL_ALPHA = rgb(t["panel"][0]), t["panel"][1]
+    EDGE, INK, DIM, SEL_INK = rgb(t["edge"]), rgb(t["ink"]), rgb(t["dim"]), rgb(t["sel"])
+    PINK, PEACH = rgb(t["bar"][0]), rgb(t["bar"][1])
+    GOLD, CYAN, CORAL = rgb(t["gold"]), rgb(t["accent"]), rgb(t["alert"])
 
 M = 30                          # from the sides; a 15kHz screen hides some of them
 
@@ -284,9 +332,17 @@ def load_ports(repos):
         for line in open(games_txt):
             if "|" in line and not line.startswith("#"):
                 gid, title = line.strip().split("|", 1)
+                shot = os.path.join(repo, "package", "screens", gid + ".png")
+                if not os.path.exists(shot):
+                    shot = os.path.join(repo, "docs", "screenshot2.png")
                 games.append({"id": gid, "title": title, "engine": engine,
-                              "logo": os.path.join(repo, "package", "logos", gid + ".png"),
-                              "shot": os.path.join(repo, "docs", "screenshot2.png")})
+                              "logo": os.path.join(repo, "package", "logos", gid + ".png"), "shot": shot})
+        info = os.path.join(repo, "package", "info.txt")
+        if os.path.exists(info):
+            for line in open(info, encoding="utf-8"):
+                if "|" in line and not line.startswith("#"):
+                    gid, year, dev, desc = line.rstrip("\n").split("|", 3)
+                    INFO[gid] = (year, dev, desc)
         ports.append({"engine": engine, "version": versions.get(engine, "?"), "games": games})
     return ports
 
@@ -856,13 +912,14 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
 
 OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settings.txt
     ("Font", "font", "The font of every screen here. Chakra Petch unless you pick another."),
+    ("Colours", "colours", "The colours of every screen here. MiSTer Purple unless you pick another."),
     ("Flicker filter", "filter", "On a 15kHz screen 640x480 is interlaced: the filter softens what would "
                                  "blink. HDMI and 31kHz screens never need it."),
     ("Button symbols", "buttons", "Auto shows the buttons of the controller you use, when it is a Switch, "
                                   "Xbox or PlayStation one. Pick one for any other."),
     ("Sort games", "sort", "How the list is sorted when the frontend starts. Select changes it at any time."),
 ]
-OPT_X = (M, 400)
+OPT_X = (M, 372)
 
 
 def layer_options_left(F, fonts, cursor, values):
@@ -879,7 +936,7 @@ def layer_options_left(F, fonts, cursor, values):
         c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
         value = values[key]
         vf = fonts[value][1] if key == "font" else F
-        vtext = fonts[value][0] if key == "font" else value
+        vtext = fonts[value][0] if key == "font" else THEMES[value]["label"] if key == "colours" else value
         vx = x1 - 30 - round(vf.row.getlength(vtext))
         c.text((vx, mid), vtext, vf.row, SEL_INK if sel else CYAN, anchor="lm")
         layer = c.layer()     # the arrows: left and right change it
@@ -901,11 +958,28 @@ def layer_options_right(F, fonts, cursor, values):
     c.text((px0 + 14, y0 + 12), label, F.title, INK)
     for n, line in enumerate(wrap(help_text, F.text, pw - 28)):
         c.text((px0 + 14, y0 + 44 + n * 19), line, F.text, DIM)
+    y = y0 + 44 + len(wrap(help_text, F.text, pw - 28)) * 19 + 12
     if key == "font":   # every choice in itself
-        y = y0 + 44 + 4 * 19 + 14
         for name, (flabel, f) in fonts.items():
             c.text((px0 + 14, y), flabel, f.row, PINK if name == values["font"] else INK)
             y += 26
+    if key == "colours":    # every scheme: its ground, a panel and its bar
+        for name, t in THEMES.items():
+            sw = Image.new("RGBA", (44, 18))
+            d = ImageDraw.Draw(sw)
+            top, bottom = rgb(t["bg"][0]), rgb(t["bg"][1])
+            for yy in range(18):
+                d.line((0, yy, 44, yy), fill=tuple(round(a + (b - a) * yy / 17) for a, b in zip(top, bottom)) + (255,))
+            a, b = rgb(t["bar"][0]), rgb(t["bar"][1])
+            for xx in range(8, 40):
+                d.line((xx, 6, xx, 12), fill=tuple(round(p + (q - p) * (xx - 8) / 31) for p, q in zip(a, b)) + (255,))
+            mask = Image.new("L", (44, 18), 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, 43, 17), 5, fill=255)
+            sw.putalpha(mask)
+            c.picture(sw, (px0 + 14, y))
+            ImageDraw.Draw(c.im).rounded_rectangle((px0 + 14, y, px0 + 57, y + 17), 5, outline=EDGE + (160,))
+            c.text((px0 + 66, y + 9), t["label"], F.row, PINK if name == values["colours"] else INK, anchor="lm")
+            y += 22
     return c.im
 
 
@@ -1151,9 +1225,16 @@ def main():
     screens["details_dn3d"] = details_screen(F, badge, ports, "DN3D")
     screens["details_nodata"] = details_screen(F, badge, ports, "hexen")
     screens["chakra_ports"] = ports_screen(F, badge, ports, "CrispyDoom")
-    values = {"font": "chakra", "filter": "On", "buttons": "Auto: PlayStation", "sort": "A-Z"}
+    values = {"font": "chakra", "colours": "purple", "filter": "On", "buttons": "Auto: PlayStation", "sort": "A-Z"}
     screens["options_font"] = options_screen(F, badge, fonts, 0, values)
-    screens["options_buttons"] = options_screen(F, badge, fonts, 2, values)
+    screens["options_colours"] = options_screen(F, badge, fonts, 1, values)
+    screens["options_buttons"] = options_screen(F, badge, fonts, 3, values)
+    for theme in THEMES:     # the colour schemes
+        apply_theme(theme)
+        screens["theme_%s_main" % theme] = main_screen(F, badge, ports, "A-Z", "doom2")
+        screens["theme_%s_details" % theme] = details_screen(F, badge, ports, "doom2")
+        screens["theme_%s_options" % theme] = options_screen(F, badge, fonts, 1, dict(values, colours=theme))
+    apply_theme("purple")
     for name, im in screens.items():
         path = os.path.join(out, name + ".png")
         im.save(path)
