@@ -21,6 +21,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 | `tools/fmtest.c` | Plays a scale on the FM chip, on the PC with `fakecore` or on the MiSTer: the test that the chip is there and in tune. |
 | `tools/diag_read.py` | Reads a player's diagnostic report: its summary, a graph of the 60 seconds, two reports side by side. See [Diagnostic report](#diagnostic-report). |
 | `tools/job.sh`, `tools/jobs.py` | The Quartus builds and simulations of this PC take turns: `core/build_core.sh` and `sim/*.sh` run in a slot of `job.sh` (3 Quartus builds, 4 simulations at a time, first come first served). `tools/jobs.py` (`-i` interactive, `tools/jobs_ui.py`, in the look of mister-repos: the row picked, its details, end it; `watch`, `history`, `kill <job or repository>`, `status`) shows what runs, waits and ended, each Quartus build's stage and worst slack, other containers of the hybrid images and programs left running outside them (fakecore). |
+| `OVERVIEW.md`, `tools/make_overview.py` | The page for players: what the hybrid ports are, how to install them, the published ports and what every port has. `make_overview.py <database checkout>` makes its table of ports after each publish; the pictures are in `docs/overview/`. |
 | `tools/*.py` | For tests on the MiSTer over ssh: `uinput_kbd.py` and `uinput_pad.py` press keys and gamepad buttons through Main_MiSTer, `status.py` prints what the core publishes. |
 
 ## The launcher
