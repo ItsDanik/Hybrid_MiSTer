@@ -22,6 +22,12 @@
 <table>
 <tr><th align="left">Port</th><th>Framework</th><th>Logo</th><th>Screenshots</th></tr>
 <tr>
+<td width="190"><a href="https://github.com/ItsDanik/ChocolateQuake_MiSTer"><b>ChocolateQuake</b></a><br><sub>Quake, Quake - Scourge of Armagon, Quake - Dissolution of Eternity</sub></td>
+<td width="90" align="center">v17</td>
+<td width="192" align="center"><img src="docs/overview/ChocolateQuake_logo.png" alt="Quake" width="176"></td>
+<td width="376" align="center"><img src="docs/overview/ChocolateQuake_1.png" alt="Quake, the title screen" width="176"> <img src="docs/overview/ChocolateQuake_2.png" alt="Quake, playing" width="176"></td>
+</tr>
+<tr>
 <td width="190"><a href="https://github.com/ItsDanik/CrispyDoom_MiSTer"><b>CrispyDoom</b></a><br><sub>Doom, Doom - SIGIL, Doom - SIGIL II, Doom II, Doom II - No Rest for the Living, Doom II - Master Levels, Final Doom - TNT Evilution, Final Doom - Plutonia Experiment, Heretic, Hexen, Hexen - Deathkings, Strife</sub></td>
 <td width="90" align="center">v17</td>
 <td width="192" align="center"><img src="docs/overview/CrispyDoom_logo.png" alt="Doom" width="176"></td>
@@ -44,6 +50,12 @@
 <td width="90" align="center">v17</td>
 <td width="192" align="center"><img src="docs/overview/ECWolf_logo.png" alt="Wolfenstein 3D" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/ECWolf_1.png" alt="Wolfenstein 3D, the title screen" width="176"> <img src="docs/overview/ECWolf_2.png" alt="Wolfenstein 3D, playing" width="176"></td>
+</tr>
+<tr>
+<td width="190"><a href="https://github.com/ItsDanik/EDuke32_MiSTer"><b>EDuke32</b></a><br><sub>Duke Nukem 3D, DN3D: Duke It Out in D.C., DN3D: Life&#x27;s a Beach, DN3D: Nuclear Winter, DN3D: Duke!ZONE II, DN3D: Penthouse Paradise</sub></td>
+<td width="90" align="center">v17</td>
+<td width="192" align="center"><img src="docs/overview/EDuke32_logo.png" alt="Duke Nukem 3D" width="176"></td>
+<td width="376" align="center"><img src="docs/overview/EDuke32_1.png" alt="Duke Nukem 3D, the title screen" width="176"> <img src="docs/overview/EDuke32_2.png" alt="Duke Nukem 3D, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/jfSW_MiSTer"><b>jfSW</b></a><br><sub>Shadow Warrior, SW: Wanton Destruction, SW: Twin Dragon</sub></td>
