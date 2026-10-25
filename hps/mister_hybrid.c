@@ -381,7 +381,10 @@ int MH_Open(void) {
         memset(&logo, 0, sizeof(logo));
     }
     unsetenv("MISTER_HYBRID_LOGO");
-    alive_time.tv_sec = 0;
+    // MH_CheckAlive() counts from now: a game that loads its data before it
+    // first looks would not see the core loaded again meanwhile
+    alive_frame = status[1];
+    clock_gettime(CLOCK_MONOTONIC, &alive_time);
     for (i = 0; i < FB_COUNT; i++) {
         // all of it: whatever ran before us may have used a larger mode
         if (!logo.asked || i != fb_current) {
@@ -1688,6 +1691,10 @@ static long elapsed_ms(const struct timespec* since) {
 }
 
 int MH_CheckAlive(void) {
+    long elapsed;
+    uint32_t expected;
+    int behind;
+
     if (!MH_IsOpen()) {
         return !detached;
     }
@@ -1696,14 +1703,36 @@ int MH_CheckAlive(void) {
         clock_gettime(CLOCK_MONOTONIC, &alive_time);
         return 1;
     }
-    if (elapsed_ms(&alive_time) < 500) {
+    // A core gone or loaded again (its count back below the last one seen) is
+    // seen at every call, for a game that reads the count right after: between
+    // two looks a count that went back made CrispyDoom's clock jump 2^32 fields
+    // ahead, and the game waited for ever for its next tic (2026-10-25)
+    if (status[0] != STATUS_MAGIC || status[1] < alive_frame) {
+        reloaded = status[0] == STATUS_MAGIC;
+        detached = 1;
+        return 0;
+    }
+    elapsed = elapsed_ms(&alive_time);
+    if (elapsed < 500) {
         return 1;
     }
     // Another core may use the same memory: stop touching it as soon as ours is gone.
     // A field counter that went back is our core loaded again: it knows nothing
     // of this game any more (video mode, palette, audio), which has to start over.
-    if (status[0] != STATUS_MAGIC || status[1] == alive_frame || status[1] < alive_frame || !corename_matches()) {
-        reloaded = status[0] == STATUS_MAGIC && status[1] < alive_frame;
+    // So is one that went on by less than the time since the last look: a game
+    // that did not look for seconds (loading its data) found the new core's
+    // count already past the old one, and went on with a core that showed its
+    // own picture over the game's (CrispyDoom, 2026-10-25). Loading a core takes
+    // Main_MiSTer a second or more and the count starts from 0 again; the core's
+    // own counts on at 59.6Hz, and faster while its video is off. A count
+    // that stands still is a core gone (another one loaded), or ours being
+    // loaded, which MH_CoreReloaded() tells by its name.
+    expected = (uint32_t)(elapsed * 59 / 1000);
+    behind = status[0] == STATUS_MAGIC && status[1] != alive_frame
+          && status[1] - alive_frame + 30 + expected / 20 < expected;
+    if (status[0] != STATUS_MAGIC || status[1] == alive_frame || status[1] < alive_frame || behind
+        || !corename_matches()) {
+        reloaded = status[0] == STATUS_MAGIC && (status[1] < alive_frame || behind);
         detached = 1;
         return 0;
     }
