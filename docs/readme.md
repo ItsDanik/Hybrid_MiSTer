@@ -39,7 +39,7 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    See [Screenshots](#screenshots).
 6. **`## Requirements`**, three items. The launcher's, word for word:
    ```markdown
-   - **danik_hybrid_ports**, the launcher (`Scripts/danik_hybrid_ports.sh`): run it **once** from the MiSTer's `Scripts` menu. It starts the game whenever its menu entry is loaded, keeps running after a reboot, and serves all our hybrid ports; its screen picks which ports and games to have, and can keep them up to date through `update_all`. Without it the core says "Game not running".
+   - **danik_hybrid_ports**, the launcher: run it **once** from the MiSTer's `Scripts` menu ([The launcher](#the-launcher)). Without it the core says "Game not running".
    ```
    Then `- **Game data**, which is not included: ` and which copies of the games do (full games, shareware, demos). Then what to play with (Danik, 2026-10-24), word for word: in a game played with a gamepad,
    ```markdown
@@ -68,7 +68,29 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    > The game data can go on a USB drive instead, into the same folder there (`/media/usb0/games/dnk/<Engine>/`): the game looks for it there first, and then keeps its settings and saved games there as well. Everything else stays on the SD card.
    ```
    Then one paragraph of what a player may want to know of the menu entries (with several games: what each starts when its data is missing, that each keeps its own OSD settings and button mappings, the core file's list of games) and where the game's log, settings and saved games are.
-8. **`## OSD options`**, a table `| Option | |`, in the order of the OSD:
+8. **`## The launcher`**, right after *Installation*, word for word (Danik, 2026-10-25): what the launcher does and what its screen has, with its screenshot, the same picture in every port, `docs/launcher.png` of this repository (made by `launcher/ui/screenshot.py`), by its address on GitHub:
+   ```markdown
+   ## The launcher
+
+   <p align="center"><img src="https://raw.githubusercontent.com/ItsDanik/Hybrid_MiSTer/main/docs/launcher.png" alt="The launcher's screen" width="70%"></p>
+
+   **danik_hybrid_ports** is what turns a menu entry into a running game. Once you've run it from the `Scripts` menu, it starts with the MiSTer, watches which core is loaded, and starts the game whenever a hybrid port's menu entry is loaded. It serves all our hybrid ports at once and updates itself through `update_all`.
+
+   Run it from the `Scripts` menu again whenever you want to change something. Its screen has:
+
+   - **Launcher**: on or off. Off, the ports' games no longer start (the core says "Game not running"), until you turn it on again.
+   - **Menu entries**: where the games appear in the MiSTer menu:
+     - **Other, as dnk-\<Title\>**: each game in the `Other` menu, e.g. **dnk-Doom** (the default).
+     - **Other/Hybrid Ports**: all of them in a *Hybrid Ports* folder in `Other`, without the `dnk-` in front.
+     - **Main menu/Hybrid Ports**: a *Hybrid Ports* folder of its own in the main menu, next to `Arcade`, `Console` and `Other`.
+
+     Moving them keeps each game's settings and button mappings. Favourites, recent lists and Zaparoo tags that point at the old place have to be made again.
+   - **The ports and their games**, a tickbox each. Tick what you want, untick what you don't.
+
+   *X: Apply* installs what is ticked and removes what is not, through Downloader, and moves the menu entries if you chose another place. When a port is removed, your game data, saved games and settings stay, and ticking it again brings it back as it was.
+   ```
+   **Every launcher feature a player sees changes this section** (Danik, 2026-10-25): here, in the template and in every port's README, with `docs/launcher.png` made again, in the same change as the launcher's `VERSION`. No key or button of the screen goes into it; the screen shows them itself.
+9. **`## OSD options`**, a table `| Option | |`, in the order of the OSD:
    - `| Aspect ratio, Scale, Scandoubler Fx, Stereo Mix | as in other cores |`
    - `| FPS Counter | shows the pictures per second in the top left corner |`
    - *HDMI Only*: what it does in this port (a port without 640x400 or more says nothing changes)
@@ -79,7 +101,7 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    | CRT Options | **Horizontal Size**: the picture's width<br>**Horizontal Pos**: moves it left or right<br>**Vertical Pos**: moves it up or down<br>**HUD (Top)**: ...<br>**HUD (Bottom)**: ...<br><br>For a 15kHz screen: fits the picture to it and keeps the HUD out of the overscan. HDMI is not affected; not there with `forced_scandoubler=1` |
    ```
    A HUD line of an edge the game has no HUD at says it is always greyed out and why; a game without a HUD has neither line.
-9. **`## Controls`**: `- **Keyboard and mouse:**` and its table `| Key | Action |`, then `- **Gamepad** (default mapping):` and its table `| Button | Action |`, the buttons with their MiSTer, Xbox and PlayStation names (`B (Xbox A / PlayStation Cross)`). Under the tables only, word for word:
+10. **`## Controls`**: `- **Keyboard and mouse:**` and its table `| Key | Action |`, then `- **Gamepad** (default mapping):` and its table `| Button | Action |`, the buttons with their MiSTer, Xbox and PlayStation names (`B (Xbox A / PlayStation Cross)`). Under the tables only, word for word:
    ```markdown
    Change the buttons in the OSD under *Define <Engine> buttons*. *Menu OK* and *Menu Back* there are only needed for a spare button without a game function. While the OSD is open, the game gets no input.
    ```
@@ -93,21 +115,21 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    The game's own menu can change what each gamepad button does: *Options*, *Controls*, *Customize joystick*. Change the actions there rather than in the OSD; a button the OSD leaves without a name never reaches the game, so its menu cannot bind it.
    ```
    Then, where the game names saved games or high scores, how to type a name without a keyboard (ECWolf: "Naming a saved game without a keyboard: up/down changes the letter, left/right moves the cursor, Menu OK confirms."). Nothing else on the game's own controls menu, nothing on its keyboard keys' settings, nothing on the MiSTer menu's Menu OK / Back.
-10. **`## If something is wrong`**: the diagnostic report, the template's two paragraphs (`hybrid/README.md`, "Diagnostic report").
-11. **`## Building`**, one line, word for word:
+11. **`## If something is wrong`**: the diagnostic report, the template's two paragraphs (`hybrid/README.md`, "Diagnostic report").
+12. **`## Building`**, one line, word for word:
     ```markdown
     How the port works, how to build it and notes for development: [NOTES.md](NOTES.md).
     ```
-12. **`## Support`**, word for word:
+13. **`## Support`**, word for word:
     ```markdown
     If you enjoy this project, you can support my work on [Patreon](https://www.patreon.com/itsdanik).
     ```
-13. **`## Credits`**: the game or source port and its authors; SDL; GeneralUser GS in a port with MIDI (`MIDI_SYNTH` 1); MiSTer; and MiSTer Frontier, word for word:
+14. **`## Credits`**: the game or source port and its authors; SDL; GeneralUser GS in a port with MIDI (`MIDI_SYNTH` 1); MiSTer; and MiSTer Frontier, word for word:
     ```markdown
     - **[MiSTer Frontier](https://github.com/MiSTerOrganize/MiSTer_Frontier)** by MiSTer Organize: thank you for the inspiration. Hybrid cores on the MiSTer, and the way their game is launched (a daemon that watches the loaded core and runs a script from its games folder), were inspired by MiSTer Frontier.
     ```
     Then `This project and its maintainers are in no way associated with or endorsed by <the rights holders>. It does not include any game data.`
-14. **`## License`**: the template's paragraph, with the game's licence; `hybrid/hps/`, which the game is linked with, named as GPL-2.0-or-later.
+15. **`## License`**: the template's paragraph, with the game's licence; `hybrid/hps/`, which the game is linked with, named as GPL-2.0-or-later.
 
 **When a core is first built**, its README is the last step, after testing and packaging: show it to Danik (rendered, as GitHub shows it) and ask him whatever is unsure (what a setting really does, which screenshot, what a player must know), so that the documentation is right from the start.
 
