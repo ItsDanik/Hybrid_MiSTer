@@ -919,77 +919,78 @@ OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settin
                                   "Xbox or PlayStation one. Pick one for any other."),
     ("Sort games", "sort", "How the list is sorted when the frontend starts. Select changes it at any time."),
 ]
-OPT_X = (M, 372)
+OPT_ROW = 34
+OPT_HELP = (MAIN[1] - 42, MAIN[1])      # the help box under the list: 2 lines of the small font
+OPT_LIST = (MAIN[0], OPT_HELP[0] - 10)
+OPT_ROWS = (OPT_LIST[1] - OPT_LIST[0] - 20) // OPT_ROW
 
 
-def layer_options_left(F, fonts, cursor, values):
+def options_first(cursor, n):
+    """The first option in sight: the cursor kept in the middle, as in the game list"""
+    return max(0, min(cursor - OPT_ROWS // 2, n - OPT_ROWS))
+
+
+def layer_options_list(F, fonts, cursor, values, options=None):
+    """The options a row each, over the whole width; a scroll bar once there
+    are more than fit"""
+    options = options or OPTIONS
     c = Canvas(ground=False)
-    x0, x1 = OPT_X
-    y0, y1 = MAIN
+    x0, x1 = M, W - M
+    y0, y1 = OPT_LIST
     c.panel((x0, y0, x1, y1))
-    for n, (label, key, help_text) in enumerate(OPTIONS):
-        y = y0 + 10 + n * 34
+    first = options_first(cursor, len(options))
+    for n in range(first, min(len(options), first + OPT_ROWS)):
+        label, key, help_text = options[n]
+        y = y0 + 10 + (n - first) * OPT_ROW
         mid = y + 15
         sel = n == cursor
         if sel:
-            c.bar((x0 + 5, y, x1 - 5, y + 30))
+            c.bar((x0 + 5, y, x1 - 9, y + 30))
         c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
-        value = values[key]
+        value = values.get(key, "Off")
         vf = fonts[value][1] if key == "font" else F
         vtext = fonts[value][0] if key == "font" else THEMES[value]["label"] if key == "colours" else value
-        vx = x1 - 30 - round(vf.row.getlength(vtext))
+        vx = x1 - 34 - round(vf.row.getlength(vtext))
         c.text((vx, mid), vtext, vf.row, SEL_INK if sel else CYAN, anchor="lm")
         layer = c.layer()     # the arrows: left and right change it
         d = ImageDraw.Draw(layer)
         a = (SEL_INK if sel else DIM) + (255,)
         d.polygon((vx - 14, mid, vx - 8, mid - 5, vx - 8, mid + 5), fill=a)
-        d.polygon((x1 - 16, mid, x1 - 22, mid - 5, x1 - 22, mid + 5), fill=a)
+        d.polygon((x1 - 20, mid, x1 - 26, mid - 5, x1 - 26, mid + 5), fill=a)
         c.over(layer)
+    if len(options) > OPT_ROWS:   # the scroll bar, as the game list's
+        sh = y1 - y0 - 24
+        knob = max(16, sh * OPT_ROWS // len(options))
+        kt = round((sh - knob) * first / (len(options) - OPT_ROWS))
+        d = ImageDraw.Draw(c.im)
+        d.rounded_rectangle((x1 - 6, y0 + 12, x1 - 3, y1 - 12), 2, fill=EDGE + (60,))
+        d.rounded_rectangle((x1 - 6, y0 + 12 + kt, x1 - 3, y0 + 12 + kt + knob), 2, fill=EDGE + (230,))
     return c.im
 
 
-def layer_options_right(F, fonts, cursor, values):
+def layer_options_help(F, cursor, options=None):
+    """What the option under the cursor does: one or two lines of the small font, nothing else"""
+    label, key, help_text = (options or OPTIONS)[cursor]
     c = Canvas(ground=False)
-    label, key, help_text = OPTIONS[cursor]
-    px0 = OPT_X[1] + 12
-    y0, y1 = MAIN
-    c.panel((px0, y0, W - M, y1))
-    pw = W - M - px0
-    c.text((px0 + 14, y0 + 12), label, F.title, INK)
-    for n, line in enumerate(wrap(help_text, F.text, pw - 28)):
-        c.text((px0 + 14, y0 + 44 + n * 19), line, F.text, DIM)
-    y = y0 + 44 + len(wrap(help_text, F.text, pw - 28)) * 19 + 12
-    if key == "font":   # every choice in itself
-        for name, (flabel, f) in fonts.items():
-            c.text((px0 + 14, y), flabel, f.row, PINK if name == values["font"] else INK)
-            y += 26
-    if key == "colours":    # every scheme: its ground, a panel and its bar
-        for name, t in THEMES.items():
-            sw = Image.new("RGBA", (44, 18))
-            d = ImageDraw.Draw(sw)
-            top, bottom = rgb(t["bg"][0]), rgb(t["bg"][1])
-            for yy in range(18):
-                d.line((0, yy, 44, yy), fill=tuple(round(a + (b - a) * yy / 17) for a, b in zip(top, bottom)) + (255,))
-            a, b = rgb(t["bar"][0]), rgb(t["bar"][1])
-            for xx in range(8, 40):
-                d.line((xx, 6, xx, 12), fill=tuple(round(p + (q - p) * (xx - 8) / 31) for p, q in zip(a, b)) + (255,))
-            mask = Image.new("L", (44, 18), 0)
-            ImageDraw.Draw(mask).rounded_rectangle((0, 0, 43, 17), 5, fill=255)
-            sw.putalpha(mask)
-            c.picture(sw, (px0 + 14, y))
-            ImageDraw.Draw(c.im).rounded_rectangle((px0 + 14, y, px0 + 57, y + 17), 5, outline=EDGE + (160,))
-            c.text((px0 + 66, y + 9), t["label"], F.row, PINK if name == values["colours"] else INK, anchor="lm")
-            y += 22
+    x0, x1 = M, W - M
+    y0, y1 = OPT_HELP
+    c.panel((x0, y0, x1, y1))
+    lines = wrap(help_text, F.small, x1 - x0 - 28)
+    assert len(lines) <= 2, (F.label, label, lines)
+    top = y0 + (y1 - y0 - len(lines) * 15) // 2
+    for n, line in enumerate(lines):
+        c.text((x0 + 14, top + n * 15), line, F.small, DIM)
     return c.im
 
 
 OPTION_HINTS = [("ok", "Change"), ("back", "Back")]
 
 
-def options_screen(F, badge_font, fonts, cursor, values, family="ps"):
-    """fonts: the Fonts of every choice, to show each in itself"""
+def options_screen(F, badge_font, fonts, cursor, values, family="ps", options=None):
+    """fonts: the Fonts of every choice, the font row's value shown in itself"""
     layers = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, "Options"),
-              "left": layer_options_left(F, fonts, cursor, values), "right": layer_options_right(F, fonts, cursor, values),
+              "left": layer_options_list(F, fonts, cursor, values, options),
+              "right": layer_options_help(F, cursor, options),
               "hints": layer_hints(F, OPTION_HINTS, badge_font, family), "badge": layer_badge(badge_font)}
     return compose(layers, ["logo", "title", "count", "left", "right", "hints", "badge"]).convert("RGB")
 
@@ -1135,7 +1136,7 @@ def anim_options(F, badge_font, ports, fonts, values):
     m = Main(F, badge_font, ports, "A-Z", "doom2")
     L = m.frame_layers()
     base = compose({k: L[k] for k in ("ground", "logo", "title", "badge")}, ["logo", "title", "badge"])
-    left, right = layer_options_left(F, fonts, 0, values), layer_options_right(F, fonts, 0, values)
+    left, right = layer_options_list(F, fonts, 0, values), layer_options_help(F, 0)
     opt_count = layer_count(F, "Options")
     opt_hints = layer_hints(F, OPTION_HINTS, badge_font, m.family)
     leaving = [(["list_panel", "rows"], 0, 7), (["prev_panel", "prev_logo", "prev_shot"], 1, 8)]
@@ -1229,6 +1230,10 @@ def main():
     screens["options_font"] = options_screen(F, badge, fonts, 0, values)
     screens["options_colours"] = options_screen(F, badge, fonts, 1, values)
     screens["options_buttons"] = options_screen(F, badge, fonts, 3, values)
+    # a longer list, to show the scroll bar: the options after the first five are placeholders, none decided
+    more = OPTIONS + [("Placeholder %d" % n, "p%d" % n, "A placeholder, only to show how a longer list scrolls.")
+                      for n in range(1, 6)]
+    screens["options_scroll"] = options_screen(F, badge, fonts, 7, values, options=more)
     for theme in THEMES:     # the colour schemes
         apply_theme(theme)
         screens["theme_%s_main" % theme] = main_screen(F, badge, ports, "A-Z", "doom2")
