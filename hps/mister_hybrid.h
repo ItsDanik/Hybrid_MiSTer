@@ -284,6 +284,13 @@ int MH_WheelConnected(void);
 // controller whose driver names them otherwise has none here), pressed on
 // any controller. Returns 0 while no gamepad is connected.
 int MH_ReadStickButtons(int* left, int* right);
+// The d-pad directions (MH_JOY_RIGHT, _LEFT, _DOWN, _UP) the left stick points
+// in, a quarter of the way out or more; x and y are the stick as mh_input has
+// it (-128..127, y down positive; an SDL axis >> 8). Main_MiSTer presses the
+// d-pad as well when a stick is pushed far, so a first-person game drops these
+// directions from the d-pad in play: the stick tilted fully left strafes and
+// does not also turn (the rule in hybrid/CLAUDE.md). Menus keep them.
+uint32_t MH_StickDpad(int x, int y);
 // Rumble: the strength of the gamepad's heavy (slow) and light (fast) motor,
 // 0 = off .. 255, on every connected controller that can. It goes on at that
 // strength until the next call, but a game must repeat the call at least

@@ -2979,6 +2979,22 @@ static const uint8_t set2_extended[0x80] = {
     [0x27] = 0xE7, // right GUI
 };
 
+uint32_t MH_StickDpad(int x, int y) {
+    // a quarter of the way out: Main_MiSTer's own d-pad press comes further out
+    const int far = 32;
+    uint32_t dirs = 0;
+
+    if (x > far)
+        dirs |= MH_JOY_RIGHT;
+    else if (x < -far)
+        dirs |= MH_JOY_LEFT;
+    if (y > far)
+        dirs |= MH_JOY_DOWN;
+    else if (y < -far)
+        dirs |= MH_JOY_UP;
+    return dirs;
+}
+
 int MH_KeyToHID(int key_index) {
     int code = key_index & 0xff;
 
