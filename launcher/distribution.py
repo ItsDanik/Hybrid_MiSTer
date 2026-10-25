@@ -53,6 +53,16 @@
 # <engine>. A shared file (games/dnk/SoundFonts/): the tags of the cores
 # and of the games of every port that brings it. A folder: the tags of
 # everything in it.
+#
+# Where the menu entries go is the player's choice (the launcher's screen,
+# "Menu entries"): each _Other/dnk-<title>.mgl of a zip is in the database
+# once for every layout of LAYOUTS, the same file under the same URL. An
+# entry of layout L has the tags mgl<L>, mgl<L><engine> and
+# mgl<L><engine><game>; those of the default layout also the two above, so a
+# filter of before (or filter = launcher) gets the default layout alone. The
+# launcher writes, for layout L, the plain tags of what is ticked, the same
+# with mgl<L> in front, and !mgl<X> for every other layout: Downloader takes
+# a file one of the positive terms names, unless a ! term names it too.
 import hashlib
 import io
 import json
@@ -80,6 +90,15 @@ SHARED_DIR = "games/dnk/SoundFonts"
 PLAYERS = {SHARED_DIR + "/slots.txt"}
 # in a zip, not in the database: Downloader does not install drop-in files
 NOT_SHIPPED = {"downloader_danik_hybrid_ports.ini"}
+# The layouts of the menu entries: the name in their tags, and what comes
+# before <title>.mgl. The launcher has the same list (its LAYOUTS).
+LAYOUTS = [("other", "_Other/dnk-"),
+           ("folder", "_Other/_Hybrid Ports/"),
+           ("root", "_Hybrid Ports/")]
+# what the ports have shipped from the start: a player who never chooses
+# keeps it
+DEFAULT_LAYOUT = "other"
+ENTRY_PREFIX = dict(LAYOUTS)[DEFAULT_LAYOUT]
 README = """# dnk_Distribution_MiSTer
 
 The hybrid ports of [Hybrid_MiSTer](https://github.com/ItsDanik/Hybrid_MiSTer) for update_all: open source
@@ -185,6 +204,22 @@ def mgl_target(data):
     return (rbf.group(1) if rbf else None), (setname.group(1) if setname else None)
 
 
+def entry_paths(path):
+    """{layout: path} of the menu entry _Other/dnk-<title>.mgl of a zip"""
+    title = path[len(ENTRY_PREFIX):]
+    return {layout: prefix + title for layout, prefix in LAYOUTS}
+
+
+def entry_source(path):
+    """The file in files/ a path of the database is: a menu entry of another
+    layout is the one of the zip"""
+    if path.endswith(".mgl"):
+        for _, prefix in LAYOUTS:
+            if path.startswith(prefix) and "/" not in path[len(prefix):]:
+                return ENTRY_PREFIX + path[len(prefix):]
+    return path
+
+
 def engine_paths(files, engine):
     """Every file of a port in the tree"""
     out = []
@@ -252,9 +287,11 @@ def tags_of(files, ports, shared):
     for engine in engines:
         etag = norm(engine)
         game_tags[engine] = [norm(engine + "_" + gid) for gid, _ in games_of(files, engine)]
-        for t in [etag] + game_tags[engine]:
-            if t in seen or t == "launcher":
-                die("the tag %s of %s is %s's as well (tags are compared without - and _)" % (t, engine, seen.get(t, "the launcher")))
+        layout_tags = [norm("mgl%s_%s" % (l, x)) for l, _ in LAYOUTS
+                       for x in [engine] + [engine + "_" + gid for gid, _ in games_of(files, engine)]]
+        for t in [etag] + game_tags[engine] + layout_tags:
+            if t in seen or t == "launcher" or t in [norm("mgl" + l) for l, _ in LAYOUTS]:
+                die("the tag %s of %s is %s's as well (tags are compared without - and _)" % (t, engine, seen.get(t, "the launcher's or a layout's")))
             seen[t] = engine
     entries = {e: set() for e in engines}
     for path in walk(files):
@@ -295,7 +332,11 @@ def tags_of(files, ports, shared):
             if gid in entries[engine]:
                 die("two menu entries for %s_%s" % (engine, gid))
             entries[engine].add(gid)
-            tags[path] = [norm(engine + "_" + gid), norm(engine)]
+            for layout, lpath in entry_paths(path).items():
+                t = [norm("mgl" + layout), norm("mgl%s_%s" % (layout, engine)), norm("mgl%s_%s_%s" % (layout, engine, gid))]
+                if layout == DEFAULT_LAYOUT:
+                    t = [norm(engine + "_" + gid), norm(engine)] + t
+                tags[lpath] = t
             continue
         die("%s is no file of a port or of the launcher" % path)
     for engine in engines:
@@ -377,12 +418,13 @@ def make_db(checkout, base_url, out):
     db_files = {}
     folders = {}
     for path, t in sorted(tags.items()):
-        with open(os.path.join(files, path), "rb") as f:
+        source = entry_source(path)
+        with open(os.path.join(files, source), "rb") as f:
             data = f.read()
         db_files[path] = {
             "hash": hashlib.md5(data).hexdigest(),
             "size": len(data),
-            "url": base_url + urllib.parse.quote(path),
+            "url": base_url + urllib.parse.quote(source),
             "tags": t,
         }
         # a folder has the tags of everything in it

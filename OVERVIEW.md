@@ -14,7 +14,7 @@
 2. Run `update_all`. It installs the launcher, **danik_hybrid_ports**, in `Scripts`.
 3. Run **danik_hybrid_ports** from the `Scripts` menu, tick the games you want and press *X: Apply*.
 4. Copy everything in your game's folder to `/media/fat/games/dnk/<Port>/` (or the same folder on a USB drive). The port's page below says which files.
-5. Load the game from the *Other* menu, e.g. **dnk-Doom**.
+5. Load the game from the *Other* menu, e.g. **dnk-Doom**. The launcher can move the games into a *Hybrid Ports* folder, in *Other* or in the main menu, if you prefer.
 
 ## The ports
 

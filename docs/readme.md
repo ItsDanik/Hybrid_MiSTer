@@ -58,7 +58,7 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    2. Run `update_all`. That installs the launcher, **danik_hybrid_ports**, in `Scripts`.
    3. Run **danik_hybrid_ports** from the `Scripts` menu, tick the games you want and press *X: Apply*. They are installed, and update_all keeps them up to date.
    4. Copy **everything** in your game's folder to `/media/fat/games/dnk/<Engine>/` ...
-   5. Load the game from the `Other` menu, e.g. **dnk-<Title>**.
+   5. Load the game from the `Other` menu, e.g. **dnk-<Title>**, or from the `Hybrid Ports` folder if you moved the games there in the launcher.
    ```
    Steps 1 to 3 word for word. Step 4 is the port's: whole folders, everything in them, never files that can be left out (`CLAUDE.md`, "players copy whole folders"); with several games, a table of each game and the files it is known by. Step 5 names the first game's menu entry.
 
@@ -153,7 +153,8 @@ Game files
 Playing
   1. Run danik_hybrid_ports once from the MiSTer's Scripts menu. It starts
      the game whenever its menu entry is loaded.
-  2. Load the game from the Other menu, e.g. dnk-<Title>.
+  2. Load the game from the Other menu, e.g. dnk-<Title>, or from the
+     Hybrid Ports folder if you moved the games there in the launcher.
   Buttons are changed in the OSD under "Define <Engine> buttons". A button
   left without a name there does not reach the game at all: name every
   button, or leave the definition as it is.

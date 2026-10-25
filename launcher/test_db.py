@@ -13,10 +13,13 @@
 #   3. danik_hybrid_ports from the Scripts menu: the screen, the ports new in
 #      this database on offer and not ticked. Tick them and press X: Apply
 #      runs Downloader again, and its screen says where their game files go.
+#   4. With --auto: the menu entries moved to each layout in turn (Menu
+#      entries, then X: Apply) and back to where they were.
 #
 # After each Downloader run the card is compared with the database: every file
 # its filter takes, with the database's bytes, and nothing of a port left
-# over (an old core, a file a new release no longer has).
+# over (an old core, a file a new release no longer has, a menu entry of
+# another layout, an empty folder of one).
 #
 # The databases are the db.json.zip that players get, byte for byte but for
 # their URLs, turned to http://dnk.invalid/: Downloader refuses URLs of local
@@ -31,7 +34,8 @@
 # A or Enter ticks, X or Space applies, B or Escape leaves, L / R or Page Up /
 # Down. --auto drives it alone (ticks the new ports, applies) and saves it in
 # the work folder: screen.png as it opens, new-<Engine>.png on each new port
-# before it is ticked, ticked.png, and applied.png when Downloader is done.
+# before it is ticked, ticked.png, and applied.png when Downloader is done;
+# in step 4 layout-<layout>.png with it chosen and applied-<layout>.png.
 #
 # usage: launcher/test_db.py [--fresh] [--auto] [--work DIR] [--downloader DIR] [<checkout>]
 #   <checkout>         of dnk_Distribution_MiSTer (~/dnk_Distribution_MiSTer)
@@ -66,6 +70,11 @@ CATALOGUE = "Scripts/.danik_hybrid_ports/catalogue.txt"
 # the framebuffer the screen draws on: 320x200 three times
 FB_W, FB_H = 960, 600
 KEY_UP, KEY_DOWN, KEY_OK, KEY_APPLY = b"\x1b[A", b"\x1b[B", b"\r", b" "
+KEY_LEFT = b"\x1b[D"
+# the layouts of the menu entries in the order the screen goes through them
+# (LAYOUTS of the launcher), with the folders of their own
+LAYOUTS = ["other", "folder", "root"]
+LAYOUT_DIRS = {"folder": "_Other/_Hybrid Ports", "root": "_Hybrid Ports"}
 
 
 def die(msg):
@@ -157,9 +166,12 @@ def downloader(card):
 
 def check_card(card, db, filt, swapped=()):
     # what the filter takes, with the database's bytes, and no file of ours
-    # that it does not take
-    terms = {norm(t) for t in filt.split()}
-    want = {p for p, e in db["files"].items() if terms & {norm(t) for t in e["tags"]}}
+    # that it does not take: as Downloader has it, a file one of its
+    # positive terms names, unless one of its ! terms names it too
+    terms = {norm(t) for t in filt.split() if not t.startswith("!")}
+    nots = {norm(t[1:]) for t in filt.split() if t.startswith("!")}
+    want = {p for p, e in db["files"].items()
+            if terms & {norm(t) for t in e["tags"]} and not nots & {norm(t) for t in e["tags"]}}
     bad = []
     for p in sorted(want):
         if p in swapped:
@@ -173,9 +185,12 @@ def check_card(card, db, filt, swapped=()):
         if hashlib.md5(data).hexdigest() != db["files"][p]["hash"]:
             bad.append("not the database's: " + p)
     ours = []
-    for top in ("_Other", "games/dnk", "Scripts/.danik_hybrid_ports"):
+    for top in ("_Other", "_Hybrid Ports", "games/dnk", "Scripts/.danik_hybrid_ports"):
         for d, _, names in os.walk(os.path.join(card, top)):
             ours += [os.path.relpath(os.path.join(d, n), card) for n in names]
+    for d in LAYOUT_DIRS.values():
+        if os.path.isdir(os.path.join(card, d)) and not os.listdir(os.path.join(card, d)):
+            bad.append("an empty folder left: " + d)
     if os.path.exists(os.path.join(card, "Scripts/danik_hybrid_ports.sh")):
         ours.append("Scripts/danik_hybrid_ports.sh")
     bad += ["left over: " + p for p in sorted(set(ours) - want - set(swapped))]
@@ -256,6 +271,32 @@ def auto(proc, fb, rows, work):
     proc.stdin.close()
     proc.wait()
     print("── the screen: %s" % ", ".join(os.path.join(work, n) for n in shots + ["ticked.png", "applied.png"]))
+
+
+def auto_layout(proc, fb, work, layout):
+    # Menu entries (below Launcher) to the next layout, then X: Apply
+    def send(b):
+        proc.stdin.write(b)
+        proc.stdin.flush()
+        time.sleep(0.05)
+    wait_frame(fb)
+    time.sleep(0.5)
+    for k in (KEY_LEFT, KEY_DOWN, KEY_OK):
+        send(k)
+    time.sleep(0.5)
+    chosen = fb_frame(fb)
+    fb_image(chosen).save(os.path.join(work, "layout-%s.png" % layout))
+    send(KEY_APPLY)
+    wait_frame(fb, unlike=chosen)
+    fb_image(wait_still(fb)).save(os.path.join(work, "applied-%s.png" % layout))
+    proc.stdin.close()
+    proc.wait()
+
+
+def layout_of(filt):
+    # the layout a filter takes: the one without a !mgl<layout>
+    left = [l for l in LAYOUTS if "!mgl" + l not in {t.lower().replace("_", "").replace("-", "") for t in filt.split()}]
+    return left[0] if len(left) == 1 else LAYOUTS[0]
 
 
 def window(proc, fb):
@@ -446,6 +487,24 @@ def main():
             if missing:
                 print("   not ticked by the screen: %s\n   FAIL" % ", ".join(missing))
                 ok = False
+
+            print("\n══ 4. the menu entries in each layout ══")
+            start = layout_of(filt)
+            i = LAYOUTS.index(start)
+            for n in range(1, len(LAYOUTS) + 1):
+                layout = LAYOUTS[(i + n) % len(LAYOUTS)]
+                # Downloader put the MiSTer's screen program back
+                shutil.copy(ui, os.path.join(card, UI))
+                if os.path.exists(fb):
+                    os.remove(fb)
+                proc = subprocess.Popen(["bash", launcher, "config"], stdin=subprocess.PIPE, env=env)
+                auto_layout(proc, fb, work, layout)
+                filt = section_filter(card)
+                print("── Menu entries: %s (screen: %s)" % (layout, os.path.join(work, "applied-%s.png" % layout)))
+                if layout_of(filt) != layout:
+                    print("   the filter takes the layout %s\n   FAIL" % layout_of(filt))
+                    ok = False
+                ok &= check_card(card, new_db, filt, swapped={UI})
     finally:
         subprocess.run(["bash", launcher, "stop"], env=env, capture_output=True)
         server.shutdown()

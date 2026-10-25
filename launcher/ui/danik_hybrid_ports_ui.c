@@ -7,13 +7,15 @@
 // the script does without it.
 //
 //   danik_hybrid_ports_ui main --table FILE --out FILE
-//   danik_hybrid_ports_ui run [--title T] -- COMMAND [ARGS...]
+//   danik_hybrid_ports_ui run [--title T] [--done TEXT] -- COMMAND [ARGS...]
 //   danik_hybrid_ports_ui probe | release
 //   all: [--keep] [--fb DEVICE] [--geometry WxHxBPP] [--no-mouse] [--debug]
 //
 // main: the ports and their games with tickboxes, and settings above them
 // (one or two). The table, a line a record, tab separated:
-//   S <key> <0|1> <label>                 a setting
+//   S <key> <0|1> <label>                 a setting, ticked or not
+//   C <key> <n> <label> <a>|<b>|...       a setting of a few choices, the
+//                                         nth chosen (A or a click: the next)
 //   G <engine> <game> <0|1> <label>       a game of a port (shown under it,
 //                                         also when it is the only one)
 // Out: the same lines, with what is ticked when the player chose. Exit 0:
@@ -21,7 +23,9 @@
 // them on a pipe).
 //
 // run: COMMAND's output as it comes, the last lines in a box, with a busy
-// bar while it works, then "A: Close". Exits with COMMAND's own code.
+// bar while it works, then "A: Close", and TEXT next to it when it worked
+// (where the ports are: "Load a port from Other."). Exits with COMMAND's own
+// code.
 //
 // --keep leaves the console in graphics mode and the picture up on the way
 // out, for the next screen to replace without the console's text flashing up
@@ -464,8 +468,13 @@ typedef struct { char engine[64], game[64], label[128]; int tick; } Game;
 typedef struct { int is_engine, first, count; } Row;   // a port (its games: first, count) or a game
 static Game games[MAX_ROWS];
 static int ngames = 0;
-static char set_key[2][64], set_label[2][64];
-static int set_tick[2], nsets = 0;
+#define MAX_CHOICES 4
+static char set_key[2][64], set_label[2][64], set_choice[2][MAX_CHOICES][48];
+static int set_tick[2], set_nchoices[2], nsets = 0;   // set_tick: the choice of a C
+static void set_change(int i) {
+  if (set_nchoices[i]) set_tick[i] = (set_tick[i] + 1) % set_nchoices[i];
+  else set_tick[i] = !set_tick[i];
+}
 static Row rows[MAX_ROWS];
 static int nrows = 0;
 
@@ -501,6 +510,22 @@ static int read_table(const char *path) {
       snprintf(set_key[nsets], sizeof set_key[0], "%s", t[1]);
       set_tick[nsets] = atoi(t[2]) != 0;
       snprintf(set_label[nsets], sizeof set_label[0], "%s", t[3]);
+      set_nchoices[nsets] = 0;
+      nsets++;
+    } else if (n == 5 && !strcmp(t[0], "C") && nsets < 2) {
+      int c = 0;
+      for (char *p = t[4]; p && c < MAX_CHOICES; c++) {
+        char *e = strchr(p, '|');
+        if (e) *e++ = 0;
+        snprintf(set_choice[nsets][c], sizeof set_choice[0][0], "%s", p);
+        p = e;
+      }
+      if (c == 0) continue;
+      snprintf(set_key[nsets], sizeof set_key[0], "%s", t[1]);
+      snprintf(set_label[nsets], sizeof set_label[0], "%s", t[3]);
+      set_nchoices[nsets] = c;
+      set_tick[nsets] = atoi(t[2]);
+      if (set_tick[nsets] < 0 || set_tick[nsets] >= c) set_tick[nsets] = 0;
       nsets++;
     } else if (n == 5 && !strcmp(t[0], "G") && ngames < MAX_ROWS) {
       Game *g = &games[ngames++];
@@ -527,7 +552,12 @@ static int read_table(const char *path) {
 static int write_table(const char *path) {
   FILE *f = fopen(path, "w");
   if (!f) return -1;
-  for (int i = 0; i < nsets; i++) fprintf(f, "S\t%s\t%d\t%s\n", set_key[i], set_tick[i], set_label[i]);
+  for (int i = 0; i < nsets; i++) {
+    if (!set_nchoices[i]) { fprintf(f, "S\t%s\t%d\t%s\n", set_key[i], set_tick[i], set_label[i]); continue; }
+    fprintf(f, "C\t%s\t%d\t%s\t", set_key[i], set_tick[i], set_label[i]);
+    for (int c = 0; c < set_nchoices[i]; c++) fprintf(f, "%s%s", c ? "|" : "", set_choice[i][c]);
+    fputc('\n', f);
+  }
   for (int i = 0; i < ngames; i++)
     fprintf(f, "G\t%s\t%s\t%d\t%s\n", games[i].engine, games[i].game, games[i].tick, games[i].label);
   return fclose(f);
@@ -549,6 +579,15 @@ static void draw_main(int focus_list, int sel_set, int sel, int top, int drag) {
   for (int i = 0; i < nsets; i++) {
     int y = 26 + i * ROW;
     if (!focus_list && sel_set == i) fill(8, y - 1, CW - 16, 15, C_BAR);
+    if (set_nchoices[i]) {
+      // the label, then what is chosen
+      char l[80];
+      snprintf(l, sizeof l, "%s:", set_label[i]);
+      text(26, y, l, C_WHITE);
+      text_cut(26 + text_w(l) + 6, y, set_choice[i][set_tick[i]], CW - 12 - 26 - text_w(l) - 6,
+               !focus_list && sel_set == i ? C_WHITE : C_PINK);
+      continue;
+    }
     tickbox(12, y, set_tick[i] ? 2 : 0, C_WHITE);
     text(26, y, set_label[i], C_WHITE);
   }
@@ -608,7 +647,7 @@ static int screen_main(const char *table, const char *out) {
       case K_PGDN: if (focus_list) { sel += LIST_ROWS; if (sel > nrows - 1) sel = nrows - 1; } break;
       case K_HOME: if (focus_list) sel = 0; break;
       case K_END:  if (focus_list) sel = nrows - 1; break;
-      case K_OK:   if (focus_list) { if (nrows) toggle(&rows[sel]); } else set_tick[sel_set] = !set_tick[sel_set]; break;
+      case K_OK:   if (focus_list) { if (nrows) toggle(&rows[sel]); } else if (nsets) set_change(sel_set); break;
       case K_APPLY: result = 0; break;
       case K_CANCEL: result = 10; break;
     }
@@ -632,7 +671,7 @@ static int screen_main(const char *table, const char *out) {
       else if (in(SB_X - 2, hy + hh, 13, SB_Y1 - 8 - hy - hh)) top += LIST_ROWS;
       else {
         for (int i = 0; i < nsets; i++)
-          if (in(8, 26 + i * ROW - 1, SB_X - 10, ROW)) { focus_list = 0; sel_set = i; set_tick[i] = !set_tick[i]; }
+          if (in(8, 26 + i * ROW - 1, SB_X - 10, ROW)) { focus_list = 0; sel_set = i; set_change(i); }
         for (int i = 0; i < LIST_ROWS && top + i < nrows; i++)
           if (in(8, LIST_TOP + i * ROW - 1, SB_X - 10, ROW)) { focus_list = 1; sel = top + i; toggle(&rows[sel]); }
       }
@@ -657,6 +696,7 @@ static int screen_main(const char *table, const char *out) {
 // ---------------------------------------------------------------------------
 // run: a command's output.
 // ---------------------------------------------------------------------------
+static const char *done_text = "Load a port from Other.";
 #define OUT_LINES 10
 #define OUT_COLS 48
 static char outl[OUT_LINES][OUT_COLS * 4 + 1];
@@ -706,7 +746,7 @@ static void draw_run(const char *title, int done, int code, long long t, int clo
     fill(14 + pos, BUTTONS_Y + 5, 50, 5, C_PINK);
   } else {
     char msg[64];
-    if (code == 0) snprintf(msg, sizeof msg, "Load a port from Other.");
+    if (code == 0) snprintf(msg, sizeof msg, "%s", done_text);
     else snprintf(msg, sizeof msg, "It did not work (exit code %d).", code);
     text(12, BUTTONS_Y + 1, msg, C_DIM);
     button(CW - 12, BUTTONS_Y, "A: Close", 1, close_hover);
@@ -773,6 +813,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[i], "--table") && i + 1 < argc) table = argv[++i];
     else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(argv[i], "--title") && i + 1 < argc) title = argv[++i];
+    else if (!strcmp(argv[i], "--done") && i + 1 < argc) done_text = argv[++i];
     else if (!strcmp(argv[i], "--fb") && i + 1 < argc) dev = argv[++i];
     else if (!strcmp(argv[i], "--geometry") && i + 1 < argc) geometry = argv[++i];
     else if (!strcmp(argv[i], "--keep")) keep = 1;
