@@ -134,6 +134,9 @@ def main():
             total += write(base + ".dlogo", fit(logo, *dlogo_box), True, png)
             if gid not in info:
                 missing.append("%s/%s info" % (engine, gid))
+            # tty2oled+'s icon (docs/oled.md), which package.sh also needs
+            if not os.path.exists(os.path.join(repo, "package", "oled", gid + "_icon.png")):
+                missing.append("%s/%s OLED icon" % (engine, gid))
             year, dev, desc = info.get(gid, ("", "", ""))
             index.append("|".join((engine, gid, g["title"], year, dev, desc)))
     with open(os.path.join(out, "index.txt"), "w", encoding="utf-8") as f:

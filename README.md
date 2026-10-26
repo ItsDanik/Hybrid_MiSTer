@@ -201,6 +201,14 @@ From host version 17 every game starts the same way ([`docs/game_logo.md`](docs/
 - `MH_PickGame()` shows it with the game it picks; a game needs no code. A port with pick code of its own calls `MH_GameLogo(id, title)`, and `MH_GameLogoMissing(id)` before the message naming missing files.
 - The game's first frame waits for the logo's 2 seconds; its palette, mode and format are taken with it. `sim/logo_gif.sh` makes a GIF of the whole start from the simulated core, `tools/logo_test.sh` tests the library against fakecore.
 
+## The OLED display
+
+[tty2oled+](https://github.com/ItsDanik/MiSTer-tty2oled-plus) shows the game a hybrid port runs on its 256x64 OLED panel (16 greys): the game's logo, then its title, developer, year and description beside its icon ([`docs/oled.md`](docs/oled.md)). The port brings what it shows, in its own folder; nothing goes into a tty2oled+ folder, and tty2oled+ looks for it there (Danik, 2026-10-26).
+
+- **Every game of `package/games.txt` has its OLED logo, icon and details:** `package/oled/<id>_icon.png` (86x64), `package/oled/<id>_logo.png` (256x64) or else the logo made from `package/logos/<id>.png`, and its line of `package/info.txt`. `package.sh` makes `games/dnk/<Engine>/oled/<id>_logo.gsc`, `oled/<id>_icon.gsc` and `info.txt` (in ASCII) from them with `tools/make_oled.py package`, and refuses a game without them. The PNGs stay in the repository, only the `.gsc` files are shipped.
+- The library writes `/tmp/dnk_game`, `<Engine>|<id>`, once it knows the game (`MH_GameLogo()`, `MH_GameLogoLoading()`): the game picked from the core's list, or tried with `tools/test_on_mister.sh`, which `/tmp/CORENAME` does not name. A game needs no code.
+- `tools/make_oled.py preview <package dir> out.png` shows every game's logo and icon as the panel does.
+
 ## Diagnostic report
 
 Every core's OSD ends with *Save Diagnostic Report* (host version 16; `docs/diagnostics.md`, the decisions). A player who has a problem picks it while the game runs; the library saves `games/dnk/diagnostics/<Engine>_<YYYYMMDD>_<HHMMSS>.zip` on the SD card and Main_MiSTer's info box says so (texts 17 and 18 of the template's `"I,"` line, `MH_INFO_DIAG_SAVED` / `MH_INFO_DIAG_FAILED`). The game needs no code for it and keeps running.

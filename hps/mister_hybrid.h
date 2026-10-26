@@ -529,7 +529,8 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
 // port with pick code of its own calls it once it knows the game. Without the
 // file, or with a core of host version 16 or older: "Loading <title>..." under
 // the MiSTer logo, and 0. A program started in this one's place (execv after
-// MH_Close()) takes the logo over in MH_Open().
+// MH_Close()) takes the logo over in MH_Open(). Both write /tmp/dnk_game,
+// "<Engine>|<id>", the game tty2oled+'s display shows (docs/oled.md).
 int MH_GameLogo(const char* id, const char* title);
 // A game without files to check (MH_PickGame() with none, the MIDI Player):
 // the MiSTer logo goes once the intro is over, then "Loading <title>..." alone
