@@ -30,6 +30,13 @@
 #       <id>_icon.gsc from package/oled/<id>_icon.png, which every game has;
 #       <out dir>/info.txt, the lines of package/info.txt in ASCII (tty2oled+
 #       draws nothing else). Fails on anything missing.
+#       It writes <out dir>/oled/framework_logo.gsc as well, from
+#       assets/oled_framework.png: what the display shows while the core's
+#       list of games is up (/tmp/dnk_game "<Engine>|", MH_GameList())
+#   make_oled.py framework <out.png>
+#       draws assets/oled_framework.png: the badge as the framework's banner
+#       has it (tools/make_banner.py --framework), "Hybrid Core Framework" over
+#       "by danik" left of the icon assets/danik.png, centred on the panel
 #   make_oled.py preview <package dir> <out.png> [--scale n]
 #       every game's logo and icon as the panel shows them (the logo, then
 #       the icon beside the title, year and developer), for a look and for
@@ -55,6 +62,10 @@ LOGO_GAMMA = 0.85
 # the pixels kept clear round each (left and right, top and bottom)
 LOGO_MARGIN = (1, 1)
 ICON_MARGIN = (2, 2)
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+# the framework's banner, while a core's list of games is up (Danik, 2026-10-26)
+FRAMEWORK = os.path.join(ROOT, "assets", "oled_framework.png")
+FRAMEWORK_GAP = 12               # between the text and the icon, as make_banner.py
 
 
 def die(msg):
@@ -226,6 +237,19 @@ def package_cmd(package, out):
         lines.append("|".join([gid] + [ascii_text(f) for f in info[gid]]))
     with open(os.path.join(out, "info.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
+    write_gsc(make("logo", FRAMEWORK), os.path.join(out, "oled", "framework_logo.gsc"))
+
+
+def framework_cmd(out):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from make_banner import FRAMEWORK_TEXT, cozette_text
+    text = cozette_text(FRAMEWORK_TEXT)
+    icon = Image.open(os.path.join(ROOT, "assets", "danik.png")).convert("RGBA")
+    x = (LOGO_W - text.width - FRAMEWORK_GAP - icon.width) // 2
+    image = Image.new("RGBA", (LOGO_W, LOGO_H), (0, 0, 0, 255))
+    image.paste(Image.new("RGBA", text.size, (255, 255, 255, 255)), (x, (LOGO_H - text.height) // 2), text)
+    image.alpha_composite(icon, (x + text.width + FRAMEWORK_GAP, (LOGO_H - icon.height) // 2))
+    save(levels(image.convert("L")), out)
 
 
 def font(size):
@@ -297,6 +321,8 @@ def main(argv):
         save(make(cmd, args[0], crop, stretch, margin), args[1])
     elif cmd == "gsc2png" and len(args) == 2:
         read_gsc(args[0]).save(args[1])
+    elif cmd == "framework" and len(args) == 1:
+        framework_cmd(args[0])
     elif cmd == "package" and len(args) == 2:
         package_cmd(args[0], args[1])
     elif cmd == "preview" and len(args) >= 2:

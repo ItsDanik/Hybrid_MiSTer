@@ -11,6 +11,7 @@ For every game of `package/games.txt`, in `games/dnk/<Engine>/` (`package.sh`, w
 | `oled/<id>_logo.gsc` | the game's logo, 256x64: the whole panel, shown when the game starts |
 | `oled/<id>_icon.gsc` | the game's icon, 86x64: beside its title and details |
 | `info.txt` | a line per game, `<id>\|<year>\|<developer>\|<description>`: `package/info.txt` in printable ASCII (accents dropped), which is all the display draws |
+| `oled/framework_logo.gsc` | the framework's banner, 256x64, the same in every port: shown while the core's list of games is up (below) |
 
 A `.gsc` is tty2oled's picture: three lines of header (`#define icon_width 256`, `#define icon_height 64`, `static unsigned char icon_bits[] = {`) and then one hex digit a pixel, row by row, 0 black to f full brightness. Only the `.gsc` files are shipped; the PNGs they are made from stay in the repository. A shareware or demo version has no line of `games.txt` and shows its full game's.
 
@@ -30,6 +31,8 @@ A `.gsc` is tty2oled's picture: three lines of header (`#define icon_width 256`,
 
 **Pictures that tty2oled+ shipped.** Before 2026-10-26 tty2oled+ had a banner and an icon of its own for Dethrace, ECWolf, jfSW and openscreamer (`pics/banner`, `pics/icon`). They are the logos and icons of CARMA, WL, SW and S1 now (`make_oled.py gsc2png`, nothing lost: a `.gsc` has the same 16 levels), and tty2oled+ no longer has them.
 
+**The framework's banner** (Danik, 2026-10-26) is `assets/oled_framework.png`: the badge as the framework's own banner has it (`tools/make_banner.py --framework`, OVERVIEW.md), "Hybrid Core Framework" over "by danik" in Cozette left of the icon `assets/danik.png`, centred on the panel. `make_oled.py framework <out.png>` draws it; the PNG Danik approved is the one kept, and `make_oled.py package` ships it in every port.
+
 ## Making them
 
 - **Before a game is packaged for the first time, ask Danik for its icon** (and a logo for the panel, if he wants one other than the one made from its logo), as PNGs of any size, or whether Claude should draft the icon. A draft is a single thing from the game's own art, bright on black, filling most of the 64 rows, readable at that size in grey, no words: a HUD face (B.J.'s, Max Damage), an emblem (Shadow Warrior's yin-yang, Quake's), a key monster or item. Pixel art is scaled by whole numbers. `make_oled.py icon <src.png> <out.png> [--crop x,y,w,h] [--margin n]` fits a picture into 86x64, two pixels off its edges, and reduces it to the levels. An add-on whose art is not its own takes its base game's icon (Twin Dragon and Wanton Destruction show Shadow Warrior's, The Reckoning and Ground Zero Quake II's).
@@ -44,6 +47,8 @@ Main_MiSTer writes the name of what was loaded to `/tmp/CORENAME`: the set name 
 2. `/tmp/CORENAME` as `<Engine>_<id>`, where `games/dnk/<Engine>/oled/<id>_logo.gsc` is there;
 3. `/tmp/CORENAME` as `<Engine>`, where `games/dnk/<Engine>/games.txt` has a single game: that one.
 
+While the core's list of games is up (a core started by itself with more than one game there), `MH_PickGame()` writes `/tmp/dnk_game` as `<Engine>|`, no game (`MH_GameList()`; a port with pick code of its own calls it before its list): tty2oled+ shows the port's `oled/framework_logo.gsc` and no details, until the game picked is written. A game quit back to the list (exit code 42) puts the banner up again. A game's menu entry never shows the list, so never the banner.
+
 The engine's folder is `/media/fat/games/dnk/<Engine>/` (the programs and these files stay on the SD card when the game's data is on a USB drive). The game's title is its line of `games.txt`; the rows shown are *Dev* (the developer), *Year*, *Port* (the engine) and *Author* (danik), and the description is the last page. A core started by itself whose list is up shows nothing of a game until one is picked; a port packaged before this has no `oled/` and shows the core's name as any core does.
 
-Cores built before 2026-10-26 do not write `/tmp/dnk_game`: their games show from a game's menu entry, and from the list only in a core with one game. They write it once built again.
+Cores built before 2026-10-26 do not write `/tmp/dnk_game`: their games show from a game's menu entry, and from the list only in a core with one game. They write it once built again. The list's `<Engine>|` came later the same day (`MH_GameList()`): a core built in between shows its games but not the banner, and after a game quit back to its list the display keeps that game until it is built again.

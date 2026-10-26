@@ -550,6 +550,11 @@ int MH_Overlay(int on);
 // naming them (MH_UI_Message() with MH_UI_WAIT) takes its place. MH_PickGame()
 // does it for a game's menu entry.
 void MH_GameLogoMissing(const char* id);
+// The core's list of games is up (MH_PickGame() calls it before the list, a
+// port with pick code of its own does the same): /tmp/dnk_game says
+// "<Engine>|", no game, and tty2oled+'s display shows the framework's banner
+// until a game is known (docs/oled.md)
+void MH_GameList(void);
 
 // Screens every hybrid core shares (mister_ui.c), drawn straight to the core;
 // they work before the game has set up anything.

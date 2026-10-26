@@ -158,6 +158,7 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
     if (n == 1 || !MH_IsOpen()) {
         return picked(games, found[0]);
     }
+    MH_GameList();
     pick = MH_UI_Menu(core, "Select a game:", names, n, 0);
     if (pick < 0 || pick >= n) {
         return -1;

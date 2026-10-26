@@ -1297,15 +1297,16 @@ static int logo_show(const char* id, const char* title, int first) {
 }
 
 // Which game runs, for tty2oled+'s display (docs/oled.md): /tmp/dnk_game,
-// "<Engine>|<id>", once the game is known. A game picked from the core's list,
-// or tried with tools/test_on_mister.sh, has a set name in /tmp/CORENAME that
-// does not say it. Never removed: the display takes it only while it is newer
-// than /tmp/CORENAME and names the engine loaded.
+// "<Engine>|<id>", once the game is known, and "<Engine>|" while the core's
+// list is up (id ""). A game picked from the core's list, or tried with
+// tools/test_on_mister.sh, has a set name in /tmp/CORENAME that does not say
+// it. Never removed: the display takes it only while it is newer than
+// /tmp/CORENAME and names the engine loaded.
 static void game_known(const char* id) {
     const char* core = MH_CoreName()[0] != 0 ? MH_CoreName() : getenv("MISTER_HYBRID_CORE");
     FILE* f;
 
-    if (core == NULL || core[0] == 0 || id == NULL || id[0] == 0) {
+    if (core == NULL || core[0] == 0 || id == NULL) {
         return;
     }
     f = fopen("/tmp/dnk_game.new", "w");
@@ -1315,6 +1316,10 @@ static void game_known(const char* id) {
             rename("/tmp/dnk_game.new", "/tmp/dnk_game");
         }
     }
+}
+
+void MH_GameList(void) {
+    game_known("");
 }
 
 static int game_logo(const char* id, const char* title, int first) {

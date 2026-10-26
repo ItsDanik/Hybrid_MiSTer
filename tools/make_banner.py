@@ -76,26 +76,31 @@ def cozette_text(lines):
     return mask
 
 
-if len(sys.argv) != 3:
-    sys.exit("usage: make_banner.py <logo.png> <out.png>\n       make_banner.py --framework <out.png>")
-framework = sys.argv[1] == "--framework"
-if framework:
-    logo_path, (logo_w, logo_h), top, gap = os.path.join(root, "assets", "MiSTer.png"), (MISTER_W, MISTER_H), MISTER_TOP, MISTER_GAP
-else:
-    logo_path, (logo_w, logo_h), top, gap = sys.argv[1], (LOGO_W, LOGO_H), MARGIN, STRIPE_GAP
-logo = Image.open(logo_path).convert("RGBA")
-if logo.size != (logo_w, logo_h):
-    sys.exit("%s is %dx%d, it has to be %dx%d" % ((logo_path,) + logo.size + (logo_w, logo_h)))
-icon = Image.open(os.path.join(root, "assets", "danik.png")).convert("RGBA")
-text = cozette_text(FRAMEWORK_TEXT if framework else TEXT)
+def main():
+    if len(sys.argv) != 3:
+        sys.exit("usage: make_banner.py <logo.png> <out.png>\n       make_banner.py --framework <out.png>")
+    framework = sys.argv[1] == "--framework"
+    if framework:
+        logo_path, (logo_w, logo_h), top, gap = os.path.join(root, "assets", "MiSTer.png"), (MISTER_W, MISTER_H), MISTER_TOP, MISTER_GAP
+    else:
+        logo_path, (logo_w, logo_h), top, gap = sys.argv[1], (LOGO_W, LOGO_H), MARGIN, STRIPE_GAP
+    logo = Image.open(logo_path).convert("RGBA")
+    if logo.size != (logo_w, logo_h):
+        sys.exit("%s is %dx%d, it has to be %dx%d" % ((logo_path,) + logo.size + (logo_w, logo_h)))
+    icon = Image.open(os.path.join(root, "assets", "danik.png")).convert("RGBA")
+    text = cozette_text(FRAMEWORK_TEXT if framework else TEXT)
 
-BANNER_H = top + logo_h + gap + icon.height + MARGIN
-banner = Image.new("RGBA", (BANNER_W, BANNER_H), BACKGROUND + (255,))
-banner.alpha_composite(logo, ((BANNER_W - logo_w) // 2, top))
-icon_x, icon_y = BANNER_W - MARGIN - icon.width, top + logo_h + gap
-banner.alpha_composite(icon, (icon_x, icon_y))
-text_x = icon_x - GAP - text.width
-banner.paste(Image.new("RGBA", text.size, INK + (255,)), (text_x, icon_y + (icon.height - text.height) // 2), text)
-banner = banner.convert("RGB").resize((BANNER_W * SCALE, BANNER_H * SCALE), Image.NEAREST)
-banner.save(sys.argv[2], optimize=True)
-print("%s -> %s, %dx%d" % (logo_path, sys.argv[2], banner.width, banner.height))
+    BANNER_H = top + logo_h + gap + icon.height + MARGIN
+    banner = Image.new("RGBA", (BANNER_W, BANNER_H), BACKGROUND + (255,))
+    banner.alpha_composite(logo, ((BANNER_W - logo_w) // 2, top))
+    icon_x, icon_y = BANNER_W - MARGIN - icon.width, top + logo_h + gap
+    banner.alpha_composite(icon, (icon_x, icon_y))
+    text_x = icon_x - GAP - text.width
+    banner.paste(Image.new("RGBA", text.size, INK + (255,)), (text_x, icon_y + (icon.height - text.height) // 2), text)
+    banner = banner.convert("RGB").resize((BANNER_W * SCALE, BANNER_H * SCALE), Image.NEAREST)
+    banner.save(sys.argv[2], optimize=True)
+    print("%s -> %s, %dx%d" % (logo_path, sys.argv[2], banner.width, banner.height))
+
+
+if __name__ == "__main__":
+    main()
