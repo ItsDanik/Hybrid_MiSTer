@@ -20,10 +20,20 @@ static const char *const TITLE = "@NAME@";
 // ahead and the library shows it at its own field (MH_PresentAtField()), so
 // that one a little slower than a field is still in time, for one field more
 // latency. Decide by benchmark, hybrid/CLAUDE.md ("Frame pacing").
+// A game whose frames are late in some modes only switches it as it goes,
+// MiSTer_SetDrawAhead().
 #define DRAW_AHEAD 0
 
-static uint32_t LastField; // with DRAW_AHEAD the field the last frame is shown at
+static int DrawAhead = DRAW_AHEAD;
+static uint32_t LastField; // with DrawAhead the field the last frame is shown at
 static int FieldValid = 0;
+
+void MiSTer_SetDrawAhead(int on)
+{
+    if (!on && DrawAhead)
+        MH_PresentAtField(0); // frames shown as soon as they come again
+    DrawAhead = on != 0;
+}
 
 void MiSTer_ResetFrames(void)
 {
@@ -41,7 +51,7 @@ unsigned MiSTer_WaitFrame(void)
         LastField = MH_FieldCounter();
         FieldValid = 1;
     }
-    if (DRAW_AHEAD && !MH_Interlaced()) {
+    if (DrawAhead && !MH_Interlaced()) {
         uint32_t target = LastField + 1;
 
         MH_WaitField(target - 3); // not before the field two before its own

@@ -42,6 +42,9 @@ enum {
 unsigned MiSTer_WaitFrame(void);
 // The next call starts counting anew, after the game stood still (loading)
 void MiSTer_ResetFrames(void);
+// Draw a field ahead (1) or not (0), from the next frame on; DRAW_AHEAD in
+// mister_port.c is where it starts (hybrid/CLAUDE.md, "Frame pacing").
+void MiSTer_SetDrawAhead(int on);
 
 // HUD margins (hybrid/README.md, "HUD margins"): where the HUD goes on a
 // screen of `height` lines (240, or 480: the margins are doubled), as the
