@@ -128,6 +128,7 @@
 - A port with several games (episodes, expansions) has a menu entry for each; loaded by itself, the core lists the games it finds.
 - Missing files are said on screen: which files, for which game and where they go.
 - Game files can be on the SD card or on a USB drive.
+- [tty2oled+](https://github.com/ItsDanik/MiSTer-tty2oled-plus) OLED display: each game's logo, then its details, description and icon, also for a game picked from a port's list; the Hybrid Core Framework's banner while the list is up.
 - *Save Diagnostic Report* in the OSD: if something is wrong, it saves the last 60 seconds of what the game did, to attach to a bug report. Nothing in it identifies you or your network.
 
 ### Installing and updating
