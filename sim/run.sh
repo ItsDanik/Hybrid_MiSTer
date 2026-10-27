@@ -14,7 +14,7 @@ docker image inspect mister-hybrid-sim > /dev/null 2>&1 || docker build -t miste
 # testbench alone, built with those defines and run with those plusargs (see
 # tb_host.sv): -DNO_INTRO (a frontend's core without the intro, a few
 # minutes), +introonly (the intro and the handover after it), -DNO_SYNTH
-# +trigonly, +mt32only.
+# +trigonly, +mt32only, +fieldrate (host version 18: field rate alone).
 if [ "$1" = host ]; then
   shift
   DEFS= ARGS=

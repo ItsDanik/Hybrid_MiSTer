@@ -20,7 +20,8 @@
                              have one screen in 8 bit and another in RGB565.
     SDL_MISTER_VSYNC         "1": SDL_UpdateWindowSurface() shows at most one
                              frame per video field (59.6Hz), per two
-                             fields with an interlaced mode
+                             fields with an interlaced mode (one with
+                             MH_SetFieldRate(), host version 18)
     SDL_MISTER_DIRECT        "1": the window surface is the library's buffer
                              of the next frame (MH_FrameBuffer()), not a
                              copy of it: one copy of a frame less. Its

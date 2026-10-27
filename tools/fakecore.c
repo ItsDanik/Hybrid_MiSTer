@@ -31,7 +31,14 @@
 // it at once, nothing fades. Each step is printed with its field. w2[58]
 // takes the overlay out as the core does (its fade-in backwards, status bit 30
 // once out) until it is cleared; the framebuffers it shows are printed.
-// FAKECORE_VERSION=<n> is a core of host version n (17 by default).
+// FAKECORE_VERSION=<n> is a core of host version n (18 by default).
+//
+// FAKECORE_LACE=1: 640x400 and 640x480 are interlaced, as on a 15kHz screen
+// (not with the script's vga31 1): status bit 9, the field flipping (bit 11,
+// 1 after the field with the even rows), and a new frame taken only in the
+// vblank after the field with the odd rows, unless the program asks for
+// field rate (w2[60], host version 18: then at every field, status bit 31).
+// The picture itself stays whole, as the shots show it.
 //
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
@@ -93,7 +100,8 @@ static uint32_t field;
 static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
 static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown, osd_open;
-static int version = 17;
+static int version = 18;
+static int lace_on, lace_field, lace_field_shown, lace, field_rate;
 static int ovl_on, ovl_t, ovl_fade, game_on, game_fb = -1, ovl_shown = -1, ovl_gone, ovl_prints;
 static uint32_t audio_fetch;
 static uint64_t audio_frac;
@@ -329,7 +337,12 @@ static void tick(void) {
         // no game: the core's own picture, 640x480
         fb_mode = 4;
     } else {
-        fb_index = (c1 & 0xff) > 2 ? 0 : (c1 & 3);
+        // interlaced, both fields are of the same frame: a new one is taken
+        // after the field with the odd rows, or at every field with field rate
+        field_rate = lace && version >= 18 && ((c5 >> 28) & 1);
+        if (!(lace && lace_field && !field_rate)) {
+            fb_index = (c1 & 0xff) > 2 ? 0 : (c1 & 3);
+        }
         fb_format = (c1 >> 8) & 1;
         fb_mode = (c1 >> 12) & 15;
         // a mode the core does not have (5 and 6 were 800x600 and 1024x768
@@ -374,11 +387,22 @@ static void tick(void) {
         }
     }
     field++;
+    // the field just shown, and the next one's kind
+    {
+        int was = lace_field;
+
+        lace = lace_on && !vga31 && (fb_mode == 2 || fb_mode == 4);
+        if (!lace) {
+            field_rate = 0;
+        }
+        lace_field = lace && !was;
+        lace_field_shown = lace && was;
+    }
     // the game has the screen (bit 19): at once, after an overlay once the
     // picture has gone out
-    status[2] = fb_index | (fb_format << 8) | (ctrl_valid << 10) | (fb_mode << 12) | (1 << 17)
+    status[2] = fb_index | (fb_format << 8) | (lace << 9) | (ctrl_valid << 10) | ((unsigned)lace_field_shown << 11) | (fb_mode << 12) | (1 << 17)
         | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (game_on << 19) | ((msg_shown && !game_on) << 20) | (osd_open << 22)
-        | (mt32 << 23) | ((mt32_reports & 15) << 24) | ((unsigned)synth << 28) | (ovl_on << 29) | ((unsigned)ovl_gone << 30);
+        | (mt32 << 23) | ((mt32_reports & 15) << 24) | ((unsigned)synth << 28) | (ovl_on << 29) | ((unsigned)ovl_gone << 30) | ((unsigned)field_rate << 31);
     status[3] = version;
     status[15] = fm_fetch;
     // the MIDI synthesizer: commands read, voices playing and which, at the
@@ -478,6 +502,7 @@ int main(int argc, char** argv) {
     }
     mt32 = getenv("FAKECORE_MT32") != NULL && atoi(getenv("FAKECORE_MT32")) != 0;
     synth = getenv("FAKECORE_SYNTH") == NULL || atoi(getenv("FAKECORE_SYNTH")) != 0;
+    lace_on = getenv("FAKECORE_LACE") != NULL && atoi(getenv("FAKECORE_LACE")) != 0;
     if (getenv("FAKECORE_VERSION")) {
         version = atoi(getenv("FAKECORE_VERSION"));
     }

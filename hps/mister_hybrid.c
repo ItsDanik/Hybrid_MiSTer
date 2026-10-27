@@ -62,9 +62,12 @@
 #define STATUS_SYNTH (1u << 28) // the MIDI synthesizer is in the core (host version 16)
 #define STATUS_OVL (1u << 29)   // the overlay's handover has begun (host version 17)
 #define STATUS_OVL_OUT (1u << 30) // the overlay is out, as w2[58] asked (host version 17)
+// interlaced, the core takes a frame at every field, as w2[60] asked (host version 18)
+#define STATUS_FIELD_RATE (1u << 31)
 #define CTRL_OVL (1u << 26)     // w0[58] in ctrl[1]: the overlay (host version 17)
 #define CTRL_OVL_OUT (1u << 26) // w2[58] in ctrl[5]: the overlay goes out, and stays out
 #define CTRL_OVL_RISE (1u << 27) // w2[59] in ctrl[5]: it rises in and sinks out (the logo)
+#define CTRL_FIELD_RATE (1u << 28) // w2[60] in ctrl[5]: interlaced, a frame at every field (host version 18)
 
 static const struct {
     short width, height;
@@ -209,6 +212,16 @@ static void midi_off(void);
 static void midi_close(void);
 static void midi_service(void);
 
+// MH_SetFieldRate()
+static int field_rate;
+
+// Interlaced, the core takes a frame every second field: in the vblank after
+// the field with the odd rows. With field rate (host version 18) at every one,
+// as in a progressive mode.
+static int frame_pairs(uint32_t state) {
+    return (state & STATUS_LACE) && !(state & STATUS_FIELD_RATE);
+}
+
 static void write_ctrl(void) {
     int ovl = logo.on && logo.asked;
 
@@ -221,7 +234,7 @@ static void write_ctrl(void) {
     ctrl[5] = (uint32_t)(midi_volume * midi_fade / 32) | ((uint32_t)(midi_enabled && audio_enabled) << 7)
         | ((uint32_t)info_n << 8) | ((uint32_t)(info_seq & 0xff) << 16)
         | ((uint32_t)(midi_program_dest != MH_MIDI_OSD) << 24) | ((uint32_t)(midi_program_dest == MH_MIDI_PI) << 25)
-        | (logo.out ? CTRL_OVL_OUT : 0) | (ovl ? CTRL_OVL_RISE : 0);
+        | (logo.out ? CTRL_OVL_OUT : 0) | (ovl ? CTRL_OVL_RISE : 0) | (field_rate ? CTRL_FIELD_RATE : 0);
     // the overlay is 640x480 at 8bpp; given up, the picture goes out with
     // it in the game's mode, still read at 8bpp. The logo rises into place
     // (ctrl[5] above), and goes out for a program's own page.
@@ -724,8 +737,8 @@ static void pace_flip(uint32_t field) {
     static int diag_started;
     static unsigned frames, same, next, later;
     static double latest;
-    // interlaced, the core takes a frame every second field
-    uint32_t step = (status[2] & STATUS_LACE) ? 2 : 1;
+    // interlaced, the core takes a frame every second field, but with field rate
+    uint32_t step = frame_pairs(status[2]) ? 2 : 1;
     uint32_t late_us = 0;
     struct timespec now;
 
@@ -752,10 +765,11 @@ static void pace_flip(uint32_t field) {
     if (!pace_on) {
         return;
     }
+    // by the core's frames: interlaced without field rate two fields
     if (frames || last) {
-        if (field == last) {
+        if (field - last < step) {
             same++;
-        } else if (field - last == 1) {
+        } else if (field - last == step) {
             next++;
         } else {
             later++;
@@ -766,8 +780,8 @@ static void pace_flip(uint32_t field) {
         latest = late_us * 1e-3;
     }
     if (++frames == 300) {
-        fprintf(stderr, "mister: 300 frames to the core: in the same field as the one before %u, the next %u, later %u; "
-                "at most %.1fms into a field\n", same, next, later, latest);
+        fprintf(stderr, "mister: 300 frames to the core: in the same %s as the one before %u, the next %u, later %u; "
+                "at most %.1fms into a field\n", step == 2 ? "frame (two fields)" : "field", same, next, later, latest);
         frames = same = next = later = 0;
         latest = 0;
     }
@@ -801,8 +815,8 @@ static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
     // MH_PresentAtField(): the core takes the newest frame at every vblank, so
     // this one is handed over in the field before its own, not earlier (the
     // frame before it would never be shown). Interlaced, frames are taken at
-    // every second vblank: at once.
-    if (at != 0 && !(status[2] & STATUS_LACE)) {
+    // every second vblank (but with field rate): at once.
+    if (at != 0 && !frame_pairs(status[2])) {
         for (i = 0; i < 100 && MH_IsOpen() && (int32_t)(status[1] - (at - 1)) < 0; i++) {
             sleep_ms(1);
         }
@@ -1649,6 +1663,19 @@ int MH_Interlaced(void) {
     return MH_IsOpen() && (status[2] & STATUS_LACE) != 0;
 }
 
+void MH_SetFieldRate(int on) {
+    on = on != 0;
+    if (!MH_IsOpen() || status[3] < 18 || on == field_rate) {
+        return;
+    }
+    field_rate = on;
+    write_ctrl();
+}
+
+int MH_FieldRate(void) {
+    return MH_IsOpen() && (status[2] & STATUS_FIELD_RATE) != 0;
+}
+
 uint32_t MH_FieldCounter(void) {
     if (!MH_IsOpen()) {
         return 0;
@@ -1675,9 +1702,10 @@ int MH_FrameTaken(uint32_t field) {
     if ((int32_t)(status[1] - field) <= 0) {
         return 0;
     }
-    // interlaced, the core takes a frame in the vblank after the field with the odd rows
+    // interlaced, the core takes a frame in the vblank after the field with
+    // the odd rows, with field rate in every vblank
     state = status[2];
-    return !(state & STATUS_LACE) || !(state & STATUS_FIELD_EVEN);
+    return !frame_pairs(state) || !(state & STATUS_FIELD_EVEN);
 }
 
 void MH_WaitFrame(uint32_t field) {

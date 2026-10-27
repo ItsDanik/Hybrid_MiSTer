@@ -44,7 +44,8 @@ extern "C" {
 // them interlaced at 15kHz: a frame is on the screen for two fields, its even
 // rows in the first and its odd rows in the second (29.8 frames per second;
 // fine horizontal lines flicker on a CRT, the HDMI scaler weaves the fields
-// into a steady picture). They are progressive at 31kHz instead where the
+// into a steady picture). A menu may ask for a frame at every field instead
+// (MH_SetFieldRate(), host version 18). They are progressive at 31kHz instead where the
 // player says that no 15kHz screen is there to get it: the analog output is a
 // VGA monitor (forced_scandoubler=1 in MiSTer.ini) or is not used at all (the
 // OSD option "HDMI Only", which switches it off while such a mode is shown).
@@ -172,7 +173,7 @@ uint32_t MH_FieldCounter(void);
 void MH_WaitField(uint32_t field);
 // 1 once the core has taken the frame presented at field counter `field`: at
 // the next vblank, with 640x400 interlaced the one after both fields of the
-// frame before were shown. That is the moment to start drawing the next
+// frame before were shown (the next with MH_SetFieldRate()). That is the moment to start drawing the next
 // frame; a game that presents more often loses frames.
 int MH_FrameTaken(uint32_t field);
 // Sleep until MH_FrameTaken(field)
@@ -182,14 +183,26 @@ void MH_WaitFrame(uint32_t field);
 // For drawing a frame ahead, so that one that takes a little longer than a
 // field is still shown in time: start a frame for field F once the counter
 // is F - 2, and present it with MH_PresentAtField(F). The game's time steps
-// from one F to the next. Not with an interlaced mode (MH_Interlaced()):
-// there frames are shown at once. Without it, or with 0, as soon as possible.
+// from one F to the next. Not with an interlaced mode (MH_Interlaced()) but
+// at field rate (MH_FieldRate()): there frames are shown at once. Without it, or with 0, as soon as possible.
 // MISTER_HYBRID_AHEAD=0 in the game's environment makes it do nothing: the
 // frame drawn from F - 2 is shown at F - 1, as without drawing ahead, which
 // is how to compare the two (hybrid/CLAUDE.md).
 void MH_PresentAtField(uint32_t field);
 // 1 while the mode is shown interlaced (640x400 and 640x480 on a 15kHz screen)
 int MH_Interlaced(void);
+// Field rate (host version 18): with 1, an interlaced mode takes a new frame
+// at every field, not every second one, each field showing its rows of the
+// newest frame. 59.6 pictures a second on a CRT, smoother than 29.8; the HDMI
+// scaler weaves two fields of different moments, and what moves combs (the
+// player switches on HDMI Only, which makes the mode progressive). For the
+// launchers' menus (Danik, 2026-10-27), not for games. Nothing with a core of
+// an older host version, or in a progressive mode, which takes a frame at
+// every field anyway. MH_FrameTaken(), MH_WaitFrame(), MH_PresentAtField(),
+// the SDL driver's SDL_MISTER_VSYNC and MISTER_HYBRID_PACE follow it.
+void MH_SetFieldRate(int on);
+// 1 while the mode is interlaced and the core takes a frame at every field
+int MH_FieldRate(void);
 // Bits 0..3 that hide or grey out lines of the core's OSD ("H0", "D1", ... in
 // its CONF_STR): for options the game cannot honour with the data it has
 void MH_SetMenuMask(int mask);

@@ -429,12 +429,13 @@ static const char* music_name(int m) {
 }
 
 static const char* mode_name(uint32_t status2) {
-    static char name[32];
+    static char name[48];
     static const short modes[16][2] = { { 320, 200 }, { 640, 200 }, { 640, 400 }, { 320, 240 }, { 640, 480 },
         { 800, 600 }, { 1024, 768 }, { 640, 240 } };
     int m = (status2 >> 12) & 15;
 
-    snprintf(name, sizeof name, "%dx%d%s %s", modes[m][0], modes[m][1], status2 & (1u << 9) ? "i" : "",
+    snprintf(name, sizeof name, "%dx%d%s %s", modes[m][0], modes[m][1],
+        status2 & (1u << 9) ? (status2 & (1u << 31) ? "i at field rate" : "i") : "",
         status2 & (1u << 18) ? "31kHz" : "15kHz");
     return name;
 }
@@ -1052,7 +1053,8 @@ static int write_report(void) {
         bprintf(&summary, "- test settings in the environment (setup.txt)\n");
     }
     if (n > 0 && (snap[SLOTS - 1].c.status2 & (1u << 9))) {
-        bprintf(&summary, "- an interlaced mode: a frame every second field\n");
+        bprintf(&summary, (snap[SLOTS - 1].c.status2 & (1u << 31)) ? "- an interlaced mode at field rate: a frame every field\n"
+                                                                   : "- an interlaced mode: a frame every second field\n");
     }
     if (n < SLOTS) {
         bprintf(&summary, "- the game ran only %d seconds before the report\n", n);

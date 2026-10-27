@@ -93,7 +93,7 @@ Nothing else, and in this order. *Word for word* means the same text in every po
 9. **`## OSD options`**, a table `| Option | |`, in the order of the OSD:
    - `| Aspect ratio, Scale, Scandoubler Fx, Stereo Mix | as in other cores |`
    - `| FPS Counter | shows the pictures per second in the top left corner |`
-   - *HDMI Only*: what it does in this port (a port without 640x400 or more says nothing changes)
+   - *HDMI Only*: what it does in this port (a port without 640x400 or more says nothing changes in the game), and, word for word as `template/README.md` has it, that the core's own screen is progressive with it too and combs on HDMI without it: from host version 18 it moves at every field for a CRT (Danik, 2026-10-27; a port takes the line at its v18 build)
    - *CRT Options*, the game's options, *Cheats*, then `| Save Diagnostic Report | the last line: see [If something is wrong](#if-something-is-wrong) |`
 
    **An option with several settings or values** (*CRT Options*, *Resolution*, *FM Music*, *Cheats*) has a line for each, `**<Name>**: <a few words>`, `<br>` between them, the default marked `(default)`, no full stop; then, if it needs one, `<br><br>` and a short explanation of a sentence or two. A one-liner is a few words: "**Give Weapons/Ammo/Keys**: every weapon, full ammo and both keys", not when or how often it applies. *CRT Options*, its lines as the OSD has them:

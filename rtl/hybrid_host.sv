@@ -76,10 +76,17 @@
 //                  [59]    the overlay rises 16 pixels into place as it
 //                          comes in, and sinks as it goes out (the game's
 //                          logo); without it, it only fades
-//                  [63:60] 0
+//                  [60]    field rate (host version 18): interlaced, a new
+//                          frame is taken at every field, not only after
+//                          the field with the odd rows. Each field shows its
+//                          rows of the newest frame: 59.6 pictures a second
+//                          on a CRT, where the HDMI scaler's weave combs what
+//                          moves (for a menu, docs/field_rate_prompt.md).
+//                          Status word 1 bit 31 says it is taken so
+//                  [63:61] 0
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
-//              w1  {version, 2'b0, overlay, synth, reports[3:0], mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
+//              w1  {version, field rate, overlay out, overlay, synth, reports[3:0], mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
 //                   field, ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
 //                   lace: the mode is shown interlaced.
 //                   field: the field that was on the screen had the even
@@ -109,6 +116,9 @@
 //                   bit 29: the overlay is shown (host version 17): its
 //                   handover has begun. bit 30: it is out, as w2[58] asked
 //                   (its level 0).
+//                   bit 31: field rate (host version 18): the mode is
+//                   interlaced and a new frame is taken at every field, as
+//                   w2[60] asked; 0 otherwise, and in every older core.
 //                   running: 0 while the video output is off for a change
 //                   of the video clock.
 //                   fast: the mode is shown at 31kHz or more.
@@ -117,7 +127,8 @@
 //                   became 1: to the end of its intro (4.1 seconds from the
 //                   intro's start at most), then 0.7 seconds of fading out
 //                   (the mode is 640x480 until then). With INTRO 0 at the
-//                   next frame (one field, two interlaced).
+//                   next frame (one field, two interlaced without field
+//                   rate).
 //              w2  {joystick_1, joystick_0}
 //              w3  {r_analog_1, l_analog_1, r_analog_0, l_analog_0}
 //              w4  OSD status[63:0], but bits 59..56: a trigger's toggle
@@ -304,7 +315,7 @@ module hybrid_host
 localparam [31:0] CTRL_MAGIC   = 32'h4259484D; // "MHYB"
 localparam [31:0] STATUS_MAGIC = 32'h5359484D; // "MHYS"
 // the picture without a game has the version in it: run tools/make_wall.py
-localparam [31:0] VERSION      = 32'd17;
+localparam [31:0] VERSION      = 32'd18;
 
 localparam [28:0] BASE       = 29'h06000000;   // 0x30000000 >> 3
 localparam [28:0] CTRL_ADDR  = BASE;
@@ -361,6 +372,7 @@ assign ddr_be = 8'hFF;
 // taken when the next field starts.
 
 reg        game_on = 0;       // the game has the screen
+reg        fr_on = 0;         // field rate: interlaced, a frame taken at every field (w2[60])
 reg  [3:0] vmode = 4'd4;      // the mode the HPS asks for; 640x480 until the game has the screen
 
 wire       m_dual = (vmode == 4'd2) || (vmode == 4'd4);
@@ -648,9 +660,11 @@ always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
 // once. Then everything goes back to black in 43 fields, 0.7 seconds
 // (wall_level, the master level, 256..0 in steps of 6), and only then the
 // game gets the screen (game_on) and its video mode is set.
-// What moves changes when a field starts, or interlaced when a frame starts:
-// both fields of a frame are of the same picture (the HDMI scaler weaves
-// them together).
+// What moves changes when a field starts, interlaced as well (host version
+// 18; up to 17 when a frame started, both fields of a frame the same picture
+// for the HDMI scaler's weave): a CRT shows the moves at 59.6 pictures a
+// second, and on HDMI without HDMI Only they comb, as Danik accepted
+// (2026-10-27).
 // The colours are not multiplied on their way to the output: the 32 of the
 // pictures, the background and the lit dot are worked out for the levels of
 // the field in the vblank, on clk, and hold still while the video side reads
@@ -684,7 +698,8 @@ always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
 // intro: the levels, places and dots as at intro field 242, the dots going
 // round), and a program that attaches has the screen at the next frame
 // (game_take: the field after the vblank that read its control block, or the
-// one after that when that vblank was between the two fields of a frame),
+// one after that when that vblank was between the two fields of a frame and
+// the program has no field rate, w2[60]),
 // in its own mode, without the picture going out: a cut. The frontend's first
 // frames are the same picture, so nothing is seen to change. Everything else
 // is as with INTRO 1: messages, the overlay (its handover begins at once), the
@@ -795,7 +810,6 @@ reg  [8:0] intro_t = INTRO ? 9'd0 : 9'd0 + WALL_T_END;   // its fields, up to 51
 reg  [5:0] dot_t = 0;         // fields since the dots began, round and round
 wire       intro_done = intro_t >= WALL_T_END;
 reg        fade_start = 0;    // a field's levels to work out (set in the vblank)
-reg        anim_frame = INTRO == 0;   // and what moves as well: a frame starts
 reg [23:0] wall_bg = 0;       // the background, as shown
 reg [23:0] dot_lit = 0;       // a lit dot, as shown
 reg [23:0] msg_ink = 0;       // the text of a message, as shown
@@ -836,7 +850,7 @@ function [8:0] progress(input [8:0] t, input integer t0, input integer d);
 	end
 endfunction
 
-// The levels and places of this field (or frame), and from them the colours.
+// The levels and places of this field, and from them the colours.
 // One step per clock after the vblank asked for it (fade_start): first the
 // progress of each part and its place on the curve (one table, so one part
 // at a time), then the 32 colours and the message's 3, each mixed from the
@@ -888,7 +902,7 @@ always @(posedge clk) begin
 		7'd3: e_icon  <= ease_q;
 		7'd4: e_text  <= ease_q;
 		7'd5: e_ovl   <= ease_q;
-		7'd6: if (anim_frame) begin
+		7'd6: begin
 			lv_bg      <= progress(intro_t, WALL_T_BG, WALL_D_BG);
 			lv_logo    <= p_logo;
 			lv_text    <= p_text;
@@ -921,11 +935,6 @@ always @(posedge clk) begin
 		pal_n    <= seq_n;
 		put_kind <= (wall_seq <= 7'd40) ? 2'd0 : wall_seq[1:0];   // 41, 42, 43: 1, 2, 3
 		pal_put  <= 1;
-	end
-	// a program that left takes its overlay along at once, not at the next frame
-	if (wall_seq == 7'd6 && !ovl_on) begin
-		lv_ovl  <= 0;
-		ovl_vis <= 0;
 	end
 	if (pal_put) begin
 		case (put_kind)
@@ -1593,19 +1602,24 @@ wire [28:0] row_addr = fb_addr + fetch_row * row_len;
 
 // the game gets the screen once the core's picture has faded out; one that
 // asks for the overlay never does. INTRO 0: at once, when a frame starts
-// (interlaced, both fields of a frame are of the same picture)
+// (interlaced, both fields of a frame are of the same picture, but with
+// field rate)
 wire       ctrl_magic = (ctrl_w0[31:0] == CTRL_MAGIC);
+wire       field_rate = ctrl_magic && ctrl_w2[60];
+// interlaced, the field with the even rows was shown: the frame's second
+// field comes next, of the same frame unless the program has field rate
+wire       lace_hold  = u_lace && run && vbl_field && !field_rate;
 wire       ovl_want   = ctrl_magic && ctrl_w0[58];
 assign     ovl_out_req = ctrl_magic && ctrl_w2[58];
 assign     ovl_rise    = ctrl_w2[59];
-wire       game_take  = ctrl_magic && !ovl_want && (game_on || wall_level == 0 || (INTRO == 0 && !(u_lace && run && vbl_field)));
+wire       game_take  = ctrl_magic && !ovl_want && (game_on || wall_level == 0 || (INTRO == 0 && !lace_hold));
 wire [9:0] pal_want   = !ovl_on ? 10'd256 : (wall_level != 9'd256) ? {1'b1, wall_level} : {1'b0, lv_ovl};
 
 reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, 1'b0, ovl_on && ovl_out_req && ovl_t == OVL_T_IN, ovl_on, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, fr_on, ovl_on && ovl_out_req && ovl_t == OVL_T_IN, ovl_on, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:17], diag_toggle, osd_status[15:0]};
@@ -1888,10 +1902,12 @@ always @(posedge clk) begin
 				end
 				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
 				game_on  <= game_take;
+				fr_on    <= u_lace && field_rate;
 				if (ctrl_magic) begin
 					// interlaced, both fields are of the same frame: a new one
-					// is taken when the field with the odd rows has been shown
-					if (!(u_lace && run && vbl_field))
+					// is taken when the field with the odd rows has been shown,
+					// or at every field with field rate
+					if (!lace_hold)
 						fb_index <= (ctrl_w0[39:32] > 8'd2) ? 2'd0 : ctrl_w0[33:32];
 					fmt16    <= ctrl_w0[40];
 				end
@@ -1914,7 +1930,6 @@ always @(posedge clk) begin
 				end
 				if (!game_take) begin
 					fade_start <= 1;
-					anim_frame <= !(u_lace && run && vbl_field);
 					if (ctrl_magic && !ovl_want && (!intro_on || intro_done)) begin
 						// INTRO 0: no going out, the game has the screen at the next frame
 						if (INTRO != 0) wall_level <= (wall_level < WALL_STEP) ? 9'd0 : wall_level - WALL_STEP;
@@ -1972,10 +1987,8 @@ always @(posedge clk) begin
 					ovl_fb   <= fb_index;
 				end
 				else if (ovl_left && (!game_take || fb_index != ovl_fb)) ovl_left <= 0;
-				// a level of the overlay's when a frame starts: interlaced, both
-				// fields of a frame are of the same picture
-				if (ctrl_magic && (!pal_loaded || ctrl_w1[31:0] != pal_seq
-				                   || (pal_want != pal_lv && !(u_lace && run && vbl_field)))) begin
+				// a level of the overlay's at every field, as the picture's
+				if (ctrl_magic && (!pal_loaded || ctrl_w1[31:0] != pal_seq || pal_want != pal_lv)) begin
 					pal_loaded   <= 1;
 					pal_seq      <= ctrl_w1[31:0];
 					pal_lv       <= pal_want;
@@ -2057,7 +2070,6 @@ always @(posedge clk) begin
 		wall_level <= INTRO ? 9'd0 : 9'd256;
 		intro_on   <= INTRO == 0;
 		intro_skip <= INTRO == 0;
-		if (INTRO == 0) anim_frame <= 1;
 		ovl_on     <= 0;
 		msg_keep   <= 0;
 		ovl_left   <= 0;

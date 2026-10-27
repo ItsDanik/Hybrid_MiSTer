@@ -50,7 +50,7 @@ SEL_INK = (0x36, 0x0C, 0x4A)
 GOLD = (0xFF, 0xD1, 0x66)       # a favourite's star
 CYAN = (0x7A, 0xDB, 0xEC)       # ports, years, the version
 CORAL = (0xFF, 0x7A, 0x63)      # no data
-VERSION = 17                    # of hybrid_host.sv, in the badge
+VERSION = 18                    # of hybrid_host.sv, in the badge
 
 
 def rgb(h):
@@ -201,9 +201,10 @@ class Canvas:
         ImageDraw.Draw(layer).text(xy, s, font=font, fill=colour + (255,), anchor=anchor)
         self.over(layer)
 
-    def bar(self, box, radius=0):
+    def bar(self, box, radius=0, panel=None):
         """The cursor's bar: PINK to PEACH, square (Danik, 2026-10-27), across
-        the panel's inside from rim to rim, the scroll bar over it"""
+        the panel's inside from rim to rim, the scroll bar over it; within the
+        panel (its box) round at its corners as the rim is"""
         x0, y0, x1, y1 = box
         grad = Image.new("RGBA", (x1 - x0, y1 - y0))
         gd = ImageDraw.Draw(grad)
@@ -214,7 +215,7 @@ class Canvas:
         ImageDraw.Draw(mask).rounded_rectangle((0, 0, grad.width - 1, grad.height - 1), radius, fill=255)
         layer = self.layer()
         layer.paste(grad, (x0, y0), mask)
-        self.over(layer)
+        self.over(clip_to_panel(layer, panel) if panel else layer)
 
     def pill(self, xy, s, font, ground, ink, anchor_right=False, pad=6, h=None):
         w = round(font.getlength(s)) + 2 * pad
@@ -454,6 +455,41 @@ def clip_to(layer, box):
     return out
 
 
+def clip_to_panel(layer, box, radius=10):
+    """What is drawn in a panel kept to its inside, within its rim: round at
+    the corners as the rim is (the bar and the scroll bar; Danik, 2026-10-27)"""
+    x0, y0, x1, y1 = box
+    mask = Image.new("L", layer.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), radius - 1, fill=255)
+    out = layer.copy()
+    out.putalpha(ImageChops.multiply(out.getchannel("A"), mask))
+    return out
+
+
+def scroll_bar(box, n, n_total, first):
+    """The scroll bar of a list of n_total in a panel (its box) showing n from
+    row `first` (a fraction while it moves): at its right, within its rim from
+    top to bottom, round at the corners as the panel is (Danik, 2026-10-27);
+    the knob's ends round, their outer pixels left out. A layer, laid over the
+    cursor's bar"""
+    out = blank()
+    if n_total <= n:
+        return out
+    x0, y0, x1, y1 = box
+    sh = y1 - y0 - 1
+    knob = max(16, sh * n // n_total)
+    k0 = y0 + 1 + round((sh - knob) * first / (n_total - n))
+    k1 = k0 + knob - 1
+    ImageDraw.Draw(out).rectangle((x1 - 4, y0 + 1, x1 - 1, y1 - 1), fill=EDGE + (60,))
+    k = blank()
+    d = ImageDraw.Draw(k)
+    d.rectangle((x1 - 4, k0 + 1, x1 - 1, k1 - 1), fill=EDGE + (230,))
+    d.rectangle((x1 - 3, k0, x1 - 2, k0), fill=EDGE + (230,))
+    d.rectangle((x1 - 3, k1, x1 - 2, k1), fill=EDGE + (230,))
+    out.alpha_composite(k)
+    return clip_to_panel(out, box)
+
+
 def ease_out(t):
     t = min(1.0, max(0.0, t))
     return 1 - (1 - t) ** 3
@@ -684,15 +720,8 @@ def layer_rows(strips, n_total, scroll, bar, dx=0.0):
     out = blank()
     out.paste(view, (x0 + round(dx), LIST_Y[0] + LIST_PAD))
     out = clip_to(out, (x0 + 1, LIST_Y[0] + 2, x1 - 1, LIST_Y[1] - 2))
-    if n_total > N_ROWS:      # the scroll bar
-        sh = LIST_Y[1] - LIST_Y[0] - 24
-        knob = max(16, sh * N_ROWS // n_total)
-        kt = round((sh - knob) * scroll / (n_total - N_ROWS))
-        sb = blank()   # laid over the bar, not in its place
-        d = ImageDraw.Draw(sb)
-        d.rounded_rectangle((x1 - 4, LIST_Y[0] + 12, x1 - 1, LIST_Y[1] - 12), 2, fill=EDGE + (60,))
-        d.rounded_rectangle((x1 - 4, LIST_Y[0] + 12 + kt, x1 - 1, LIST_Y[0] + 12 + kt + knob), 2, fill=EDGE + (230,))
-        out.alpha_composite(sb)
+    out = clip_to_panel(out, (x0, LIST_Y[0], x1, LIST_Y[1]))
+    out.alpha_composite(scroll_bar((x0, LIST_Y[0], x1, LIST_Y[1]), N_ROWS, n_total, scroll))
     return out
 
 
@@ -1096,7 +1125,7 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
         mid = y + ROW / 2
         sel = n == cursor
         if sel:
-            c.bar((x0 + 1, y + 1, x1, y + ROW - 1))
+            c.bar((x0 + 1, y + 1, x1, y + ROW - 1), panel=(x0, y0, x1, y1))
         ink = SEL_INK if sel else INK
         if kind == "set":
             c.text((x0 + 14, mid), label, F.row, ink, anchor="lm")
@@ -1178,19 +1207,6 @@ def option_row(c, F, fonts, values, option, x0, x1, y, sel):
     c.over(layer)
 
 
-def options_scroll_bar(im, n, first):
-    """The scroll bar, as the game list's, the list from option `first` on (a fraction while it moves)"""
-    x0, x1 = M, W - M
-    y0, y1 = OPT_LIST
-    if n > OPT_ROWS:
-        sh = y1 - y0 - 24
-        knob = max(16, sh * OPT_ROWS // n)
-        kt = round((sh - knob) * first / (n - OPT_ROWS))
-        d = ImageDraw.Draw(im)
-        d.rounded_rectangle((x1 - 6, y0 + 12, x1 - 3, y1 - 12), 2, fill=EDGE + (60,))
-        d.rounded_rectangle((x1 - 6, y0 + 12 + kt, x1 - 3, y0 + 12 + kt + knob), 2, fill=EDGE + (230,))
-
-
 def layer_options_list(F, fonts, cursor, values, options=None):
     """The options a row each, over the whole width; a scroll bar once there
     are more than fit"""
@@ -1204,11 +1220,9 @@ def layer_options_list(F, fonts, cursor, values, options=None):
         y = y0 + 10 + (n - first) * OPT_ROW
         sel = n == cursor
         if sel:
-            c.bar((x0 + 1, y, x1, y + 30))
+            c.bar((x0 + 1, y, x1, y + 30), panel=(x0, y0, x1, y1))
         option_row(c, F, fonts, values, options[n], x0, x1, y, sel)
-    bar = blank()     # laid over the panel, as the program does
-    options_scroll_bar(bar, len(options), first)
-    c.over(bar)
+    c.over(scroll_bar((x0, y0, x1, y1), OPT_ROWS, len(options), first))   # as the game list's
     return c.im
 
 
@@ -1246,9 +1260,8 @@ def layer_option_rows(strips, n_total, scroll, bar):
     out = blank()
     out.paste(view, (x0, y0 + 10))
     out = clip_to(out, (x0 + 1, y0 + 2, x1 - 1, y1 - 2))
-    sb = blank()   # laid over the bar, not in its place
-    options_scroll_bar(sb, n_total, scroll)
-    out.alpha_composite(sb)
+    out = clip_to_panel(out, (x0, y0, x1, y1))
+    out.alpha_composite(scroll_bar((x0, y0, x1, y1), OPT_ROWS, n_total, scroll))
     return out
 
 

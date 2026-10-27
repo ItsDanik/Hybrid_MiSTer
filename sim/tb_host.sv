@@ -214,10 +214,12 @@ integer cur_midi = 0, cur_midivol = 32, cur_midiw = 0, cur_info = 0, cur_infocnt
 // where the MIDI goes, the program's choice (MH_MidiDest(), host version 17):
 // cur_prog 1 to choose, cur_prog_pi 1 for the MT32-pi
 integer cur_prog = 0, cur_prog_pi = 0;
+// field rate (host version 18): interlaced, a frame at every field
+integer cur_fr = 0;
 task set_ctrl(input integer fb, input integer mode, input integer slot, input integer seq);
 	mem[0] = {cur_mask[3:0], 2'd0, cur_fm[0], 1'b1, 7'd64, slot[0], cur_vmode[3:0], 3'd0, mode[0], fb[7:0], 32'h4259484D};
 	mem[1] = {cur_fmw[31:0], seq[31:0]};
-	mem[2] = {6'd0, cur_prog_pi[0], cur_prog[0], cur_infocnt[7:0], cur_info[7:0], cur_midi[0], cur_midivol[6:0], cur_midiw[31:0]};
+	mem[2] = {3'd0, cur_fr[0], 2'd0, cur_prog_pi[0], cur_prog[0], cur_infocnt[7:0], cur_info[7:0], cur_midi[0], cur_midivol[6:0], cur_midiw[31:0]};
 endtask
 // command c of the MIDI ring: word k is {c, k}
 task midi_cmds(input integer from, input integer to);
@@ -629,6 +631,28 @@ begin
 end
 endtask
 
+// What moves in the picture moves at every field, interlaced as well (host
+// version 18): the background's level while it fades in, the logo's while it
+// does, never the same in two fields running
+reg  [8:0] moved_bg = 0, moved_logo = 0;
+integer    moved_fields = 0, moved_still = 0;
+task intro_moves;
+	begin
+		if (dut.intro_on && dut.intro_t >= 3 && dut.intro_t <= 29 || dut.intro_t >= 34 && dut.intro_t <= 60) begin
+			moved_fields = moved_fields + 1;
+			if (dut.lv_bg == moved_bg && dut.lv_logo == moved_logo) moved_still = moved_still + 1;
+		end
+		moved_bg   = dut.lv_bg;
+		moved_logo = dut.lv_logo;
+	end
+endtask
+task intro_moves_check;
+	begin
+		$display("intro: %0d fields of fades, %0d of them as the one before", moved_fields, moved_still);
+		if (moved_fields < 50 || moved_still != 0 || !lace) begin $display("FAIL: the picture moves only every second field"); errors = errors + 1; end
+	end
+endtask
+
 task test_intro;
 	integer n, hold;
 	begin
@@ -638,10 +662,12 @@ task test_intro;
 		n = 0;
 		while (!dut.intro_done && n < 400) begin
 			wait_fields(1);
+			intro_moves;
 			n = n + 1;
 		end
 		$display("intro: over after %0d fields, %0d of them black at first", n, hold);
 		if (n < hold + 242 || n > hold + 244) begin $display("FAIL: intro length"); errors = errors + 1; end
+		intro_moves_check;
 		wait_fields(2);
 		check_wall = 1;
 		check_enable = 1;
@@ -656,9 +682,10 @@ endtask
 // picture's own mode (no change of the video clock), on the screen at the
 // next frame without the picture going out. Begun in a field with the even
 // rows, the next field is still the picture (both fields of a frame are of
-// the same one), in one with the odd rows, the next is the game's. Every
-// pixel of the fields around it checked, the picture's at the full level.
-task no_intro_handover(input integer start_f1);
+// the same one), in one with the odd rows, the next is the game's; with field
+// rate (fr, host version 18) the next field always is. Every pixel of the
+// fields around it checked, the picture's at the full level.
+task no_intro_handover(input integer start_f1, input integer fr);
 	integer n, walls, games, bad, first_f1, err0, stops0;
 	begin
 		@(negedge vblank);
@@ -670,7 +697,7 @@ task no_intro_handover(input integer start_f1);
 		err0 = errors;
 		stops0 = run_stops;
 		checked = 0;
-		cur_fb = 2; cur_mode = 1; cur_vmode = 4;
+		cur_fb = 2; cur_mode = 1; cur_vmode = 4; cur_fr = fr;
 		check_auto = 1;
 		check_wall = 1;
 		check_enable = 1;
@@ -691,13 +718,40 @@ task no_intro_handover(input integer start_f1);
 		check_enable = 0;
 		check_wall = 0;
 		check_auto = 0;
-		$display("no intro, handover in a field with the %0s rows: %0d fields of the picture, then %0d of the game's from one with the %0s rows, %0d wrong, %0d pixels checked, %0d errors",
-			start_f1 ? "odd" : "even", walls, games, first_f1 ? "odd" : "even", bad, checked, errors - err0);
+		$display("no intro, handover in a field with the %0s rows%0s: %0d fields of the picture, then %0d of the game's from one with the %0s rows, %0d wrong, %0d pixels checked, %0d errors",
+			start_f1 ? "odd" : "even", fr ? ", field rate" : "", walls, games, first_f1 ? "odd" : "even", bad, checked, errors - err0);
 		// (the field it began in from its 50th clock on)
-		if (walls != (start_f1 ? 1 : 2) || games != 4 || bad != 0 || first_f1 != 0 || errors != err0 || checked < n * 153600 - 640
-			|| run_stops != stops0 || !dut.game_on || !mem[9][19] || mem[9][15:12] != 4 || !lace || field_rows != 240) begin
+		if (walls != ((start_f1 || fr) ? 1 : 2) || games != 4 || bad != 0 || first_f1 != ((fr && !start_f1) ? 1 : 0) || errors != err0 || checked < n * 153600 - 640
+			|| run_stops != stops0 || !dut.game_on || !mem[9][19] || mem[9][15:12] != 4 || !lace || field_rows != 240 || mem[9][31] != fr[0]) begin
 			$display("FAIL: handover without the intro"); errors = errors + 1;
 		end
+	end
+endtask
+
+// INTRO 0: the program leaves, black for 3 seconds (shortened here), then the
+// picture fades in, at the end of its intro
+task no_intro_leave;
+	integer n;
+	begin
+		mem[0][31:0] = 0;
+		wait_fields(3);
+		if (dut.game_on || wall_lvl != 0 || dut.wall_hold < 170) begin $display("FAIL: picture not black after the program left"); errors = errors + 1; end
+		dut.wall_hold = 4;
+		n = 0;
+		while (wall_lvl != 256 && n < 80) begin
+			wait_fields(1);
+			n = n + 1;
+		end
+		wait_fields(1);
+		checked = 0;
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("no intro, the program left: the picture at the full level after %0d fields, intro field %0d, checked %0d pixels, %0d errors",
+			n, dut.intro_t, checked, errors);
+		if (n < 46 || n > 50 || dut.intro_t < 242 || !dut.a_dots || mem[9][19]) begin $display("FAIL: picture after the program left"); errors = errors + 1; end
 	end
 endtask
 
@@ -765,29 +819,14 @@ task test_no_intro;
 		wait_fields(3);
 
 		fill(4);
-		no_intro_handover(0);
-		// the program leaves: black for 3 seconds (shortened here), then the
-		// picture fades in, at the end of its intro
-		mem[0][31:0] = 0;
-		wait_fields(3);
-		if (dut.game_on || wall_lvl != 0 || dut.wall_hold < 170) begin $display("FAIL: picture not black after the program left"); errors = errors + 1; end
-		dut.wall_hold = 4;
-		n = 0;
-		while (wall_lvl != 256 && n < 80) begin
-			wait_fields(1);
-			n = n + 1;
-		end
-		wait_fields(1);
-		checked = 0;
-		check_wall = 1;
-		check_enable = 1;
-		wait_fields(2);
-		check_enable = 0;
-		check_wall = 0;
-		$display("no intro, the program left: the picture at the full level after %0d fields, intro field %0d, checked %0d pixels, %0d errors",
-			n, dut.intro_t, checked, errors);
-		if (n < 46 || n > 50 || dut.intro_t < 242 || !dut.a_dots || mem[9][19]) begin $display("FAIL: picture after the program left"); errors = errors + 1; end
-		no_intro_handover(1);
+		no_intro_handover(0, 0);
+		no_intro_leave;
+		no_intro_handover(1, 0);
+		// field rate (host version 18): the program's first frame at the next
+		// field, also from one with the even rows
+		no_intro_leave;
+		no_intro_handover(0, 1);
+		cur_fr = 0;
 		if (short_lines != 0 || unmasked_lines != 0) errors = errors + 1;
 	end
 endtask
@@ -886,6 +925,43 @@ task wait_fields(input integer n);
 	end
 endtask
 
+// Field rate (host version 18) in 640x480 interlaced, the framebuffers
+// filled: a frame presented in every field is shown in the next, in fields
+// of both kinds, each with its rows of that frame; status bit 31 says so.
+// Without it again, the bit is 0.
+task test_field_rate_frames;
+	integer n, fb, err0, odd, even;
+	begin
+		err0 = errors;
+		cur_fr = 1; cur_mode = 0; cur_slot = 0;
+		set_ctrl(0, 0, 0, 10);
+		wait_fields(2);
+		fb = 0; odd = 0; even = 0;
+		checked = 0;
+		for (n = 0; n < 8; n = n + 1) begin
+			// the frame taken in the vblank before is on the screen
+			@(negedge vblank);
+			cur_fb = fb;
+			check_enable = 1;
+			if (f1) odd = odd + 1; else even = even + 1;
+			repeat (50) @(posedge clk);
+			fb = 1 - fb;
+			set_ctrl(fb, 0, 0, 10);
+			wait_fields(1);
+			check_enable = 0;
+		end
+		$display("field rate: 8 fields, each a new frame (%0d with the odd rows, %0d with the even), checked %0d pixels, %0d errors, status %h",
+			odd, even, checked, errors - err0, mem[9][31:0]);
+		if (errors != err0 || checked < 8 * 153600 - 8 * 40 || odd < 3 || even < 3 || !mem[9][31] || !mem[9][9] || !lace) begin
+			$display("FAIL: field rate"); errors = errors + 1;
+		end
+		cur_fr = 0;
+		set_ctrl(0, 0, 0, 10);
+		wait_fields(2);
+		if (mem[9][31]) begin $display("FAIL: field rate in the status without it"); errors = errors + 1; end
+	end
+endtask
+
 // A video mode in both pixel formats: the picture, its timing in pixels and
 // the status block
 task test_mode(input integer m, input integer v31, input integer rows, input integer hs, input integer vs, input integer is_lace);
@@ -958,6 +1034,32 @@ initial begin
 	if ($test$plusargs("trigonly")) begin
 		wait_fields(2);
 		test_triggers;
+		if (errors != 0) $display("FAIL: %0d errors", errors);
+		else $display("PASS");
+		$finish;
+	end
+	// +fieldrate: field rate alone (host version 18): the intro's fades at
+	// every field, then the intro cut short and a game's frames in 640x480
+	// interlaced, a new one at every field
+	if ($test$plusargs("fieldrate")) begin
+		i = 0;
+		while (!(dut.intro_on && dut.intro_t > 62) && i < 120) begin
+			wait_fields(1);
+			intro_moves;
+			i = i + 1;
+		end
+		intro_moves_check;
+		dut.intro_t = 242;
+		fill(4);
+		cur_vmode = 4;
+		set_ctrl(0, 0, 0, 10);
+		i = 0;
+		while (!dut.game_on && i < 80) begin
+			wait_fields(1);
+			i = i + 1;
+		end
+		wait_fields(2);
+		test_field_rate_frames;
 		if (errors != 0) $display("FAIL: %0d errors", errors);
 		else $display("PASS");
 		$finish;
@@ -1104,7 +1206,14 @@ initial begin
 	// 640x240
 	test_mode(7, 0, 240, 800, 800 * 262, 0);
 	test_mode(4, 0, 240, 800, 800 * 525 / 2, 1);
+	test_field_rate_frames;
 	test_mode(4, 1, 480, 800, 800 * 525, 0);
+	// progressive: no field rate in the status, the program's bit or not
+	cur_fr = 1;
+	set_ctrl(0, 0, 0, 10);
+	wait_fields(2);
+	if (mem[9][31]) begin $display("FAIL: field rate in the status of a progressive mode"); errors = errors + 1; end
+	cur_fr = 0;
 	// 800x600 and 1024x768 (up to host version 12) are modes the core does
 	// not have, with vga31 as well: 320x200
 	for (i = 5; i <= 6; i = i + 1) begin
