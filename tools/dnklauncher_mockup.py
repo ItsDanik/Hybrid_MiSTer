@@ -743,8 +743,10 @@ def layer_preview(F, game, logo_dx=0.0):
     return out
 
 
-def layer_hints(F, hints, badge_font, family):
-    """hints: (action, what it does); the action's button as the family prints it"""
+def layer_hints(F, hints, badge_font, family, boxes=None):
+    """hints: (action, what it does); the action's button as the family prints
+    it. boxes: a list that gets each hint's box (x0, y0, x1, y1), where a click
+    does what it says"""
     c = Canvas(ground=False)
     y = FOOT[0] + 9
     where = places(family)
@@ -755,10 +757,123 @@ def layer_hints(F, hints, badge_font, family):
     gap = max(4, min(12, (room - width) // max(1, len(hints) - 1)))
     x = M
     for action, what in hints:
+        x0 = x
         x += button(c, F, family, where[action], x, y) + 4
         c.text((x, y + 9), what, F.chip, INK, anchor="lm")
-        x += round(F.chip.getlength(what)) + gap
+        x += round(F.chip.getlength(what))
+        if boxes is not None:
+            boxes.append((x0, y, x, y + 18))
+        x += gap
     return c.im
+
+
+# The mouse (Danik, 2026-10-27): a pointer drawn over everything while the
+# mouse moves, gone once the pad is used or after 5 seconds still. A click on a
+# game puts the cursor on it, a double click opens Details; a click on a hint
+# does what it says (Exit's question: its two), on a sort mode picks it; the
+# right button is Back everywhere, the middle one Favourite (the list and
+# Details); the wheel moves the cursor (in Details to the game before or
+# after), and the scroll bar can be held and dragged. Options: a click on a row
+# puts the cursor on it, on the cursor's row takes the next value, on its
+# arrows the one before or after; the ports page: on a row puts the cursor on
+# it, on the cursor's row or on a tickbox ticks it. POINTERS: its shapes, both
+# in the text's colour with a rim against it, the player's choice in Options
+# (Pointer: Danik, 2026-10-27, arrow or dart; drafts in the bar's colours not
+# taken); layer_hover(): what a hint under it looks like.
+POINTERS = {
+    # the classic arrow
+    "arrow": dict(shape=((0, 0), (0, 16), (4, 12.2), (6.8, 18.4), (9.4, 17.3), (6.7, 11.3), (11.6, 11.3))),
+    # an arrowhead without its tail
+    "dart": dict(shape=((0, 0), (0, 15.5), (4.6, 11.4), (11.4, 11.4))),
+}
+POINTER_SS = 4      # drawn that many times larger, then reduced: soft edges at its size
+POINTER_TIP = 3     # the tip's place in its picture, from the left and the top
+POINTER_SHADOW = (20, 0, 30)
+
+
+def pointer_masks(style):
+    """The pointer's coverage, each a picture of the same size with the tip at
+    (POINTER_TIP, POINTER_TIP): its fill, its rim (a pixel round the fill, the
+    fill too) and its shadow (the rim moved 1 right and 2 down, blurred, at 110
+    of 255). The program colours them as layer_pointer() does (tools/make_assets.py
+    writes them)"""
+    s, t = POINTER_SS, POINTER_TIP
+    pts = [(t * s + x * s, t * s + y * s) for x, y in POINTERS[style]["shape"]]
+    w = -(-(int(max(x for x, y in pts)) + (t + 2) * s) // s) * s
+    h = -(-(int(max(y for x, y in pts)) + (t + 3) * s) // s) * s
+    shape = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(shape).polygon(pts, fill=255)
+    rim = shape.filter(ImageFilter.MaxFilter(2 * s + 1))
+    fill, rim = shape.reduce(s), rim.reduce(s)
+    shadow = Image.new("L", rim.size, 0)
+    shadow.paste(rim.point(lambda v: v * 110 // 255), (1, 2))
+    return fill, rim, shadow.filter(ImageFilter.GaussianBlur(1.2))
+
+
+def pointer_rim():
+    """Against the fill (the text's colour): dark round a light one, light round a dark one"""
+    return (0x14, 0x06, 0x1C) if sum(INK) > 3 * 128 else (0xF6, 0xF0, 0xFA)
+
+
+def layer_pointer(style, xy, out=None):
+    """The pointer, its tip at xy: the shadow, the rim, the fill, each laid over the one before"""
+    fill, rim, shadow = pointer_masks(style)
+    pic = Image.new("RGBA", fill.size, (0, 0, 0, 0))
+    for colour, mask in ((POINTER_SHADOW, shadow), (pointer_rim(), rim), (INK, fill)):
+        layer = Image.new("RGBA", fill.size, colour + (0,))
+        layer.putalpha(mask)
+        pic.alpha_composite(layer)
+    out = out or blank()
+    out.alpha_composite(pic, (round(xy[0]) - POINTER_TIP, round(xy[1]) - POINTER_TIP))
+    return out
+
+
+def hover_box(box):
+    """Where a hint's hover is (inclusive), round its box"""
+    x0, y0, x1, y1 = box
+    return (x0 - 5, y0 - 3, x1 + 7, y1 + 3)
+
+
+def layer_hover(box):
+    """A hint under the pointer: a chip's ground behind it, as the sort modes
+    have; the hint is laid over it again, where it is (clip_to())"""
+    out = blank()
+    ImageDraw.Draw(out).rounded_rectangle(hover_box(box), 12, fill=EDGE + (70,), outline=EDGE + (170,))
+    return out
+
+
+def pointer_screens(F, badge_font, ports):
+    """Each pointer over the main screen (on a row of the list, and over a hint
+    with HOVER), in three schemes, and a sheet of them at 3x"""
+    screens, crops = {}, []
+    for theme in ("purple", "lavender", "amber"):
+        apply_theme(theme)
+        m = Main(F, badge_font, ports, "A-Z", "doom2")
+        L = m.frame_layers()
+        boxes = []
+        L["hints"] = layer_hints(F, MAIN_HINTS, badge_font, m.family, boxes)
+        under = compose(L)
+        hint = boxes[1]   # Favourite
+        hovered = under.copy()
+        hovered.alpha_composite(layer_hover(hint))
+        hovered.alpha_composite(clip_to(L["hints"], hover_box(hint)))
+        row_xy = (LIST_X[0] + 150, LIST_Y[0] + LIST_PAD + 8 * ROW + 9)
+        hint_xy = ((hint[0] + hint[2]) / 2 + 6, hint[1] + 11)
+        for style in POINTERS:
+            im = hovered.copy()
+            layer_pointer(style, row_xy, im)
+            layer_pointer(style, hint_xy, im)
+            screens["pointer_%s_%s" % (theme, style)] = im.convert("RGB")
+            for xy in (row_xy, hint_xy):
+                box = (round(xy[0]) - 50, round(xy[1]) - 26, round(xy[0]) + 70, round(xy[1]) + 34)
+                crops.append(im.crop(box).resize((360, 180), Image.NEAREST))
+    apply_theme("purple")
+    cols = 2 * len(POINTERS)
+    sheet = Image.new("RGBA", (cols * 364, 3 * 184), (0, 0, 0, 255))
+    for n, im in enumerate(crops):
+        sheet.paste(im, ((n % cols) * 364, (n // cols) * 184))
+    screens["pointer_sheet"] = sheet.convert("RGB")
+    return screens
 
 
 def badge_block(badge_font, icon_size, gap, line_y):
@@ -1028,6 +1143,8 @@ OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settin
                                  "blink. HDMI and 31kHz screens never need it."),
     ("Button symbols", "buttons", "Auto shows the buttons of the controller you use, when it is a Switch, "
                                   "Xbox or PlayStation one. Pick one for any other."),
+    ("Pointer", "pointer", "The mouse's pointer, shown while the mouse moves: an arrow or a dart. The arrow "
+                           "unless you pick the other."),
     ("Sort games", "sort", "How the list is sorted when the frontend starts. Select changes it at any time."),
 ]
 OPT_ROW = 34
@@ -1487,7 +1604,7 @@ def export_layers(fonts_dir, out, repos):
     F = fonts["chakra"][1]
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Off", "buttons": "Auto: PlayStation",
-              "sort": "A-Z"}
+              "pointer": "Arrow", "sort": "A-Z"}
     colours = {}
     for theme in THEMES:
         apply_theme(theme)
@@ -1546,7 +1663,7 @@ def main():
     screens["wait_ports"] = wait_screen(F, badge, ports)
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Off", "buttons": "Auto: PlayStation",
-              "sort": "A-Z"}
+              "pointer": "Arrow", "sort": "A-Z"}
     screens["options_font"] = options_screen(F, badge, fonts, 0, values)
     screens["options_colours"] = options_screen(F, badge, fonts, 1, values)
     screens["options_pattern"] = options_screen(F, badge, fonts, 2, values)
@@ -1563,6 +1680,7 @@ def main():
         GROUND["pattern"] = pattern
         screens["ground_%s" % (pattern or "off")] = main_screen(F, badge, ports, "A-Z", "doom2")
     GROUND["pattern"] = default
+    screens.update(pointer_screens(F, badge, ports))
     for name, im in screens.items():
         path = os.path.join(out, name + ".png")
         im.save(path)
