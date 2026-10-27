@@ -137,7 +137,7 @@ FAMILIES = {
         "select": ("SELECT", None, None), "start": ("START", None, None)}),
 }
 # Where the frontend's actions are: by letter (Danik, 2026-10-25), the same
-# letter on every pad: Play A, Exit B, Favourite Y, Ports X (PlayStation:
+# letter on every pad: Play A, Exit B, Favourite Y, Repo X (PlayStation:
 # Cross, Circle, Triangle, Square in Xbox's places). A Switch has Xbox's
 # layout mirrored across the diagonal (A east, B south, X north, Y west), so
 # there all four are mirrored, as Menu OK / Back are in the MiSTer menu
@@ -202,9 +202,9 @@ class Canvas:
         self.over(layer)
 
     def bar(self, box, radius=0, panel=None):
-        """The cursor's bar: PINK to PEACH, square (Danik, 2026-10-27), across
-        the panel's inside from rim to rim, the scroll bar over it; within the
-        panel (its box) round at its corners as the rim is"""
+        """The cursor's bar: PINK to PEACH, square (Danik, 2026-10-27), from
+        the panel's rim to the scroll bar's place (SB_W), which it never goes
+        under; within the panel (its box) round at its corners as the rim is"""
         x0, y0, x1, y1 = box
         grad = Image.new("RGBA", (x1 - x0, y1 - y0))
         gd = ImageDraw.Draw(grad)
@@ -362,6 +362,7 @@ FOOT = (405, 441)         # the buttons and the badge
 LIST_X = (M, 330)
 PREV_X = (342, W - M)
 ROW = 24
+SB_W = 4                  # the scroll bar's place at a list panel's right, within its rim: the bar ends before it
 SHOT = (256, 192)         # the screenshot, in the preview and in Details
 LOGO_H = 64               # the game's logo in the preview
 # The list and the preview, as high as the preview needs (Danik, 2026-10-27):
@@ -480,10 +481,10 @@ def scroll_bar(box, n, n_total, first):
     knob = max(16, sh * n // n_total)
     k0 = y0 + 1 + round((sh - knob) * first / (n_total - n))
     k1 = k0 + knob - 1
-    ImageDraw.Draw(out).rectangle((x1 - 4, y0 + 1, x1 - 1, y1 - 1), fill=EDGE + (60,))
+    ImageDraw.Draw(out).rectangle((x1 - SB_W, y0 + 1, x1 - 1, y1 - 1), fill=EDGE + (60,))
     k = blank()
     d = ImageDraw.Draw(k)
-    d.rectangle((x1 - 4, k0 + 1, x1 - 1, k1 - 1), fill=EDGE + (230,))
+    d.rectangle((x1 - SB_W, k0 + 1, x1 - 1, k1 - 1), fill=EDGE + (230,))
     d.rectangle((x1 - 3, k0, x1 - 2, k0), fill=EDGE + (230,))
     d.rectangle((x1 - 3, k1, x1 - 2, k1), fill=EDGE + (230,))
     out.alpha_composite(k)
@@ -681,7 +682,7 @@ def list_strips(F, rows):
             y = n * ROW
             mid = y + ROW / 2
             if sel:   # the bar's colours without a break: layer_rows() cuts the bar out where it is
-                c.bar((1, y, w, y + ROW))
+                c.bar((1, y, w - SB_W, y + ROW))
             if kind == "head":
                 c.text((12, mid), label, F.chip, SEL_INK if sel else CYAN, anchor="lm")
                 lw = F.chip.getlength(label)
@@ -715,7 +716,7 @@ def layer_rows(strips, n_total, scroll, bar, dx=0.0):
     view = normal.crop((0, top, w, top + h))
     by = round((bar - scroll) * ROW)
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).rectangle((1, by + 1, w - 1, by + ROW - 2), fill=255)
+    ImageDraw.Draw(mask).rectangle((1, by + 1, w - SB_W - 1, by + ROW - 2), fill=255)
     view.paste(selected.crop((0, top, w, top + h)), (0, 0), mask)
     out = blank()
     out.paste(view, (x0 + round(dx), LIST_Y[0] + LIST_PAD))
@@ -944,7 +945,7 @@ def rows_for(ports, mode):
     return [("game", by_id[i]["title"], by_id[i], when) for i, when in RECENT]
 
 
-MAIN_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Ports"), ("options", "Options"), ("back", "Exit")]
+MAIN_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
 
 
 class Main:
@@ -1125,7 +1126,7 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
         mid = y + ROW / 2
         sel = n == cursor
         if sel:
-            c.bar((x0 + 1, y + 1, x1, y + ROW - 1), panel=(x0, y0, x1, y1))
+            c.bar((x0 + 1, y + 1, x1 - SB_W, y + ROW - 1), panel=(x0, y0, x1, y1))
         ink = SEL_INK if sel else INK
         if kind == "set":
             c.text((x0 + 14, mid), label, F.row, ink, anchor="lm")
@@ -1220,7 +1221,7 @@ def layer_options_list(F, fonts, cursor, values, options=None):
         y = y0 + 10 + (n - first) * OPT_ROW
         sel = n == cursor
         if sel:
-            c.bar((x0 + 1, y, x1, y + 30), panel=(x0, y0, x1, y1))
+            c.bar((x0 + 1, y, x1 - SB_W, y + 30), panel=(x0, y0, x1, y1))
         option_row(c, F, fonts, values, options[n], x0, x1, y, sel)
     c.over(scroll_bar((x0, y0, x1, y1), OPT_ROWS, len(options), first))   # as the game list's
     return c.im
@@ -1236,7 +1237,7 @@ def option_strips(F, fonts, values, options=None):
     for sel in (False, True):
         c = Canvas(ground=False, size=(w, len(options) * OPT_ROW))
         if sel:
-            c.bar((1, 0, w, c.im.height))
+            c.bar((1, 0, w - SB_W, c.im.height))
         for n, option in enumerate(options):
             option_row(c, F, fonts, values, option, 0, w, n * OPT_ROW, sel)
         out.append(c.im)
@@ -1255,7 +1256,7 @@ def layer_option_rows(strips, n_total, scroll, bar):
     view = normal.crop((0, top, w, top + h))
     by = round((bar - scroll) * OPT_ROW)
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).rectangle((1, by, w - 1, by + 29), fill=255)
+    ImageDraw.Draw(mask).rectangle((1, by, w - SB_W - 1, by + 29), fill=255)
     view.paste(selected.crop((0, top, w, top + h)), (0, 0), mask)
     out = blank()
     out.paste(view, (x0, y0 + 10))

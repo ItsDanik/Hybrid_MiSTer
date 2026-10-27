@@ -12,6 +12,8 @@
 #                          preview's box (the list's), with its alpha
 #   <Engine>/<id>.dlogo    the same fitted into the box of the Details page
 #   <Engine>/<id>.plogo    and into the port's panel of the ports page
+#   <Engine>/<id>.clogo    and into the Carousel layout's box, over the
+#                          selected game (CLOGO_BOX)
 # and index.txt, a line a game: <Engine>|<id>|<title>|<year>|<developer>|
 # <description> (package/info.txt; empty fields for a game it lacks).
 #
@@ -41,6 +43,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dnklauncher_mockup as mock  # noqa: E402
 
 BAYER = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]) / 16.0 - 15 / 32
+
+
+# The Carousel layout's logo box (Danik's settings on its tuning page,
+# 2026-10-27; CAR_LOGO_W / CAR_LOGO_H of the program's carousel.h)
+CLOGO_BOX = (300, 46)
 
 
 def fit(im, box_w, box_h):
@@ -116,6 +123,7 @@ def main():
     logo_box = (pw - 24, mock.LOGO_H)
     dlogo_box = mock.details_logo_box()[2:]
     plogo_box = mock.ports_logo_box()
+    clogo_box = CLOGO_BOX
     index, total, missing = [], 0, []
     for port in mock.load_ports(repos):
         engine = port["engine"]
@@ -135,6 +143,7 @@ def main():
             total += write(base + ".logo", fit(logo, *logo_box), True, png)
             total += write(base + ".dlogo", fit(logo, *dlogo_box), True, png)
             total += write(base + ".plogo", fit(logo, *plogo_box), True, png)
+            total += write(base + ".clogo", fit(logo, *clogo_box), True, png)
             if gid not in info:
                 missing.append("%s/%s info" % (engine, gid))
             # tty2oled+'s icon (docs/oled.md), which package.sh also needs

@@ -40,6 +40,13 @@
 // field rate (w2[60], host version 18: then at every field, status bit 31).
 // The picture itself stays whole, as the shots show it.
 //
+// FAKECORE_VSYNC=1: a field each time the word at 0xF00 of the shared memory
+// changes, not by the clock: a program showing the picture on a PC screen
+// counts its refreshes there, so that every frame is shown as long (the
+// screen's refresh rate is never quite 59.64 Hz). Without a change for 1.5
+// fields (the picture hidden, the program gone) the clock takes over again,
+// so the count never stands still.
+//
 // usage: fakecore <shm file> [script] [audio.raw]
 //   audio.raw receives what the game plays (16-bit stereo, 44.1kHz)
 // Script, one command per line (# starts a comment):
@@ -101,6 +108,7 @@ static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
 static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown, osd_open;
 static int version = 18;
+static int vsync_lock;
 static int lace_on, lace_field, lace_field_shown, lace, field_rate;
 static int ovl_on, ovl_t, ovl_fade, game_on, game_fb = -1, ovl_shown = -1, ovl_gone, ovl_prints;
 static uint32_t audio_fetch;
@@ -187,21 +195,65 @@ static int fm_frame(int volume) {
     return v > 32767 ? 32767 : v < -32768 ? -32768 : v;
 }
 
+static int64_t now_ns(void) {
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+}
+
+// FAKECORE_VSYNC: the next field when the word at 0xF00 changes, else on the
+// clock 1.5 fields after the last one, and a field apart after that
+static void wait_vsync(void) {
+    static int64_t last;
+    static uint32_t seen;
+    static int ticking;
+    volatile uint32_t* count = (volatile uint32_t*)(shm + 0xF00);
+    int64_t limit, t;
+
+    if (last == 0) {
+        last = now_ns();
+    }
+    limit = last + (ticking ? FIELD_NS * 3 / 2 : FIELD_NS);
+    for (;;) {
+        if (*count != seen) {
+            seen = *count;
+            ticking = 1;
+            last = now_ns();
+            return;
+        }
+        t = now_ns();
+        if (t >= limit) {
+            ticking = 0;
+            last = limit;
+            return;
+        }
+        {
+            struct timespec ts = { 0, limit - t < 200000 ? limit - t : 200000 };
+            nanosleep(&ts, NULL);
+        }
+    }
+}
+
 static void tick(void) {
     static struct timespec next;
     uint32_t c0, c1, c2, c3, c4, c5;
     int want;
     int audio_en, fm_en, midi_en;
 
-    if (next.tv_sec == 0) {
-        clock_gettime(CLOCK_MONOTONIC, &next);
+    if (vsync_lock) {
+        wait_vsync();
+    } else {
+        if (next.tv_sec == 0) {
+            clock_gettime(CLOCK_MONOTONIC, &next);
+        }
+        next.tv_nsec += FIELD_NS;
+        if (next.tv_nsec >= 1000000000) {
+            next.tv_nsec -= 1000000000;
+            next.tv_sec++;
+        }
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
     }
-    next.tv_nsec += FIELD_NS;
-    if (next.tv_nsec >= 1000000000) {
-        next.tv_nsec -= 1000000000;
-        next.tv_sec++;
-    }
-    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
 
     // vblank: latch the control block like the core does
     c0 = ctrl[0];
@@ -503,6 +555,7 @@ int main(int argc, char** argv) {
     mt32 = getenv("FAKECORE_MT32") != NULL && atoi(getenv("FAKECORE_MT32")) != 0;
     synth = getenv("FAKECORE_SYNTH") == NULL || atoi(getenv("FAKECORE_SYNTH")) != 0;
     lace_on = getenv("FAKECORE_LACE") != NULL && atoi(getenv("FAKECORE_LACE")) != 0;
+    vsync_lock = getenv("FAKECORE_VSYNC") != NULL && atoi(getenv("FAKECORE_VSYNC")) != 0;
     if (getenv("FAKECORE_VERSION")) {
         version = atoi(getenv("FAKECORE_VERSION"));
     }

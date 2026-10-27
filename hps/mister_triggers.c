@@ -672,6 +672,54 @@ int MH_ReadStickButtons(int* left, int* right) {
     return found;
 }
 
+int MH_ReadTriggerButtons(int* left, int* right) {
+    static int left_held, right_held;
+    const char* fixed = getenv("MISTER_HYBRID_TRIGGERBUTTONS"); // "left,right": for tests without a controller
+    unsigned long keys[KEY_MAX / (8 * sizeof(long)) + 1];
+    int found = 0;
+    int i;
+
+    *left = *right = 0;
+    if (fixed != NULL) {
+        if (sscanf(fixed, "%d,%d", left, right) < 2) {
+            *left = *right = 0;
+        }
+        return 1;
+    }
+    refresh();
+    for (i = 0; i < MAX_PADS; i++) {
+        pad* p = &pads[i];
+
+        if (p->fd < 0 || p->wheel) { // a wheel's pedals are no buttons
+            continue;
+        }
+        memset(keys, 0, sizeof keys);
+        if (ioctl(p->fd, EVIOCGKEY(sizeof keys), keys) < 0) {
+            if (errno == ENODEV) { // unplugged
+                close(p->fd);
+                p->fd = -1;
+            }
+            continue;
+        }
+        found = 1;
+        // the buttons (a Switch's ZL / ZR, most pads with digital triggers)
+        *left |= has_bit(keys, BTN_TL2);
+        *right |= has_bit(keys, BTN_TR2);
+        // and analog triggers past half way (a DualSense, an Xbox pad)
+        if (p->left >= 0 || find_axes(p)) {
+            if (ioctl(p->fd, EVIOCGABS(p->left), &p->left_info) >= 0 && scaled(&p->left_info) > 128) {
+                *left = 1;
+            }
+            if (ioctl(p->fd, EVIOCGABS(p->right), &p->right_info) >= 0 && scaled(&p->right_info) > 128) {
+                *right = 1;
+            }
+        }
+    }
+    *left = mh_osd_hold(&left_held, *left);
+    *right = mh_osd_hold(&right_held, *right);
+    return found;
+}
+
 // What is pressed on a controller: bit n its button BTN_JOYSTICK + n (n < 28;
 // BTN_GAMEPAD is n 16), bits 28..31 its hat's directions
 static uint32_t pressed_on(const pad* p) {

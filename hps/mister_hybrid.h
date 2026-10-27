@@ -297,6 +297,12 @@ int MH_WheelConnected(void);
 // controller whose driver names them otherwise has none here), pressed on
 // any controller. Returns 0 while no gamepad is connected.
 int MH_ReadStickButtons(int* left, int* right);
+// L2 and R2 as buttons, 1 while pressed on any gamepad (not a wheel's pedals):
+// a trigger's button (BTN_TL2 / BTN_TR2: a Switch's ZL / ZR) or an analog
+// trigger pressed past half way. For a menu that uses them (dnkLauncher's
+// layouts); a game wanting how far, MH_ReadTriggers(). Held back while the
+// OSD is open. Returns 0 while no gamepad is connected.
+int MH_ReadTriggerButtons(int* left, int* right);
 // The kind of controller pressed last, by its maker (its USB vendor): for
 // showing the player the symbols of the buttons in their hands. Each call
 // looks at the buttons and the d-pad of every controller, read from Linux as
