@@ -2,7 +2,7 @@
 # Start a new hybrid core repository from template/.
 #
 # In the new, empty directory:
-#   git init
+#   git init -b main
 #   git submodule add -b main https://github.com/ItsDanik/Hybrid_MiSTer.git hybrid
 #   hybrid/new_core.sh <Name> "<Game title>" [<url of the game's git repository>]
 #

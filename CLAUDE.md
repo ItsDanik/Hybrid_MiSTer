@@ -8,6 +8,7 @@ This file is in `hybrid/`, the [Hybrid_MiSTer](https://github.com/ItsDanik/Hybri
 - Before writing something in a core, check whether `hybrid/` has it. Code a second core would need as well goes into `hybrid/` (and the template, if it is a file every core has its own copy of), not into the core.
 - A change to a file that came from the template is a change for every core: make it in `hybrid/template/` too, and say which existing cores still have the old version. Lines marked `GAME:` and the `CONF_STR` are the game's own.
 - `hybrid/` is its own repository (branch `main`). Commit and push there first, then update the submodule pointer in the core.
+- **Every core's repository is on the branch `main`** (Danik, 2026-10-27), as `hybrid/` is: a new one is made with `git init -b main` (`new_core.sh`). The cores that were on `master` (git's default on this PC until then) were renamed that day, on GitHub too, which sends the old links on; a memory or note that says `master` for a core means `main`. A game's fork keeps its upstream's branches and its own `mister`.
 
 ## Base of a new core
 

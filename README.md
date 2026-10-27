@@ -40,7 +40,7 @@ Cores built on it: [ECWolf](https://github.com/ItsDanik/ecwolf_MiSTer) (Wolfenst
 **Start from the template**, in a new, empty directory:
 
 ```sh
-git init
+git init -b main
 git submodule add -b main https://github.com/ItsDanik/Hybrid_MiSTer.git hybrid
 hybrid/new_core.sh <Name> "<Game title>" [<url of our fork of the game>]
 ```
