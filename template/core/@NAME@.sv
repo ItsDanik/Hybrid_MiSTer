@@ -150,6 +150,13 @@ localparam [1:0] HUD_EDGES = 2'b11;
 // music, as with a core of host version 15.
 localparam MIDI_SYNTH = 1;
 
+// GAME: 1 in every core: the core's intro when it starts, which the game
+// waits for, and its picture fading out before the game's first frame. 0
+// only in a frontend (dnkLauncher, hybrid/docs/dnklauncher.md) whose first
+// frames take the picture over as the intro leaves it: that picture from
+// the start, no intro, and the program's first frame shown at once, a cut.
+localparam INTRO = 1;
+
 wire         forced_scandoubler;
 wire         direct_video;
 wire   [3:0] menumask;
@@ -230,7 +237,7 @@ wire       hires, fast, f1;
 // `fast` follows vga31, and falls only after the output has gone quiet
 assign VGA_DISABLE = fast & ~forced_scandoubler;
 
-hybrid_host #(.MIDI_SYNTH(MIDI_SYNTH)) host
+hybrid_host #(.MIDI_SYNTH(MIDI_SYNTH), .INTRO(INTRO)) host
 (
 	.clk(clk_sys),
 	.reset(reset),

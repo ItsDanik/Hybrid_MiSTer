@@ -24,6 +24,9 @@
 #   ~/dnk_Distribution_MiSTer has. Writes <out>/<font>_<screen>.png, and
 #   the animations, a frame per field, as <out>/anim_<name>.webp and, a
 #   quarter as fast, anim_<name>_slow.webp.
+# usage: dnklauncher_mockup.py --layers <fonts dir> <out dir> [repositories...]
+#   every theme's main screen, Details and Options without their ground, and
+#   the themes' colours (themes.json), for the page that tries grounds (GROUND)
 import glob
 import os
 import re
@@ -181,14 +184,15 @@ class Canvas:
     def over(self, layer):
         self.im.alpha_composite(layer)
 
-    def panel(self, box, radius=10):
+    def panel(self, box, radius=10, alpha=None):
+        """alpha: the body's, if not the scheme's"""
         x0, y0, x1, y1 = box
         shadow = self.layer()
         ImageDraw.Draw(shadow).rounded_rectangle((x0 + 2, y0 + 5, x1 + 2, y1 + 5), radius, fill=(20, 0, 30, 120))
         self.over(shadow.filter(ImageFilter.GaussianBlur(5)))
         body = self.layer()
         d = ImageDraw.Draw(body)
-        d.rounded_rectangle(box, radius, fill=PANEL + (PANEL_ALPHA,), outline=EDGE + (150,), width=1)
+        d.rounded_rectangle(box, radius, fill=PANEL + (alpha or PANEL_ALPHA,), outline=EDGE + (150,), width=1)
         d.line((x0 + radius, y0 + 1, x1 - radius, y0 + 1), fill=(255, 255, 255, 50))   # light from above
         self.over(body)
 
@@ -474,8 +478,90 @@ def mister_logo(scale):
     return _cache[key]
 
 
-def layer_ground():
-    return Canvas().im
+# The ground: the theme's gradient, or a pattern over it that may scroll
+# (Danik, 2026-10-26: a checker of 32, 25% darker, moving down and right a
+# pixel a frame of an interlaced screen, the default; the pattern, its
+# intensity, its strength across the screen, its direction and its speed are
+# options; GROUND["pattern"] None is the gradient alone, the option Off). Every pixel of a pattern is one of two grounds, A or B, never a mix:
+# the program puts the screen together over each once and copies every row
+# from the two in runs, so a moving pattern costs a copy of the frame, not the
+# whole screen laid together again. So no soft edges, and the pattern moves by
+# whole pixels. A is the gradient (or the theme's middle colour, flat), B is A
+# shaded: lighter or darker by `shade` (-1..1), as much everywhere or more at
+# the top, the bottom or the edges (`fade`), as B may be any picture; or
+# ("custom") A and B two colours of their own, "a" and "b".
+# `line` is the share of a cell the grid's lines, the dots and the mortar take.
+GROUND = dict(pattern="checker", size=32, line=0.125, shade=-0.25, fade="even", ground="gradient", a="7F30A0",
+              b="5A1F75", direction=(1, 1), step=1.0)
+PATTERNS = ("checker", "diamonds", "stripes", "columns", "rows", "grid", "dots", "zigzag", "bricks")
+
+
+def pattern_mask(pattern, size, line=0.125, ox=0, oy=0, w=W, h=H):
+    """Where B is: a W x H array of bools, the pattern moved by (ox, oy)"""
+    import numpy as np
+    s = max(2, int(size))
+    v, u = np.mgrid[0:h, 0:w]
+    u, v = u - int(ox), v - int(oy)   # moved right and down by (ox, oy)
+    lw = max(1, round(s * line))
+    if pattern == "checker":
+        return ((u // s + v // s) & 1) == 1
+    if pattern == "diamonds":
+        return (((u + v) // s + (u - v) // s) & 1) == 1
+    if pattern == "stripes":
+        return (((u + v) // s) & 1) == 1
+    if pattern == "columns":
+        return ((u // s) & 1) == 1
+    if pattern == "rows":
+        return ((v // s) & 1) == 1
+    if pattern == "grid":
+        return (u % s < lw) | (v % s < lw)
+    if pattern == "dots":
+        dx, dy = u % s - (s - 1) / 2, v % s - (s - 1) / 2
+        r = s * (0.18 + line)
+        return dx * dx + dy * dy <= r * r
+    if pattern == "zigzag":
+        return (((v + np.abs(u % s - s // 2)) // max(1, s // 2)) & 1) == 1
+    if pattern == "bricks":
+        bh = max(2, s // 2)
+        row = v // bh
+        return (v % bh < lw) | ((u + (row & 1) * (s // 2)) % s < lw)
+    raise ValueError(pattern)
+
+
+def ground_pair(g=None):
+    """The two grounds of a pattern, A and B, as float arrays H x W x 3"""
+    import numpy as np
+    g = dict(GROUND, **(g or {}))
+    t = np.linspace(0, 1, H)[:, None, None]
+    top, bottom = np.array(BG_TOP, float), np.array(BG_BOTTOM, float)
+    if g["ground"] == "custom":   # two colours of the player's, A flat
+        a = np.broadcast_to(np.array(rgb(g["a"]), float), (H, W, 3)).copy()
+    elif g["ground"] == "flat":
+        a = np.broadcast_to((top + bottom) / 2, (H, W, 3)).copy()
+    else:
+        a = np.broadcast_to(top + (bottom - top) * t, (H, W, 3)).copy()
+    yy, xx = np.mgrid[0:H, 0:W]
+    k = {"even": np.ones((H, W)), "top": 1 - 0.85 * yy / (H - 1), "bottom": 0.15 + 0.85 * yy / (H - 1),
+         "edges": np.clip(np.hypot((xx - W / 2) / (W / 2), (yy - H / 2) / (H / 2)) * 1.1 - 0.15, 0, 1)}[g["fade"]]
+    if g["ground"] == "custom":
+        return a, a + (np.array(rgb(g["b"]), float) - a) * k[:, :, None]
+    sh = g["shade"] * k[:, :, None]
+    b = np.where(sh < 0, a * (1 + sh), a + (255 - a) * sh)
+    return a, b
+
+
+def layer_ground(phase=0, g=None):
+    """The ground at the pattern's phase: the frame `phase`, moving by
+    `step` pixels a frame along `direction`"""
+    g = dict(GROUND, **(g or {}))
+    if not g["pattern"]:
+        return Canvas().im
+    import numpy as np
+    a, b = ground_pair(g)
+    d = int(phase * g["step"])
+    mask = pattern_mask(g["pattern"], g["size"], g["line"], d * g["direction"][0], d * g["direction"][1])
+    out = np.where(mask[:, :, None], b, a)
+    return Image.fromarray(np.dstack([np.round(out), np.full((H, W), 255.0)]).astype("uint8"), "RGBA")
 
 
 def layer_logo(scale=0.5, xy=(M - 4, HEAD[0])):
@@ -551,8 +637,8 @@ def list_strips(F, rows):
         for n, (kind, label, game, tag) in enumerate(rows):
             y = n * ROW
             mid = y + ROW / 2
-            if sel:
-                c.bar((5, y + 1, w - 5, y + ROW - 1))
+            if sel:   # the bar's colours without a break: layer_rows() cuts the bar out where it is
+                c.bar((5, y, w - 5, y + ROW), radius=0)
             if kind == "head":
                 c.text((12, mid), label, F.chip, SEL_INK if sel else CYAN, anchor="lm")
                 lw = F.chip.getlength(label)
@@ -859,6 +945,14 @@ def footer(c, F, hints, badge_font, family):
     c.over(layer_badge(badge_font))
 
 
+PORTS_LIST_X = (M, 400)   # the ports page's list; the port's panel to the right of it
+
+
+def ports_logo_box():
+    """The box a game's logo is fitted into on the ports page (its panel's width, less 20)"""
+    return W - M - (PORTS_LIST_X[1] + 12) - 20, 80
+
+
 def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
     c = Canvas()
     header(c, F, None, "12 ports", family)
@@ -868,7 +962,7 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
         for g in p["games"]:
             rows.append(("game", g["title"], p["engine"] in INSTALLED, p))
     cursor = next(n for n, r in enumerate(rows) if r[0] == "port" and r[1] == cursor_engine)
-    x0, x1 = M, 400
+    x0, x1 = PORTS_LIST_X
     y0, y1 = MAIN
     c.panel((x0, y0, x1, y1))
     n_rows = (y1 - y0 - 12) // ROW
@@ -898,7 +992,7 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
     px0 = x1 + 12
     c.panel((px0, y0, W - M, y1))
     pw = W - M - px0
-    logo = logo_picture(port["games"][0]["logo"], pw - 20, 80)
+    logo = logo_picture(port["games"][0]["logo"], *ports_logo_box())
     c.picture(logo, (px0 + (pw - logo.width) // 2, y0 + 10 + 80 - logo.height))
     y = y0 + 104
     c.text((px0 + 14, y), port["engine"], F.title, INK)
@@ -913,6 +1007,14 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
 OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settings.txt
     ("Font", "font", "The font of every screen here. Chakra Petch unless you pick another."),
     ("Colours", "colours", "The colours of every screen here. MiSTer Purple unless you pick another."),
+    ("Pattern", "pattern", "A pattern over the colours, moving if you like. Checker unless you pick another; "
+                           "Off leaves the colours alone."),
+    ("Pattern intensity", "intensity", "How much darker the pattern's squares, lines or dots are than the "
+                                       "colours under them. 25% unless you pick another."),
+    ("Pattern strength", "strength", "Where the pattern shows: as much everywhere, or strongest at the top, the "
+                                     "bottom or the edges of the screen, fading away from there."),
+    ("Pattern direction", "direction", "Where the pattern moves. Down and right unless you pick another."),
+    ("Pattern speed", "speed", "How fast the pattern moves: Normal is 30 pixels a second. Still stops it."),
     ("Flicker filter", "filter", "On a 15kHz screen 640x480 is interlaced: the filter softens what would "
                                  "blink. HDMI and 31kHz screens never need it."),
     ("Button symbols", "buttons", "Auto shows the buttons of the controller you use, when it is a Switch, "
@@ -926,8 +1028,41 @@ OPT_ROWS = (OPT_LIST[1] - OPT_LIST[0] - 20) // OPT_ROW
 
 
 def options_first(cursor, n):
-    """The first option in sight: the cursor kept in the middle, as in the game list"""
-    return max(0, min(cursor - OPT_ROWS // 2, n - OPT_ROWS))
+    """The first option in sight with the cursor come down from the top: the
+    list scrolls when the bar comes within two rows of its edge, as the game
+    list (and the bar glides, as the game list's: anim_cursor())"""
+    return max(0, min(cursor - (OPT_ROWS - 3), n - OPT_ROWS))
+
+
+def option_row(c, F, fonts, values, option, x0, x1, y, sel):
+    """An option's row from y: its label, its value and the arrows"""
+    label, key, help_text = option
+    mid = y + 15
+    c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
+    value = values.get(key, "Off")
+    vf = fonts[value][1] if key == "font" else F
+    vtext = fonts[value][0] if key == "font" else THEMES[value]["label"] if key == "colours" else value
+    vx = x1 - 34 - round(vf.row.getlength(vtext))
+    c.text((vx, mid), vtext, vf.row, SEL_INK if sel else CYAN, anchor="lm")
+    layer = c.layer()     # the arrows: left and right change it
+    d = ImageDraw.Draw(layer)
+    a = (SEL_INK if sel else DIM) + (255,)
+    d.polygon((vx - 14, mid, vx - 8, mid - 5, vx - 8, mid + 5), fill=a)
+    d.polygon((x1 - 20, mid, x1 - 26, mid - 5, x1 - 26, mid + 5), fill=a)
+    c.over(layer)
+
+
+def options_scroll_bar(im, n, first):
+    """The scroll bar, as the game list's, the list from option `first` on (a fraction while it moves)"""
+    x0, x1 = M, W - M
+    y0, y1 = OPT_LIST
+    if n > OPT_ROWS:
+        sh = y1 - y0 - 24
+        knob = max(16, sh * OPT_ROWS // n)
+        kt = round((sh - knob) * first / (n - OPT_ROWS))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle((x1 - 6, y0 + 12, x1 - 3, y1 - 12), 2, fill=EDGE + (60,))
+        d.rounded_rectangle((x1 - 6, y0 + 12 + kt, x1 - 3, y0 + 12 + kt + knob), 2, fill=EDGE + (230,))
 
 
 def layer_options_list(F, fonts, cursor, values, options=None):
@@ -940,32 +1075,53 @@ def layer_options_list(F, fonts, cursor, values, options=None):
     c.panel((x0, y0, x1, y1))
     first = options_first(cursor, len(options))
     for n in range(first, min(len(options), first + OPT_ROWS)):
-        label, key, help_text = options[n]
         y = y0 + 10 + (n - first) * OPT_ROW
-        mid = y + 15
         sel = n == cursor
         if sel:
             c.bar((x0 + 5, y, x1 - 9, y + 30))
-        c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
-        value = values.get(key, "Off")
-        vf = fonts[value][1] if key == "font" else F
-        vtext = fonts[value][0] if key == "font" else THEMES[value]["label"] if key == "colours" else value
-        vx = x1 - 34 - round(vf.row.getlength(vtext))
-        c.text((vx, mid), vtext, vf.row, SEL_INK if sel else CYAN, anchor="lm")
-        layer = c.layer()     # the arrows: left and right change it
-        d = ImageDraw.Draw(layer)
-        a = (SEL_INK if sel else DIM) + (255,)
-        d.polygon((vx - 14, mid, vx - 8, mid - 5, vx - 8, mid + 5), fill=a)
-        d.polygon((x1 - 20, mid, x1 - 26, mid - 5, x1 - 26, mid + 5), fill=a)
-        c.over(layer)
-    if len(options) > OPT_ROWS:   # the scroll bar, as the game list's
-        sh = y1 - y0 - 24
-        knob = max(16, sh * OPT_ROWS // len(options))
-        kt = round((sh - knob) * first / (len(options) - OPT_ROWS))
-        d = ImageDraw.Draw(c.im)
-        d.rounded_rectangle((x1 - 6, y0 + 12, x1 - 3, y1 - 12), 2, fill=EDGE + (60,))
-        d.rounded_rectangle((x1 - 6, y0 + 12 + kt, x1 - 3, y0 + 12 + kt + knob), 2, fill=EDGE + (230,))
+        option_row(c, F, fonts, values, options[n], x0, x1, y, sel)
+    bar = blank()     # laid over the panel, as the program does
+    options_scroll_bar(bar, len(options), first)
+    c.over(bar)
     return c.im
+
+
+def option_strips(F, fonts, values, options=None):
+    """The options one under the other, as they are and as they are under the
+    cursor's bar (its colours without a break: layer_option_rows() cuts the
+    bar out where it is), as the game list's strips"""
+    options = options or OPTIONS
+    w = W - 2 * M
+    out = []
+    for sel in (False, True):
+        c = Canvas(ground=False, size=(w, len(options) * OPT_ROW))
+        if sel:
+            c.bar((5, 0, w - 9, c.im.height), radius=0)
+        for n, option in enumerate(options):
+            option_row(c, F, fonts, values, option, 0, w, n * OPT_ROW, sel)
+        out.append(c.im)
+    return out
+
+
+def layer_option_rows(strips, n_total, scroll, bar):
+    """The options from row `scroll` on and the bar on row `bar` (both
+    fractions while they move), as layer_rows() the game list's: Options'
+    list is its panel and these over it"""
+    normal, selected = strips
+    x0, x1 = M, W - M
+    y0, y1 = OPT_LIST
+    w, h = x1 - x0, OPT_ROWS * OPT_ROW
+    top = round(scroll * OPT_ROW)
+    view = normal.crop((0, top, w, top + h))
+    by = round((bar - scroll) * OPT_ROW)
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((5, by, w - 10, by + 29), 7, fill=255)
+    view.paste(selected.crop((0, top, w, top + h)), (0, 0), mask)
+    out = blank()
+    out.paste(view, (x0, y0 + 10))
+    out = clip_to(out, (x0 + 2, y0 + 2, x1 - 8, y1 - 2))
+    options_scroll_bar(out, n_total, scroll)
+    return out
 
 
 def layer_options_help(F, cursor, options=None):
@@ -1161,10 +1317,116 @@ def anim_options(F, badge_font, ports, fonts, values):
     return frames
 
 
+def anim_options_cursor(F, badge_font, ports, fonts, values):
+    """Down Options from its sixth row to its last: the bar glides, the list
+    scrolls when the bar comes within two rows of its edge, as the game
+    list's (anim_cursor()); what the option does changes at once"""
+    m = Main(F, badge_font, ports, "A-Z", "doom2")
+    L = m.frame_layers()
+    panel = Canvas(ground=False)
+    panel.panel((M, OPT_LIST[0], W - M, OPT_LIST[1]))
+    layers = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, "Options"),
+              "left": panel.im}
+    fixed = compose(layers, ["logo", "title", "count", "left"])
+    hints = layer_hints(F, OPTION_HINTS, badge_font, m.family)
+    strips = option_strips(F, fonts, values)
+    n = len(OPTIONS)
+    stops = [(c, options_first(c, n)) for c in range(5, n)]
+    frames = []
+    for (c0, f0), (c1, f1) in zip(stops, stops[1:]):
+        for f in range(14):
+            e = ease_out(span(f, 0, 7))
+            fr = fixed.copy()
+            fr.alpha_composite(layer_option_rows(strips, n, lerp(f0, f1, e), lerp(c0, c1, e)))
+            for layer in (layer_options_help(F, c1), hints, L["badge"]):
+                fr.alpha_composite(layer)
+            frames.append(fr.convert("RGB"))
+    return frames
+
+
+# Exit: Back on the list asks first (Danik, 2026-10-27). The screen dims, a
+# panel in the middle asks; OK leaves to the MiSTer menu, Back stays.
+CONFIRM = (150, 180, W - 150, 300)   # the panel
+CONFIRM_DIM = 120                     # the black over the screen behind it
+CONFIRM_ALPHA = 245                   # its body, all but opaque: nothing of the list shows through
+CONFIRM_FIELDS = 10
+
+
+def layer_confirm(F, family="ps"):
+    """The question and its two buttons on a panel"""
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = CONFIRM
+    c.panel(CONFIRM, alpha=CONFIRM_ALPHA)
+    c.text(((x0 + x1) / 2, y0 + 38), "Exit to the MiSTer menu?", F.head, INK, anchor="mm")
+    where = places(family)
+    hints = (("ok", "Exit"), ("back", "Stay"))
+    probe = Canvas(ground=False)
+    width = sum(button(probe, F, family, where[a], 0, 0) + 4 + round(F.chip.getlength(w)) for a, w in hints) + 24
+    x, y = round((x0 + x1 - width) / 2), y0 + 70
+    for action, what in hints:
+        x += button(c, F, family, where[action], x, y) + 4
+        c.text((x, y + 9), what, F.chip, INK, anchor="lm")
+        x += round(F.chip.getlength(what)) + 24
+    return c.im
+
+
+def confirm_frame(main, panel, f):
+    """The main screen with the question coming up, field f of CONFIRM_FIELDS"""
+    fr = main.copy()
+    dim = span(f, 0, 8)
+    if dim > 0:
+        fr.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, round(CONFIRM_DIM * dim))))
+    p = ease_out(span(f, 2, CONFIRM_FIELDS))
+    if p > 0:
+        fr.alpha_composite(place(panel, 0, 10 * (1 - p), p))
+    return fr.convert("RGB")
+
+
+# While the launcher says what is installed and what there is (its table, 0.4
+# seconds on the MiSTer, 3 to 5 before launcher 9's norm()), before the ports page: a panel as the question's,
+# without buttons (Danik, 2026-10-27). It comes up as the question does; the
+# page then opens over it as it fades with the main screen's panels.
+WAIT = (170, 200, W - 170, 280)
+
+
+def layer_wait(F):
+    """Please wait, on a panel"""
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = WAIT
+    c.panel(WAIT, alpha=CONFIRM_ALPHA)
+    c.text(((x0 + x1) / 2, y0 + 30), "Please wait...", F.head, INK, anchor="mm")
+    c.text(((x0 + x1) / 2, y0 + 58), "Reading what is installed and available", F.small, DIM, anchor="mm")
+    return c.im
+
+
+def wait_screen(F, badge_font, ports):
+    main = compose(Main(F, badge_font, ports, "A-Z", "doom2").frame_layers())
+    return confirm_frame(main, layer_wait(F), CONFIRM_FIELDS)
+
+
+def anim_wait(F, badge_font, ports):
+    main = compose(Main(F, badge_font, ports, "A-Z", "doom2").frame_layers())
+    panel = layer_wait(F)
+    return [confirm_frame(main, panel, f) for f in range(CONFIRM_FIELDS)]
+
+
+def confirm_screen(F, badge_font, ports, family="ps"):
+    main = compose(Main(F, badge_font, ports, "A-Z", "doom2", family).frame_layers())
+    return confirm_frame(main, layer_confirm(F, family), CONFIRM_FIELDS)
+
+
+def anim_confirm(F, badge_font, ports):
+    main = compose(Main(F, badge_font, ports, "A-Z", "doom2").frame_layers())
+    panel = layer_confirm(F)
+    return [confirm_frame(main, panel, f) for f in range(CONFIRM_FIELDS)]
+
+
 def anim_play(F, badge_font, ports):
     """A in Details: the screenshot's frame flashes, the screenshot grows to
     the whole screen while the rest goes dark, then black; then the game's
-    core is loaded"""
+    core is loaded. The screenshot grows by whole pixels, blocky (Danik,
+    2026-10-27: "I don't care if the pixels are blocky"): mixing them, as it
+    did until then, was too slow on the MiSTer's ARM every field"""
     m = Main(F, badge_font, ports, "A-Z", "doom2")
     g = m.game()
     full = compose(details_layers(F, badge_font, g, m.port(g), m.family), D_ORDER)
@@ -1185,7 +1447,7 @@ def anim_play(F, badge_font, ports):
         t = ease_in_out(span(f, 3, 22))
         if f >= 3:
             w, h = lerp(SHOT[0], W, t), lerp(SHOT[1], H, t)
-            fr.paste(src.resize((round(w), round(h)), Image.BILINEAR), (round(lerp(sx, 0, t)), round(lerp(sy, 0, t))))
+            fr.paste(src.resize((round(w), round(h)), Image.NEAREST), (round(lerp(sx, 0, t)), round(lerp(sy, 0, t))))
         out = span(f, 24, 36)
         if out > 0:
             fr.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, round(255 * out))))
@@ -1203,7 +1465,49 @@ def save_animation(frames, path, slow=1):
                    lossless=False, quality=80, method=6)
 
 
+def export_layers(fonts_dir, out, repos):
+    """--layers: for the page that tries grounds, every theme's main screen,
+    Details and Options without their ground (RGBA), and the themes' colours"""
+    import json
+    ports = load_ports(repos)
+    badge = cozette(out)
+    fonts = {key: (FONTS[key][0].replace(" SemiBold", "").replace(" ExtraBold", "").replace(" Bold", "")
+                   .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
+    F = fonts["chakra"][1]
+    values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
+              "direction": "Down and right", "speed": "Normal", "filter": "Off", "buttons": "Auto: PlayStation",
+              "sort": "A-Z"}
+    colours = {}
+    for theme in THEMES:
+        apply_theme(theme)
+        colours[theme] = dict(label=THEMES[theme]["label"], top=THEMES[theme]["bg"][0],
+                              bottom=THEMES[theme]["bg"][1])
+        m = Main(F, badge, ports, "A-Z", "doom2")
+        L = m.frame_layers()
+        L.pop("ground")
+        g = m.game()
+        D = details_layers(F, badge, g, m.port(g), m.family)
+        D.pop("ground")
+        o = {"logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, "Options"),
+             "left": layer_options_list(F, fonts, 1, dict(values, colours=theme)),
+             "right": layer_options_help(F, 1), "hints": layer_hints(F, OPTION_HINTS, badge, m.family),
+             "badge": layer_badge(badge)}
+        for name, im in (("main", compose(L)), ("details", compose(D, D_ORDER)),
+                         ("options", compose(o, ["logo", "title", "count", "left", "right", "hints", "badge"]))):
+            path = os.path.join(out, "%s_%s.png" % (theme, name))
+            im.save(path, optimize=True)
+            print(path)
+    apply_theme("purple")
+    with open(os.path.join(out, "themes.json"), "w") as f:
+        json.dump(colours, f, indent=1)
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--layers":
+        if len(sys.argv) < 4:
+            sys.exit("usage: dnklauncher_mockup.py --layers <fonts dir> <out dir> [repositories...]")
+        os.makedirs(sys.argv[3], exist_ok=True)
+        return export_layers(sys.argv[2], sys.argv[3], sys.argv[4:] or sorted(glob.glob(os.path.expanduser("~/MiSTer-*"))))
     if len(sys.argv) < 3:
         sys.exit("usage: dnklauncher_mockup.py <fonts dir> <out dir> [repositories...]")
     fonts_dir, out = sys.argv[1], sys.argv[2]
@@ -1226,20 +1530,28 @@ def main():
     screens["details_dn3d"] = details_screen(F, badge, ports, "DN3D")
     screens["details_nodata"] = details_screen(F, badge, ports, "hexen")
     screens["chakra_ports"] = ports_screen(F, badge, ports, "CrispyDoom")
-    values = {"font": "chakra", "colours": "purple", "filter": "On", "buttons": "Auto: PlayStation", "sort": "A-Z"}
+    screens["confirm_exit"] = confirm_screen(F, badge, ports)
+    screens["confirm_exit_switch"] = confirm_screen(F, badge, ports, "switch")
+    screens["wait_ports"] = wait_screen(F, badge, ports)
+    values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
+              "direction": "Down and right", "speed": "Normal", "filter": "Off", "buttons": "Auto: PlayStation",
+              "sort": "A-Z"}
     screens["options_font"] = options_screen(F, badge, fonts, 0, values)
     screens["options_colours"] = options_screen(F, badge, fonts, 1, values)
-    screens["options_buttons"] = options_screen(F, badge, fonts, 3, values)
-    # a longer list, to show the scroll bar: the options after the first five are placeholders, none decided
-    more = OPTIONS + [("Placeholder %d" % n, "p%d" % n, "A placeholder, only to show how a longer list scrolls.")
-                      for n in range(1, 6)]
-    screens["options_scroll"] = options_screen(F, badge, fonts, 7, values, options=more)
+    screens["options_pattern"] = options_screen(F, badge, fonts, 2, values)
+    screens["options_buttons"] = options_screen(F, badge, fonts, 8, values)
+    screens["options_scroll"] = options_screen(F, badge, fonts, 9, values)   # the list scrolled to its end
     for theme in THEMES:     # the colour schemes
         apply_theme(theme)
         screens["theme_%s_main" % theme] = main_screen(F, badge, ports, "A-Z", "doom2")
         screens["theme_%s_details" % theme] = details_screen(F, badge, ports, "doom2")
         screens["theme_%s_options" % theme] = options_screen(F, badge, fonts, 1, dict(values, colours=theme))
     apply_theme("purple")
+    default = GROUND["pattern"]
+    for pattern in PATTERNS + (None,):   # the option Pattern (GROUND)
+        GROUND["pattern"] = pattern
+        screens["ground_%s" % (pattern or "off")] = main_screen(F, badge, ports, "A-Z", "doom2")
+    GROUND["pattern"] = default
     for name, im in screens.items():
         path = os.path.join(out, name + ".png")
         im.save(path)
@@ -1247,7 +1559,9 @@ def main():
     animations = {"start": anim_start(F, badge, ports), "cursor": anim_cursor(F, badge, ports),
                   "sort": anim_sort(F, badge, ports), "details": anim_details(F, badge, ports),
                   "back": anim_details(F, badge, ports, back=True),
-                  "options": anim_options(F, badge, ports, fonts, values), "play": anim_play(F, badge, ports)}
+                  "options": anim_options(F, badge, ports, fonts, values),
+                  "options_cursor": anim_options_cursor(F, badge, ports, fonts, values), "play": anim_play(F, badge, ports),
+                  "confirm": anim_confirm(F, badge, ports), "wait": anim_wait(F, badge, ports)}
     for name, frames in animations.items():
         for slow, suffix in ((1, ""), (4, "_slow")):
             path = os.path.join(out, "anim_%s%s.webp" % (name, suffix))

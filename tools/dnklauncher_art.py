@@ -11,6 +11,7 @@
 #   <Engine>/<id>.logo     its logo (package/logos/<id>.png) fitted into the
 #                          preview's box (the list's), with its alpha
 #   <Engine>/<id>.dlogo    the same fitted into the box of the Details page
+#   <Engine>/<id>.plogo    and into the port's panel of the ports page
 # and index.txt, a line a game: <Engine>|<id>|<title>|<year>|<developer>|
 # <description> (package/info.txt; empty fields for a game it lacks).
 #
@@ -114,6 +115,7 @@ def main():
     pw = mock.PREV_X[1] - mock.PREV_X[0]
     logo_box = (pw - 24, mock.LOGO_H)
     dlogo_box = mock.details_logo_box()[2:]
+    plogo_box = mock.ports_logo_box()
     index, total, missing = [], 0, []
     for port in mock.load_ports(repos):
         engine = port["engine"]
@@ -132,6 +134,7 @@ def main():
             logo = Image.open(g["logo"]).convert("RGBA")
             total += write(base + ".logo", fit(logo, *logo_box), True, png)
             total += write(base + ".dlogo", fit(logo, *dlogo_box), True, png)
+            total += write(base + ".plogo", fit(logo, *plogo_box), True, png)
             if gid not in info:
                 missing.append("%s/%s info" % (engine, gid))
             # tty2oled+'s icon (docs/oled.md), which package.sh also needs

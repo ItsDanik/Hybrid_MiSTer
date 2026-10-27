@@ -86,6 +86,8 @@ typedef struct {
     int forces;  // FF_CONSTANT, and opened for writing (MH_Force*)
     int force_id[MH_FORCE_SLOTS]; // the slots' stored effects, -1 = none yet
     int sines;   // FF_PERIODIC with FF_SINE as well
+    int vendor;  // its USB vendor (MH_PadFamily)
+    uint32_t pressed; // its buttons BTN_JOYSTICK.. and hat directions down at the last look (MH_PadFamily)
 } pad;
 
 static pad pads[MAX_PADS];
@@ -273,6 +275,12 @@ static void scan(void) {
         pads[free_slot].seen = 1;
         pads[free_slot].left = pads[free_slot].right = -1;
         pads[free_slot].wheel = is_wheel(fd);
+        pads[free_slot].pressed = 0;
+        {
+            struct input_id id;
+
+            pads[free_slot].vendor = ioctl(fd, EVIOCGID, &id) < 0 ? 0 : id.vendor;
+        }
     }
     if (dir != NULL) {
         closedir(dir);
@@ -662,6 +670,66 @@ int MH_ReadStickButtons(int* left, int* right) {
     *left = mh_osd_hold(&left_held, *left);
     *right = mh_osd_hold(&right_held, *right);
     return found;
+}
+
+// What is pressed on a controller: bit n its button BTN_JOYSTICK + n (n < 28;
+// BTN_GAMEPAD is n 16), bits 28..31 its hat's directions
+static uint32_t pressed_on(const pad* p) {
+    unsigned long keys[KEY_MAX / (8 * sizeof(long)) + 1];
+    struct input_absinfo hat;
+    uint32_t bits = 0;
+    int n;
+
+    memset(keys, 0, sizeof keys);
+    if (ioctl(p->fd, EVIOCGKEY(sizeof keys), keys) >= 0) {
+        for (n = 0; n < 28; n++) {
+            if (has_bit(keys, BTN_JOYSTICK + n)) {
+                bits |= 1u << n;
+            }
+        }
+    }
+    if (ioctl(p->fd, EVIOCGABS(ABS_HAT0X), &hat) >= 0 && hat.value != 0) {
+        bits |= hat.value < 0 ? 1u << 28 : 1u << 29;
+    }
+    if (ioctl(p->fd, EVIOCGABS(ABS_HAT0Y), &hat) >= 0 && hat.value != 0) {
+        bits |= hat.value < 0 ? 1u << 30 : 1u << 31;
+    }
+    return bits;
+}
+
+int MH_PadFamily(void) {
+    static int last = -1; // the vendor of the controller pressed last
+    int i, first = -1;
+
+    if (getenv("MISTER_HYBRID_PADFAMILY") != NULL) { // for tests without a controller
+        return atoi(getenv("MISTER_HYBRID_PADFAMILY"));
+    }
+    refresh();
+    for (i = 0; i < MAX_PADS; i++) {
+        pad* p = &pads[i];
+        uint32_t now;
+
+        if (p->fd < 0 || p->wheel) {
+            continue;
+        }
+        if (first < 0) {
+            first = p->vendor;
+        }
+        now = pressed_on(p);
+        if (now & ~p->pressed) {
+            last = p->vendor;
+        }
+        p->pressed = now;
+    }
+    switch (last >= 0 ? last : first) {
+    case 0x057e: // Nintendo (an 8BitDo pad in Switch mode too)
+        return MH_PAD_NINTENDO;
+    case 0x045e: // Microsoft
+        return MH_PAD_XBOX;
+    case 0x054c: // Sony
+        return MH_PAD_PLAYSTATION;
+    }
+    return MH_PAD_OTHER;
 }
 
 int MH_WheelConnected(void) {

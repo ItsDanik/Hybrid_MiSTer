@@ -12,7 +12,8 @@
 //  640x480 and shows a picture of its own: a logo in the middle of the screen
 //  and the version of this module in the bottom right corner (see "Picture
 //  without a game" below). It comes with an intro when the core starts,
-//  which a game waits for, and fades out before the game gets the screen.
+//  which a game waits for, and fades out before the game gets the screen
+//  (with INTRO 0, a frontend's: neither).
 //
 //  A game is attached while the control block has its magic. One that was
 //  killed, or running when the MiSTer was reset, leaves that behind, and the
@@ -115,7 +116,8 @@
 //                   its own picture, which it still does after ctrl_valid
 //                   became 1: to the end of its intro (4.1 seconds from the
 //                   intro's start at most), then 0.7 seconds of fading out
-//                   (the mode is 640x480 until then).
+//                   (the mode is 640x480 until then). With INTRO 0 at the
+//                   next frame (one field, two interlaced).
 //              w2  {joystick_1, joystick_0}
 //              w3  {r_analog_1, l_analog_1, r_analog_0, l_analog_0}
 //              w4  OSD status[63:0], but bits 59..56: a trigger's toggle
@@ -212,7 +214,13 @@ module hybrid_host
 	// the MIDI synthesizer (host version 16): 1 in a core whose games play
 	// MIDI music, 0 leaves it and its 100MHz PLL out (about 9,500 ALMs, 316
 	// M10K and 20 DSP blocks); status word 1 bit 28 says which
-	parameter MIDI_SYNTH   = 1
+	parameter MIDI_SYNTH   = 1,
+	// the intro (see "Picture without a game"): 1 in every core. 0 only in a
+	// frontend whose first frames take over the picture as it is at the end
+	// of the intro (dnkLauncher, docs/dnklauncher.md): that picture from the
+	// start, no black and no intro, and the program's first frame on the
+	// screen at the next frame, without the picture going out first
+	parameter INTRO        = 1
 )
 (
 	input             clk,          // 50MHz
@@ -670,6 +678,20 @@ always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
 // the master level (in its palette as well) and the logo staying gone. The
 // game then has the screen in its own mode, black until it publishes another
 // framebuffer than the overlay's (ovl_left): its first frame always is.
+//
+// INTRO 0 (a frontend, docs/dnklauncher.md): the picture is at the end of
+// its intro from the core's start and after a reset (no black fields, no
+// intro: the levels, places and dots as at intro field 242, the dots going
+// round), and a program that attaches has the screen at the next frame
+// (game_take: the field after the vblank that read its control block, or the
+// one after that when that vblank was between the two fields of a frame),
+// in its own mode, without the picture going out: a cut. The frontend's first
+// frames are the same picture, so nothing is seen to change. Everything else
+// is as with INTRO 1: messages, the overlay (its handover begins at once), the
+// core's own message after WALL_TIMEOUT, and a program that leaves: black for
+// WALL_HOLD_LEFT, then the picture fading in at the end of its intro, as with
+// a message. A Horizontal Size other than 0 still makes the cut a change of
+// the video clock (the picture's own is size 0): a moment of no signal.
 
 localparam [23:0] WALL_BG  = 24'h7F30A0;   // BACKGROUND of make_wall.py
 localparam [23:0] WALL_LIT = 24'hFF5CB4;   // a lit dot: the pink of "FPGA", brighter
@@ -754,7 +776,7 @@ reg  [1:0] msg_sel = 0;
 reg        msg_timeout = 0;   // the core's own is shown
 reg        attached = 0;      // a game was there since the core started
 reg [10:0] alone_t = 0;       // fields without one
-reg        intro_skip = 0;    // the intro begun with a message: at its end at once
+reg        intro_skip = INTRO == 0;   // the intro begun with a message (or INTRO 0): at its end at once
 reg        ovl_on = 0;        // the overlay's handover has begun
 reg  [6:0] ovl_t = 0;         // its fields, up to 127
 reg        msg_keep = 0;      // the message, gone meanwhile, goes out with the logo
@@ -765,14 +787,15 @@ reg  [1:0] ovl_fb = 0;        // the overlay's framebuffer
 wire       ovl_out_req;       // w2[58]: the overlay out, held there
 wire       ovl_rise;          // w2[59]: it rises in and sinks out
 
-reg  [7:0] wall_hold = WALL_HOLD;   // fields of black still to come
-reg  [8:0] wall_level = 0;    // the master level, 0..256
-reg        intro_on = 0;      // the intro has begun
-reg  [8:0] intro_t = 0;       // its fields, up to 511
+// INTRO 0: at the end of the intro from the start (and after a reset)
+reg  [7:0] wall_hold = INTRO ? WALL_HOLD : 8'd0;   // fields of black still to come
+reg  [8:0] wall_level = INTRO ? 9'd0 : 9'd256;     // the master level, 0..256
+reg        intro_on = INTRO == 0;                  // the intro has begun
+reg  [8:0] intro_t = INTRO ? 9'd0 : 9'd0 + WALL_T_END;   // its fields, up to 511
 reg  [5:0] dot_t = 0;         // fields since the dots began, round and round
 wire       intro_done = intro_t >= WALL_T_END;
 reg        fade_start = 0;    // a field's levels to work out (set in the vblank)
-reg        anim_frame = 0;    // and what moves as well: a frame starts
+reg        anim_frame = INTRO == 0;   // and what moves as well: a frame starts
 reg [23:0] wall_bg = 0;       // the background, as shown
 reg [23:0] dot_lit = 0;       // a lit dot, as shown
 reg [23:0] msg_ink = 0;       // the text of a message, as shown
@@ -819,7 +842,7 @@ endfunction
 // at a time), then the 32 colours and the message's 3, each mixed from the
 // background at its part's level in one clock and put at the master level in
 // the next.
-reg  [6:0] wall_seq = 7'h7F;  // 7F: idle
+reg  [6:0] wall_seq = INTRO ? 7'h7F : 7'h0;   // 7F: idle; INTRO 0 works out the picture's first field at once
 reg  [8:0] p_logo = 0, p_icon = 0, p_text = 0, p_shine = 0, p_ovl = 0;
 reg  [8:0] e_logo = 0, e_icon = 0, e_text = 0, e_ovl = 0;
 reg  [8:0] ease_q;
@@ -1569,12 +1592,13 @@ wire [28:0] fb_addr = FB_ADDR + {10'd0, fb_index, 17'd0};
 wire [28:0] row_addr = fb_addr + fetch_row * row_len;
 
 // the game gets the screen once the core's picture has faded out; one that
-// asks for the overlay never does
+// asks for the overlay never does. INTRO 0: at once, when a frame starts
+// (interlaced, both fields of a frame are of the same picture)
 wire       ctrl_magic = (ctrl_w0[31:0] == CTRL_MAGIC);
 wire       ovl_want   = ctrl_magic && ctrl_w0[58];
 assign     ovl_out_req = ctrl_magic && ctrl_w2[58];
 assign     ovl_rise    = ctrl_w2[59];
-wire       game_take  = ctrl_magic && !ovl_want && (game_on || wall_level == 0);
+wire       game_take  = ctrl_magic && !ovl_want && (game_on || wall_level == 0 || (INTRO == 0 && !(u_lace && run && vbl_field)));
 wire [9:0] pal_want   = !ovl_on ? 10'd256 : (wall_level != 9'd256) ? {1'b1, wall_level} : {1'b0, lv_ovl};
 
 reg [63:0] stat_word;
@@ -1892,7 +1916,8 @@ always @(posedge clk) begin
 					fade_start <= 1;
 					anim_frame <= !(u_lace && run && vbl_field);
 					if (ctrl_magic && !ovl_want && (!intro_on || intro_done)) begin
-						wall_level <= (wall_level < WALL_STEP) ? 9'd0 : wall_level - WALL_STEP;
+						// INTRO 0: no going out, the game has the screen at the next frame
+						if (INTRO != 0) wall_level <= (wall_level < WALL_STEP) ? 9'd0 : wall_level - WALL_STEP;
 						if (intro_on) dot_t <= dot_t + 1'd1;
 						msg_keep   <= 0;
 					end
@@ -1917,15 +1942,16 @@ always @(posedge clk) begin
 					end
 					else if (!run) ;
 					// a message: no black, and the picture as at the end of
-					// its intro, fading in
+					// its intro, fading in; INTRO 0 that picture, fading in,
+					// after a game has left
 					else if (wall_hold != 0) wall_hold <= msg_show ? 8'd0 : wall_hold - 1'd1;
 					else begin
-						if (!intro_on && msg_show) begin
+						if (!intro_on && (msg_show || INTRO == 0)) begin
 							intro_skip <= 1;
 							intro_t    <= WALL_T_END;
 						end
 						intro_on   <= 1;
-						wall_level <= !(intro_skip || (!intro_on && msg_show)) ? 9'd256
+						wall_level <= !(intro_skip || (!intro_on && (msg_show || INTRO == 0))) ? 9'd256
 						            : (wall_level > 9'd256 - WALL_STEP) ? 9'd256 : wall_level + WALL_STEP;
 						if (intro_on && intro_t != 9'd511) intro_t <= intro_t + 1'd1;
 						if (intro_on && intro_t >= WALL_T_DOTS) dot_t <= dot_t + 1'd1;
@@ -2026,10 +2052,12 @@ always @(posedge clk) begin
 		vbl_req    <= 0;
 		ctrl_valid <= 0;
 		game_on    <= 0;
-		wall_hold  <= WALL_HOLD;
-		wall_level <= 0;
-		intro_on   <= 0;
-		intro_skip <= 0;
+		// INTRO 0: the picture at the end of its intro at once
+		wall_hold  <= INTRO ? WALL_HOLD : 8'd0;
+		wall_level <= INTRO ? 9'd0 : 9'd256;
+		intro_on   <= INTRO == 0;
+		intro_skip <= INTRO == 0;
+		if (INTRO == 0) anim_frame <= 1;
 		ovl_on     <= 0;
 		msg_keep   <= 0;
 		ovl_left   <= 0;
@@ -2038,7 +2066,7 @@ always @(posedge clk) begin
 		msg_timeout <= 0;
 		msg_show   <= 0;
 		msg_loaded <= 0;
-		intro_t    <= 0;
+		intro_t    <= INTRO ? 9'd0 : 9'd0 + WALL_T_END;
 		dot_t      <= 0;
 		fade_start <= 1;
 		pal_loaded <= 0;

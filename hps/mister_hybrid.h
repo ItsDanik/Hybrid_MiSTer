@@ -284,6 +284,19 @@ int MH_WheelConnected(void);
 // controller whose driver names them otherwise has none here), pressed on
 // any controller. Returns 0 while no gamepad is connected.
 int MH_ReadStickButtons(int* left, int* right);
+// The kind of controller pressed last, by its maker (its USB vendor): for
+// showing the player the symbols of the buttons in their hands. Each call
+// looks at the buttons and the d-pad of every controller, read from Linux as
+// the stick buttons are, and takes the one where something went down since
+// the call before; until one has, the first controller found. MH_PAD_OTHER
+// for any other maker and while no controller is connected. Cheap enough to
+// call every frame (a look at each controller). MISTER_HYBRID_PADFAMILY=<n>
+// fixes it for a test.
+#define MH_PAD_OTHER 0
+#define MH_PAD_NINTENDO 1
+#define MH_PAD_XBOX 2
+#define MH_PAD_PLAYSTATION 3
+int MH_PadFamily(void);
 // The d-pad directions (MH_JOY_RIGHT, _LEFT, _DOWN, _UP) the left stick points
 // in, a quarter of the way out or more; x and y are the stick as mh_input has
 // it (-128..127, y down positive; an SDL axis >> 8). Main_MiSTer presses the
