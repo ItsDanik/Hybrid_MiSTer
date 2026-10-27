@@ -201,8 +201,9 @@ class Canvas:
         ImageDraw.Draw(layer).text(xy, s, font=font, fill=colour + (255,), anchor=anchor)
         self.over(layer)
 
-    def bar(self, box, radius=7):
-        """The cursor's bar: PINK to PEACH, rounded"""
+    def bar(self, box, radius=0):
+        """The cursor's bar: PINK to PEACH, square (Danik, 2026-10-27), across
+        the panel's inside from rim to rim, the scroll bar over it"""
         x0, y0, x1, y1 = box
         grad = Image.new("RGBA", (x1 - x0, y1 - y0))
         gd = ImageDraw.Draw(grad)
@@ -355,15 +356,21 @@ def load_ports(repos):
 # and the artwork, and A opens the game's Details page with everything else.
 
 HEAD = (19, 75)           # the MiSTer logo and the sort modes
-MAIN = (83, 393)          # the list and the preview; Details' panels
+MAIN = (83, 393)          # the pages' panels (Details, Options, the ports page)
 FOOT = (405, 441)         # the buttons and the badge
 LIST_X = (M, 330)
 PREV_X = (342, W - M)
 ROW = 24
-N_ROWS = (MAIN[1] - MAIN[0] - 12) // ROW
-LIST_PAD = (MAIN[1] - MAIN[0] - N_ROWS * ROW) // 2
 SHOT = (256, 192)         # the screenshot, in the preview and in Details
 LOGO_H = 64               # the game's logo in the preview
+# The list and the preview, as high as the preview needs (Danik, 2026-10-27):
+# the logo PREV_TOP from its top, the screenshot's frame 4 pixels from its
+# bottom rim as from its sides; centred between HEAD and FOOT
+PREV_TOP = 21
+LIST_H = PREV_TOP + LOGO_H + 12 + SHOT[1] + 6
+LIST_Y = (HEAD[1] + (FOOT[0] - HEAD[1] - LIST_H) // 2, HEAD[1] + (FOOT[0] - HEAD[1] - LIST_H) // 2 + LIST_H)
+N_ROWS = (LIST_H - 6) // ROW   # 12, the first and the last 3 or 4 pixels from the rim
+LIST_PAD = (LIST_H - N_ROWS * ROW) // 2
 WALL_BG = (0x7F, 0x30, 0xA0)   # the core's own screen (hybrid_host.sv): its ground,
 WALL_LOGO = (105, 184)         # where its logo (429x111) is, WALL_LOGO_X / _Y,
 WALL_EDGE = 34                 # and its badge, 34 from the right edge and the bottom
@@ -638,7 +645,7 @@ def list_strips(F, rows):
             y = n * ROW
             mid = y + ROW / 2
             if sel:   # the bar's colours without a break: layer_rows() cuts the bar out where it is
-                c.bar((5, y, w - 5, y + ROW), radius=0)
+                c.bar((1, y, w, y + ROW))
             if kind == "head":
                 c.text((12, mid), label, F.chip, SEL_INK if sel else CYAN, anchor="lm")
                 lw = F.chip.getlength(label)
@@ -672,24 +679,26 @@ def layer_rows(strips, n_total, scroll, bar, dx=0.0):
     view = normal.crop((0, top, w, top + h))
     by = round((bar - scroll) * ROW)
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((5, by + 1, w - 6, by + ROW - 2), 7, fill=255)
+    ImageDraw.Draw(mask).rectangle((1, by + 1, w - 1, by + ROW - 2), fill=255)
     view.paste(selected.crop((0, top, w, top + h)), (0, 0), mask)
     out = blank()
-    out.paste(view, (x0 + round(dx), MAIN[0] + LIST_PAD))
-    out = clip_to(out, (x0 + 2, MAIN[0] + 2, x1 - 6, MAIN[1] - 2))
+    out.paste(view, (x0 + round(dx), LIST_Y[0] + LIST_PAD))
+    out = clip_to(out, (x0 + 1, LIST_Y[0] + 2, x1 - 1, LIST_Y[1] - 2))
     if n_total > N_ROWS:      # the scroll bar
-        sh = MAIN[1] - MAIN[0] - 24
+        sh = LIST_Y[1] - LIST_Y[0] - 24
         knob = max(16, sh * N_ROWS // n_total)
         kt = round((sh - knob) * scroll / (n_total - N_ROWS))
-        d = ImageDraw.Draw(out)
-        d.rounded_rectangle((x1 - 4, MAIN[0] + 12, x1 - 1, MAIN[1] - 12), 2, fill=EDGE + (60,))
-        d.rounded_rectangle((x1 - 4, MAIN[0] + 12 + kt, x1 - 1, MAIN[0] + 12 + kt + knob), 2, fill=EDGE + (230,))
+        sb = blank()   # laid over the bar, not in its place
+        d = ImageDraw.Draw(sb)
+        d.rounded_rectangle((x1 - 4, LIST_Y[0] + 12, x1 - 1, LIST_Y[1] - 12), 2, fill=EDGE + (60,))
+        d.rounded_rectangle((x1 - 4, LIST_Y[0] + 12 + kt, x1 - 1, LIST_Y[0] + 12 + kt + knob), 2, fill=EDGE + (230,))
+        out.alpha_composite(sb)
     return out
 
 
 def preview_shot_xy():
     pw = PREV_X[1] - PREV_X[0]
-    top = MAIN[0] + (MAIN[1] - MAIN[0] - LOGO_H - 12 - SHOT[1]) // 2
+    top = LIST_Y[0] + PREV_TOP
     return PREV_X[0] + (pw - SHOT[0]) // 2, top + LOGO_H + 12
 
 
@@ -822,8 +831,8 @@ class Main:
         return {
             "ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, self.count),
             "chips": layer_chips(F, self.family, chip_rects(F)[self.mode]),
-            "list_panel": layer_panel((LIST_X[0], MAIN[0], LIST_X[1], MAIN[1])),
-            "prev_panel": layer_panel((PREV_X[0], MAIN[0], PREV_X[1], MAIN[1])),
+            "list_panel": layer_panel((LIST_X[0], LIST_Y[0], LIST_X[1], LIST_Y[1])),
+            "prev_panel": layer_panel((PREV_X[0], LIST_Y[0], PREV_X[1], LIST_Y[1])),
             "rows": layer_rows(self.strips, len(self.rows), self.first, self.cursor),
             "prev_logo": layer_preview_logo(g), "prev_shot": layer_shot(F, g, preview_shot_xy()),
             "hints": layer_hints(F, MAIN_HINTS, self.badge_font, self.family), "badge": layer_badge(self.badge_font),
@@ -972,7 +981,7 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
         mid = y + ROW / 2
         sel = n == cursor
         if sel:
-            c.bar((x0 + 5, y + 1, x1 - 5, y + ROW - 1))
+            c.bar((x0 + 1, y + 1, x1, y + ROW - 1))
         ink = SEL_INK if sel else INK
         if kind == "set":
             c.text((x0 + 14, mid), label, F.row, ink, anchor="lm")
@@ -1078,7 +1087,7 @@ def layer_options_list(F, fonts, cursor, values, options=None):
         y = y0 + 10 + (n - first) * OPT_ROW
         sel = n == cursor
         if sel:
-            c.bar((x0 + 5, y, x1 - 9, y + 30))
+            c.bar((x0 + 1, y, x1, y + 30))
         option_row(c, F, fonts, values, options[n], x0, x1, y, sel)
     bar = blank()     # laid over the panel, as the program does
     options_scroll_bar(bar, len(options), first)
@@ -1096,7 +1105,7 @@ def option_strips(F, fonts, values, options=None):
     for sel in (False, True):
         c = Canvas(ground=False, size=(w, len(options) * OPT_ROW))
         if sel:
-            c.bar((5, 0, w - 9, c.im.height), radius=0)
+            c.bar((1, 0, w, c.im.height))
         for n, option in enumerate(options):
             option_row(c, F, fonts, values, option, 0, w, n * OPT_ROW, sel)
         out.append(c.im)
@@ -1115,12 +1124,14 @@ def layer_option_rows(strips, n_total, scroll, bar):
     view = normal.crop((0, top, w, top + h))
     by = round((bar - scroll) * OPT_ROW)
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((5, by, w - 10, by + 29), 7, fill=255)
+    ImageDraw.Draw(mask).rectangle((1, by, w - 1, by + 29), fill=255)
     view.paste(selected.crop((0, top, w, top + h)), (0, 0), mask)
     out = blank()
     out.paste(view, (x0, y0 + 10))
-    out = clip_to(out, (x0 + 2, y0 + 2, x1 - 8, y1 - 2))
-    options_scroll_bar(out, n_total, scroll)
+    out = clip_to(out, (x0 + 1, y0 + 2, x1 - 1, y1 - 2))
+    sb = blank()   # laid over the bar, not in its place
+    options_scroll_bar(sb, n_total, scroll)
+    out.alpha_composite(sb)
     return out
 
 
