@@ -42,6 +42,13 @@ localparam SYNTH = 0;
 `else
 localparam SYNTH = 1;
 `endif
+// a frontend's core without the intro with -DNO_INTRO (INTRO 0): its own
+// short test (test_no_intro) and nothing else
+`ifdef NO_INTRO
+localparam INTRO_P = 0;
+`else
+localparam INTRO_P = 1;
+`endif
 
 reg clk = 0;
 always #10 clk = ~clk; // 50MHz
@@ -88,7 +95,7 @@ always #20.345 clk_audio = ~clk_audio; // 24.576MHz
 
 hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_DOTS("rtl/hybrid_wall_dots.hex"),
 	.WALL_EASE("rtl/hybrid_wall_ease.hex"), .WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"),
-	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH)) dut
+	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH), .INTRO(INTRO_P)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
@@ -267,6 +274,16 @@ integer px = 0, py = 0;
 integer errors = 0, checked = 0;
 integer fields_seen = 0;
 integer check_enable = 0, check_black = 0, check_wall = 0;
+// check_auto (with check_wall): each field the picture or the game's, as the
+// core had it when the field started (fld_game), for a handover; and what
+// else that field was: the one with the odd rows (fld_f1). run_stops: the
+// times the video output was stopped (a change of the video clock)
+integer check_auto = 0, fld_game = 0, fld_f1 = 0, run_stops = 0;
+reg     old_run = 0;
+always @(posedge clk) begin
+	if (old_run && !dut.run) run_stops = run_stops + 1;
+	old_run <= dut.run;
+end
 // the picture without a game, on a screen of 640x480: the logo (429x111) in
 // the middle, the badge (320x54) 34 pixels from the right edge and from the
 // bottom, their pixels one after the other in the file and 16 colours each.
@@ -635,6 +652,146 @@ task test_intro;
 		if (wall_lvl != 256) begin $display("FAIL: intro level"); errors = errors + 1; end
 	end
 endtask
+// INTRO 0 (-DNO_INTRO), a program's first frame: RGB565 in 640x480, the
+// picture's own mode (no change of the video clock), on the screen at the
+// next frame without the picture going out. Begun in a field with the even
+// rows, the next field is still the picture (both fields of a frame are of
+// the same one), in one with the odd rows, the next is the game's. Every
+// pixel of the fields around it checked, the picture's at the full level.
+task no_intro_handover(input integer start_f1);
+	integer n, walls, games, bad, first_f1, err0, stops0;
+	begin
+		@(negedge vblank);
+		repeat (50) @(posedge clk);
+		while (f1 != start_f1[0]) begin
+			@(negedge vblank);
+			repeat (50) @(posedge clk);
+		end
+		err0 = errors;
+		stops0 = run_stops;
+		checked = 0;
+		cur_fb = 2; cur_mode = 1; cur_vmode = 4;
+		check_auto = 1;
+		check_wall = 1;
+		check_enable = 1;
+		set_ctrl(2, 1, 0, 10);
+		n = 0; walls = 0; games = 0; bad = 0; first_f1 = -1;
+		while (games < 4 && n < 12) begin
+			wait_fields(1);
+			n = n + 1;
+			if (fld_game) begin
+				if (games == 0) first_f1 = fld_f1;
+				games = games + 1;
+			end
+			else begin
+				if (games != 0 || wall_lvl != 256) bad = bad + 1;
+				walls = walls + 1;
+			end
+		end
+		check_enable = 0;
+		check_wall = 0;
+		check_auto = 0;
+		$display("no intro, handover in a field with the %0s rows: %0d fields of the picture, then %0d of the game's from one with the %0s rows, %0d wrong, %0d pixels checked, %0d errors",
+			start_f1 ? "odd" : "even", walls, games, first_f1 ? "odd" : "even", bad, checked, errors - err0);
+		// (the field it began in from its 50th clock on)
+		if (walls != (start_f1 ? 1 : 2) || games != 4 || bad != 0 || first_f1 != 0 || errors != err0 || checked < n * 153600 - 640
+			|| run_stops != stops0 || !dut.game_on || !mem[9][19] || mem[9][15:12] != 4 || !lace || field_rows != 240) begin
+			$display("FAIL: handover without the intro"); errors = errors + 1;
+		end
+	end
+endtask
+
+// INTRO 0 (-DNO_INTRO): the picture as at the end of the intro from the first
+// field the output has, every pixel checked at the full level, the dots going
+// round; the magic an earlier game left behind cleared, no game for it; a
+// message under the logo. Then the handover, in a field of each kind, with a
+// program leaving between them: black for WALL_HOLD_LEFT, then the picture
+// at the end of its intro fading in.
+task test_no_intro;
+	integer n, bad, dots0, l, c;
+	reg [8*80-1:0] line;
+	begin
+		check_wall = 1;
+		check_enable = 1;
+		reset = 0;
+		bad = 0;
+		wait_fields(1);
+		if (dut.intro_t != 242 || !dut.intro_on || dut.wall_hold != 0 || !dut.a_dots) bad = bad + 1;
+		dots0 = dut.dot_t;
+		for (n = 1; n < 4; n = n + 1) begin
+			if (wall_lvl != 256) bad = bad + 1;
+			wait_fields(1);
+		end
+		if (wall_lvl != 256) bad = bad + 1;
+		check_enable = 0;
+		check_wall = 0;
+		$display("no intro: the first 4 fields, checked %0d pixels, %0d errors, %0d wrong, rows/field %0d",
+			checked, errors, bad, field_rows);
+		if (bad != 0 || checked != 4 * 153600 || field_rows != 240 || !lace || dut.game_on) begin
+			$display("FAIL: picture without the intro"); errors = errors + 1;
+		end
+		// (the control block is read once the core has cleared it: the dots
+		// go round from then on)
+		while (dut.ctrl_clear != 0) wait_fields(1);
+		wait_fields(4);
+		$display("no intro: dots %0d -> %0d", dots0, dut.dot_t);
+		if (mem[0][31:0] != 0 || dut.game_on || mem[9][19]) begin $display("FAIL: magic of an earlier game"); errors = errors + 1; end
+		if (dut.dot_t == dots0 || !dut.a_dots) begin $display("FAIL: dots without the intro"); errors = errors + 1; end
+		// a message, its dots going round
+		for (n = 0; n < 40; n = n + 1) tb_msg[n] = 0;
+		line = "dnkLauncher: a message under the logo, without the intro.";
+		c = 79;
+		while (c >= 0 && line[8 * c +: 8] == 0) c = c - 1;
+		for (n = 0; n <= c; n = n + 1) tb_msg[n / 8][(n % 8) * 8 +: 8] = line[8 * (c - n) +: 8];
+		for (n = 0; n < 40; n = n + 1) mem[29'h301 + n] = tb_msg[n];
+		mem[29'h300] = {16'd0, 16'd3, 32'h534D484D};
+		n = 0;
+		while (!mem[9][20] && n < 10) begin
+			wait_fields(1);
+			n = n + 1;
+		end
+		tb_msg_on = 1;
+		wait_fields(2);
+		checked = 0;
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("no intro, a message: checked %0d pixels, %0d errors, level %0d, dots %0d", checked, errors, wall_lvl, dut.a_dots);
+		if (!mem[9][20] || wall_lvl != 256 || !dut.a_dots) begin $display("FAIL: message without the intro"); errors = errors + 1; end
+		mem[29'h300] = 0;
+		tb_msg_on = 0;
+		wait_fields(3);
+
+		fill(4);
+		no_intro_handover(0);
+		// the program leaves: black for 3 seconds (shortened here), then the
+		// picture fades in, at the end of its intro
+		mem[0][31:0] = 0;
+		wait_fields(3);
+		if (dut.game_on || wall_lvl != 0 || dut.wall_hold < 170) begin $display("FAIL: picture not black after the program left"); errors = errors + 1; end
+		dut.wall_hold = 4;
+		n = 0;
+		while (wall_lvl != 256 && n < 80) begin
+			wait_fields(1);
+			n = n + 1;
+		end
+		wait_fields(1);
+		checked = 0;
+		check_wall = 1;
+		check_enable = 1;
+		wait_fields(2);
+		check_enable = 0;
+		check_wall = 0;
+		$display("no intro, the program left: the picture at the full level after %0d fields, intro field %0d, checked %0d pixels, %0d errors",
+			n, dut.intro_t, checked, errors);
+		if (n < 46 || n > 50 || dut.intro_t < 242 || !dut.a_dots || mem[9][19]) begin $display("FAIL: picture after the program left"); errors = errors + 1; end
+		no_intro_handover(1);
+		if (short_lines != 0 || unmasked_lines != 0) errors = errors + 1;
+	end
+endtask
+
 reg     old_hblank = 1, old_vblank = 1, old_vsync = 0;
 integer ce_count = 0, last_hs_ce = 0, hs_period = 0, last_vs_ce = 0, vs_period = 0;
 reg     old_hsync = 0;
@@ -692,6 +849,8 @@ always @(posedge clk_vid) if (ce_pix) begin
 	if (!vblank && old_vblank) begin
 		py = 0;
 		wall_lvl = dut.wall_level;
+		fld_game = dut.v_valid;
+		fld_f1   = f1;
 	end
 	if (!hblank && old_hblank) px = 0;
 	if (hblank && !old_hblank) hbl_ce = ce_count;
@@ -700,7 +859,7 @@ always @(posedge clk_vid) if (ce_pix) begin
 		if (check_enable) begin : chk
 			reg [23:0] exp;
 			row = lace ? py * 2 + (f1 ? 1 : 0) : py;
-			exp = check_black ? 24'd0 : check_wall ? (wall_skip(px, row) ? {r, g, b} : wall_exp(px, row)) : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
+			exp = check_black ? 24'd0 : (check_wall && !(check_auto && fld_game)) ? (wall_skip(px, row) ? {r, g, b} : wall_exp(px, row)) : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
 			if ({r, g, b} !== exp) begin
 				if (errors < 10) $display("FAIL: fb %0d px %0d row %0d got %h exp %h", cur_fb, px, row, {r, g, b}, exp);
 				errors = errors + 1;
@@ -767,6 +926,12 @@ initial begin
 	// when it starts and shows its picture
 	set_ctrl(0, 0, 0, 0);
 	repeat (20) @(posedge clk);
+`ifdef NO_INTRO
+	test_no_intro;
+	if (errors != 0) $display("FAIL: %0d errors", errors);
+	else $display("PASS");
+	$finish;
+`endif
 	reset = 0;
 
 	wait_fields(1);
@@ -788,6 +953,8 @@ initial begin
 	// +mt32only: the MT32-pi test and the MIDI synthesizer's alone, without the rest (it is near the end
 	// and the whole run takes long). fm_takes as the FM test leaves it.
 	// +trigonly: the OSD triggers' toggles alone
+	// +introonly: the intro and the handover after it, and the game's first
+	// picture (below), without the rest
 	if ($test$plusargs("trigonly")) begin
 		wait_fields(2);
 		test_triggers;
@@ -847,6 +1014,11 @@ initial begin
 	$display("video: checked %0d pixels, %0d errors, rows/field %0d, hsync period %0d, vsync period %0d",
 		checked, errors, field_rows, hs_period, vs_period);
 	if (field_rows != 200 || hs_period != 400 || vs_period != 400 * 262) begin $display("FAIL: video timing"); $finish; end
+	if ($test$plusargs("introonly")) begin
+		if (errors != 0) $display("FAIL: %0d errors", errors);
+		else $display("PASS");
+		$finish;
+	end
 
 	// status block
 	if (mem[8][31:0] != 32'h5359484D) begin $display("FAIL: status magic %h", mem[8]); $finish; end
