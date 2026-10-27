@@ -64,10 +64,17 @@
 #define STATUS_OVL_OUT (1u << 30) // the overlay is out, as w2[58] asked (host version 17)
 // interlaced, the core takes a frame at every field, as w2[60] asked (host version 18)
 #define STATUS_FIELD_RATE (1u << 31)
+#define STATUS_FLICKER (1u << 2)    // the core has the flicker filter (host version 18)
+#define STATUS_FLICKER_ON (1u << 3) // and the OSD's Flicker Filter line is not Off (which: w6)
+#define STATUS_RESETS(s) (((s) >> 4) & 15) // counted up at each reset of the game (host version 18)
 #define CTRL_OVL (1u << 26)     // w0[58] in ctrl[1]: the overlay (host version 17)
 #define CTRL_OVL_OUT (1u << 26) // w2[58] in ctrl[5]: the overlay goes out, and stays out
 #define CTRL_OVL_RISE (1u << 27) // w2[59] in ctrl[5]: it rises in and sinks out (the logo)
 #define CTRL_FIELD_RATE (1u << 28) // w2[60] in ctrl[5]: interlaced, a frame at every field (host version 18)
+// w2[63:61] in ctrl[5]: the OSD's Flicker Filter line asked for, and the
+// request's toggle (host version 18)
+#define CTRL_FLICKER_TOGGLE (1u << 29)
+#define CTRL_FLICKER_SHIFT 30
 
 static const struct {
     short width, height;
@@ -212,8 +219,10 @@ static void midi_off(void);
 static void midi_close(void);
 static void midi_service(void);
 
-// MH_SetFieldRate()
-static int field_rate;
+// MH_SetFieldRate(); MH_SetFlickerFilter(): the line asked for, the toggle
+// for each request, and until when the status may still show the old one
+static int field_rate, flicker_level, flicker_toggle, flicker_pending;
+static uint32_t flicker_until;
 
 // Interlaced, the core takes a frame every second field: in the vblank after
 // the field with the odd rows. With field rate (host version 18) at every one,
@@ -234,7 +243,8 @@ static void write_ctrl(void) {
     ctrl[5] = (uint32_t)(midi_volume * midi_fade / 32) | ((uint32_t)(midi_enabled && audio_enabled) << 7)
         | ((uint32_t)info_n << 8) | ((uint32_t)(info_seq & 0xff) << 16)
         | ((uint32_t)(midi_program_dest != MH_MIDI_OSD) << 24) | ((uint32_t)(midi_program_dest == MH_MIDI_PI) << 25)
-        | (logo.out ? CTRL_OVL_OUT : 0) | (ovl ? CTRL_OVL_RISE : 0) | (field_rate ? CTRL_FIELD_RATE : 0);
+        | (logo.out ? CTRL_OVL_OUT : 0) | (ovl ? CTRL_OVL_RISE : 0) | (field_rate ? CTRL_FIELD_RATE : 0)
+        | (flicker_toggle ? CTRL_FLICKER_TOGGLE : 0) | ((uint32_t)flicker_level << CTRL_FLICKER_SHIFT);
     // the overlay is 640x480 at 8bpp; given up, the picture goes out with
     // it in the game's mode, still read at 8bpp. The logo rises into place
     // (ctrl[5] above), and goes out for a program's own page.
@@ -316,6 +326,44 @@ static int corename_matches(void) {
     return strncmp(name, core_name, len) == 0;
 }
 
+// The game's reset (host version 18; MH_EXIT_RESET): a thread looks at the
+// core's count of resets every 10ms and ends the program when it changes,
+// whatever the game thread is doing (loading its data, waiting in a message)
+static pthread_t reset_thread;
+static int reset_thread_on;
+static volatile int reset_stop;
+static unsigned reset_seen;
+
+static void* reset_main(void* arg) {
+    (void)arg;
+    MH_PinThreadToCPU1();
+    while (!reset_stop) {
+        sleep_ms(10);
+        if (!reset_stop && MH_IsOpen() && status[0] == STATUS_MAGIC && STATUS_RESETS(status[2]) != reset_seen) {
+            printf("mister: the game was reset (the USER button or the OSD's Reset)\n");
+            fflush(stdout);
+            _exit(MH_EXIT_RESET);
+        }
+    }
+    return NULL;
+}
+
+static void reset_watch(void) {
+    reset_seen = STATUS_RESETS(status[2]);
+    reset_stop = 0;
+    if (status[3] >= 18 && !reset_thread_on) {
+        reset_thread_on = pthread_create(&reset_thread, NULL, reset_main, NULL) == 0;
+    }
+}
+
+static void reset_unwatch(void) {
+    if (reset_thread_on) {
+        reset_stop = 1;
+        pthread_join(reset_thread, NULL);
+        reset_thread_on = 0;
+    }
+}
+
 int MH_Open(void) {
     const char* env;
     const char* shm_file = getenv("MISTER_HYBRID_SHM");
@@ -394,6 +442,11 @@ int MH_Open(void) {
         memset(&logo, 0, sizeof(logo));
     }
     unsetenv("MISTER_HYBRID_LOGO");
+    // no request to set the OSD's Flicker Filter line: the toggle the core
+    // took last (status word 6 bit 34), the line as it is
+    flicker_toggle = status[3] >= 18 ? (int)((status[13] >> 2) & 1) : 0;
+    flicker_level = status[3] >= 18 ? (int)(status[13] & 3) : 0;
+    flicker_pending = 0;
     // MH_CheckAlive() counts from now: a game that loads its data before it
     // first looks would not see the core loaded again meanwhile
     alive_frame = status[1];
@@ -421,6 +474,7 @@ int MH_Open(void) {
     printf("mister: %s core found (host version %u)%s\n", core_name[0] ? core_name : "hybrid", status[3],
         cpu1_allowed ? ", helper threads on CPU1" : "");
     game_tid = (pid_t)syscall(SYS_gettid);
+    reset_watch();
     mh_diag_start();
     if (logo.on) {
         printf("mister: the game's logo taken over\n");
@@ -458,6 +512,7 @@ static void stop_present_thread(void) {
 static int close_pending = 0;
 
 void MH_Close(void) {
+    reset_unwatch();
     mh_diag_stop();
     logo_end_thread();
     // the game's logo still there: it stays for a program started in this
@@ -1674,6 +1729,43 @@ void MH_SetFieldRate(int on) {
 
 int MH_FieldRate(void) {
     return MH_IsOpen() && (status[2] & STATUS_FIELD_RATE) != 0;
+}
+
+void MH_SetFlickerFilter(int level) {
+    level = level < MH_FLICKER_OFF ? MH_FLICKER_OFF : level > MH_FLICKER_STRONG ? MH_FLICKER_STRONG : level;
+    if (!MH_HasFlickerFilter() || level == MH_FlickerFilter()) {
+        return;
+    }
+    flicker_level = level;
+    // the other value than the core took last (status word 6 bit 34): it
+    // writes the line once and takes this one
+    flicker_toggle = !((status[13] >> 2) & 1);
+    // the core writes the OSD's status, Main_MiSTer takes it and sends it
+    // back: a few fields
+    flicker_pending = 1;
+    flicker_until = status[1] + 60;
+    write_ctrl();
+}
+
+int MH_HasFlickerFilter(void) {
+    return MH_IsOpen() && status[3] >= 18 && (status[2] & STATUS_FLICKER) != 0;
+}
+
+int MH_FlickerFilter(void) {
+    int now;
+
+    if (!MH_HasFlickerFilter()) {
+        return MH_FLICKER_OFF;
+    }
+    // status word 6 bits 33:32
+    now = (int)(status[13] & 3);
+    if (flicker_pending) {
+        if (now != flicker_level && (int32_t)(status[1] - flicker_until) < 0) {
+            return flicker_level;
+        }
+        flicker_pending = 0;
+    }
+    return now;
 }
 
 uint32_t MH_FieldCounter(void) {

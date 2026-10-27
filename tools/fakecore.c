@@ -40,6 +40,17 @@
 // field rate (w2[60], host version 18: then at every field, status bit 31).
 // The picture itself stays whole, as the shots show it.
 //
+// FAKECORE_FLICKER=1: a core with the flicker filter (FLICKER 1, host version
+// 18): status bit 2; the OSD's Flicker Filter line (0 Off, 1 Light, 2
+// Strong) in word 6 bits 33:32 and bit 3 while it is not Off. The script's
+// line "flicker <n>" sets it as the OSD does, FAKECORE_FLICKER=2 or 3 starts
+// with Light or Strong, and the program's request (w2[63:61]) sets it as
+// Main_MiSTer takes the core's write. The shots and the picture stay
+// unfiltered.
+// The game's reset (host version 18; the USER button or the OSD's Reset):
+// the script's reset line, or SIGUSR1 (kill -USR1 <fakecore>): status bits
+// 4..7 count up and the control block's magic is cleared, as the core does.
+//
 // FAKECORE_VSYNC=1: a field each time the word at 0xF00 of the shared memory
 // changes, not by the clock: a program showing the picture on a PC screen
 // counts its refreshes there, so that every frame is shown as long (the
@@ -75,6 +86,7 @@
 //                           the start, interlaced at 15kHz
 //   music <0|1>             the OSD's Music: MIDI / FM chip (status bit 87)
 //   soundfont <0..7>        the OSD's SoundFont slot (status bits 88..90)
+//   reset                   the game's reset (host version 18)
 //   reload                  count the fields from 0 again, as if the core was
 //                           loaded again
 //   quit                    stop ticking, as if another core was loaded
@@ -82,6 +94,7 @@
 
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,6 +121,9 @@ static uint32_t palette[256];
 static uint32_t palette_seq = 0xffffffff;
 static int fb_index, fb_format, fb_mode, ctrl_valid, vga31, msg_shown, osd_open;
 static int version = 18;
+// the flicker filter (FAKECORE_FLICKER) and the game's resets (host version 18)
+static int flicker_has, flicker_level, flicker_toggle, resets;
+static volatile sig_atomic_t reset_asked;
 static int vsync_lock;
 static int lace_on, lace_field, lace_field_shown, lace, field_rate;
 static int ovl_on, ovl_t, ovl_fade, game_on, game_fb = -1, ovl_shown = -1, ovl_gone, ovl_prints;
@@ -235,12 +251,29 @@ static void wait_vsync(void) {
     }
 }
 
+static void on_usr1(int sig) {
+    (void)sig;
+    reset_asked = 1;
+}
+
+// The game's reset: counted, and its control block forgotten
+static void game_reset(void) {
+    resets++;
+    ctrl[0] = 0;
+    printf("fakecore: field %u: the game reset (%d)\n", field, resets);
+    fflush(stdout);
+}
+
 static void tick(void) {
     static struct timespec next;
     uint32_t c0, c1, c2, c3, c4, c5;
     int want;
     int audio_en, fm_en, midi_en;
 
+    if (reset_asked) {
+        reset_asked = 0;
+        game_reset();
+    }
     if (vsync_lock) {
         wait_vsync();
     } else {
@@ -455,6 +488,16 @@ static void tick(void) {
     status[2] = fb_index | (fb_format << 8) | (lace << 9) | (ctrl_valid << 10) | ((unsigned)lace_field_shown << 11) | (fb_mode << 12) | (1 << 17)
         | ((vga31 && (fb_mode == 2 || fb_mode == 4)) << 18) | (game_on << 19) | ((msg_shown && !game_on) << 20) | (osd_open << 22)
         | (mt32 << 23) | ((mt32_reports & 15) << 24) | ((unsigned)synth << 28) | (ovl_on << 29) | ((unsigned)ovl_gone << 30) | ((unsigned)field_rate << 31);
+    // the program sets the OSD's Flicker Filter line
+    if (version >= 18 && flicker_has && ctrl_valid && (int)((c5 >> 29) & 1) != flicker_toggle) {
+        flicker_toggle = (c5 >> 29) & 1;
+        flicker_level = (int)(c5 >> 30) > 2 ? 2 : (int)(c5 >> 30);
+        printf("fakecore: the program set the Flicker Filter line to %d\n", flicker_level);
+    }
+    status[13] = (status[13] & ~7u) | (unsigned)(version >= 18 && flicker_has ? flicker_level | flicker_toggle << 2 : 0);
+    status[2] |= (unsigned)(version >= 18 && flicker_has) << 2
+        | (unsigned)(version >= 18 && flicker_has && flicker_level != 0) << 3
+        | (unsigned)(version >= 18 ? resets & 15 : 0) << 4;
     status[3] = version;
     status[15] = fm_fetch;
     // the MIDI synthesizer: commands read, voices playing and which, at the
@@ -555,6 +598,10 @@ int main(int argc, char** argv) {
     mt32 = getenv("FAKECORE_MT32") != NULL && atoi(getenv("FAKECORE_MT32")) != 0;
     synth = getenv("FAKECORE_SYNTH") == NULL || atoi(getenv("FAKECORE_SYNTH")) != 0;
     lace_on = getenv("FAKECORE_LACE") != NULL && atoi(getenv("FAKECORE_LACE")) != 0;
+    flicker_has = getenv("FAKECORE_FLICKER") != NULL && atoi(getenv("FAKECORE_FLICKER")) != 0;
+    flicker_level = flicker_has ? atoi(getenv("FAKECORE_FLICKER")) - 1 : 0;
+    flicker_level = flicker_level > 2 ? 2 : flicker_level;
+    signal(SIGUSR1, on_usr1);
     vsync_lock = getenv("FAKECORE_VSYNC") != NULL && atoi(getenv("FAKECORE_VSYNC")) != 0;
     if (getenv("FAKECORE_VERSION")) {
         version = atoi(getenv("FAKECORE_VERSION"));
@@ -624,8 +671,12 @@ int main(int argc, char** argv) {
             screenshot(arg);
         } else if (sscanf(line, "osdopen %d", &a) == 1) {
             osd_open = a != 0;
+        } else if (sscanf(line, "flicker %d", &a) == 1) {
+            flicker_level = a < 0 ? 0 : a > 2 ? 2 : a;
         } else if (sscanf(line, "vga31 %d", &a) == 1) {
             vga31 = a != 0;
+        } else if (strncmp(line, "reset", 5) == 0) {
+            game_reset();
         } else if (strncmp(line, "reload", 6) == 0) {
             field = 0;
         } else if (strncmp(line, "quit", 4) == 0) {

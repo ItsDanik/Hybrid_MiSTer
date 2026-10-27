@@ -109,6 +109,44 @@ int MH_GameFound(const mh_game* game, const char* dir) {
     return 1;
 }
 
+// The game picked, for a reset (host version 18, MH_EXIT_RESET): the launch
+// script starts the program again with MISTER_HYBRID_RESET=1, and the same
+// game is picked, as it was (from the list: quitting it brings the list back)
+#define PICK_FILE "/tmp/dnk_pick"
+
+static int pick_note(const char* core, const mh_game* games, int pick, int listed) {
+    FILE* f = fopen(PICK_FILE, "w");
+
+    if (f != NULL) {
+        fprintf(f, "%s %s %d\n", core, games[pick].id, listed);
+        fclose(f);
+    }
+    return picked(games, pick);
+}
+
+static int pick_again(const char* core, const mh_game* games, int count, const char* dir, int* listed) {
+    const char* env = getenv("MISTER_HYBRID_RESET");
+    char was[64], id[64];
+    int i, again = 0;
+    FILE* f;
+
+    if (env == NULL || strcmp(env, "1") != 0 || (f = fopen(PICK_FILE, "r")) == NULL) {
+        return -1;
+    }
+    if (fscanf(f, "%63s %63s %d", was, id, &again) != 3 || strcmp(was, core) != 0) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    for (i = 0; i < count; i++) {
+        if (strcasecmp(games[i].id, id) == 0 && MH_GameFound(&games[i], dir)) {
+            *listed = again != 0;
+            return pick_note(core, games, i, *listed);
+        }
+    }
+    return -1;
+}
+
 int MH_PickGame(const mh_game* games, int count, const char* dir, const char* none, int* listed) {
     const char* core = getenv("MISTER_HYBRID_CORE");
     const char* set = MH_SetName();
@@ -120,6 +158,10 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
     *listed = 0;
     core = core ? core : "";
     len = strlen(core);
+    // after a reset: the game it was
+    if ((pick = pick_again(core, games, count, dir, listed)) >= 0) {
+        return pick;
+    }
     // started from a game's menu entry: <core>_<id>
     if (len != 0 && strncmp(set, core, len) == 0 && set[len] == '_') {
         for (i = 0; i < count; i++) {
@@ -127,13 +169,13 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
                 continue;
             }
             if (MH_GameFound(&games[i], dir)) {
-                return picked(games, i);
+                return pick_note(core, games, i, 0);
             }
             // the shareware or demo of it, when the full game is not there
             for (j = 0; j < count; j++) {
                 if (games[j].shareware_of != NULL && strcasecmp(games[j].shareware_of, games[i].id) == 0
                     && MH_GameFound(&games[j], dir)) {
-                    return picked(games, j);
+                    return pick_note(core, games, j, 0);
                 }
             }
             if (MH_IsOpen()) {
@@ -156,7 +198,7 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
         return -1;
     }
     if (n == 1 || !MH_IsOpen()) {
-        return picked(games, found[0]);
+        return pick_note(core, games, found[0], 0);
     }
     MH_GameList();
     pick = MH_UI_Menu(core, "Select a game:", names, n, 0);
@@ -164,5 +206,5 @@ int MH_PickGame(const mh_game* games, int count, const char* dir, const char* no
         return -1;
     }
     *listed = 1;
-    return picked(games, found[pick]);
+    return pick_note(core, games, found[pick], 1);
 }

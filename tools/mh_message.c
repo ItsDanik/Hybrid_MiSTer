@@ -11,6 +11,11 @@
 //        mh_message --clear            no message
 //        mh_message --shown            exit code 0 while a message is shown
 //                                      (the core's own as well), 1 else
+//        mh_message --wait-reset       wait while the core is loaded: exit
+//                                      code 44 when the player resets the
+//                                      game (host version 18; the launch
+//                                      script starts it again), 1 when
+//                                      another core is loaded
 // Exit code 2: no core, or one older than host version 13.
 //
 // build: arm-linux-gnueabihf-gcc -O2 -static -Ihybrid/hps -o mh_message
@@ -18,6 +23,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "mister_hybrid.h"
 
@@ -30,7 +36,7 @@ int main(int argc, char** argv) {
         i++;
     }
     if (i != argc - 1) {
-        fprintf(stderr, "usage: mh_message [--error] <text> | --clear | --shown\n");
+        fprintf(stderr, "usage: mh_message [--error] <text> | --clear | --shown | --wait-reset\n");
         return 2;
     }
     if (!MH_Open() || MH_HostVersion() < 13) {
@@ -38,6 +44,12 @@ int main(int argc, char** argv) {
     }
     if (strcmp(argv[i], "--clear") == 0) {
         MH_ClearMessage();
+    } else if (strcmp(argv[i], "--wait-reset") == 0) {
+        // the library ends this with exit code 44 at a reset (MH_EXIT_RESET)
+        while (MH_CheckAlive()) {
+            usleep(100000);
+        }
+        return 1;
     } else if (strcmp(argv[i], "--shown") == 0) {
         // the core reads the message in its next vblank
         return MH_MessageShown() ? 0 : 1;

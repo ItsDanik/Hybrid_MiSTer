@@ -19,6 +19,16 @@
 //  killed, or running when the MiSTer was reset, leaves that behind, and the
 //  memory keeps it: the core clears the magic when it starts (ctrl_clear).
 //
+//  A reset once the core has started (the USER button, or the OSD's Reset
+//  line: status bit 0, R0; host version 18) is the game's, as in every other
+//  MiSTer core: the core's picture comes back at once, as at the end of its
+//  intro (no intro again), the magic is cleared as at the start, and status
+//  word 1 bits 7..4 count up, at which the HPS side ends the program at once
+//  (exit code 44) and the launch script starts the same game again. A button
+//  held down is one reset: after the start only its press resets, so the
+//  status goes on being written (a game that sees it stand still takes the
+//  core for gone). The reset while the core loads is the core's own.
+//
 //  Four clocks: `clk` (50MHz) for the DDR3 side, audio and input,
 //  `clk_vid` for the video output, made here by hybrid_vclk.sv, the MIDI
 //  synthesizer's 100MHz (hybrid_midi.sv, its own PLL) and the framework's
@@ -83,11 +93,33 @@
 //                          on a CRT, where the HDMI scaler's weave combs what
 //                          moves (for a menu, docs/field_rate_prompt.md).
 //                          Status word 1 bit 31 says it is taken so
-//                  [63:61] 0
+//                  [61]    the OSD's Flicker Filter line (host version 18,
+//                          FLICKER) is to be set to [63:62] (0 Off, 1 Light,
+//                          2 Strong) while this differs from status word 6
+//                          bit 34, as if the player had picked it: the core
+//                          writes it to Main_MiSTer's status (hps_io's
+//                          status_set) and takes this bit there. A program
+//                          keeps it as status word 6 bit 34 has it, and asks
+//                          by sending the other value
+//                  [63:62] the Flicker Filter line asked for
 //    0x000040  status (FPGA -> HPS), 16 x 64-bit words, written every vblank
 //              w0  {frame counter, magic "MHYS" (0x5359484D)}
 //              w1  {version, field rate, overlay out, overlay, synth, reports[3:0], mt32, osd, 2'b(messages), game, fast, running, vga31, mode[3:0],
-//                   field, ctrl_valid, lace, format, 6'b0, fb_index[1:0]}
+//                   field, ctrl_valid, lace, format, resets[3:0], filter on, filter, fb_index[1:0]}
+//                   filter: the core has the flicker filter (host version
+//                   18, FLICKER); filter on: the OSD's Flicker Filter line
+//                   (status bits 106:105) is Light or Strong (which: w6).
+//                   The filter acts on a game's picture while it is
+//                   interlaced, RGB565 or 8bpp, never on the core's own:
+//                   each row Strong a quarter of the row above, half its
+//                   own and a quarter of the row below; Light an eighth,
+//                   three quarters and an eighth. RGB565 has the bits that
+//                   adds dithered away (Strong 4x4 as the program would do
+//                   it, dnkLauncher's out_box(); Light 4x2), 8bpp rounds
+//                   after the palette.
+//                   resets: counted up at each reset of the game (host
+//                   version 18): the USER button or the OSD's Reset line,
+//                   once the core has started.
 //                   lace: the mode is shown interlaced.
 //                   field: the field that was on the screen had the even
 //                   rows (the core takes a new frame when it is 0).
@@ -140,10 +172,13 @@
 //                  pulse's end: a saved setting of the old Menu OK may hold
 //                  the bit at 1, and the trigger then only clears it
 //              w5  {mouse y accumulator, mouse x accumulator}
-//              w6  {video lines late[15:0], 16'b0, wheel accumulator[15:0],
-//                   13'b0, mouse buttons[2:0]}: a line is late when the
-//                   next one is asked for before its read is done (host
-//                   version 16; counts on, wrapping)
+//              w6  {video lines late[15:0], 13'b0, filter toggle, flicker filter[1:0],
+//                   wheel accumulator[15:0], 13'b0, mouse buttons[2:0]}: a
+//                   line is late when the next one is asked for before its
+//                   read is done (host version 16; counts on, wrapping); the
+//                   OSD's Flicker Filter line, 0 Off, 1 Light, 2 Strong (host
+//                   version 18, 0 without FLICKER), and the toggle of the last
+//                   request to set it that was taken (control word 2 bit 61)
 //              w7  {FM ring entries read so far[31:0], 3'b0, video clock
 //                   measured[12:0], 8'b0, video clock asked for[7:0]}: the
 //                   clock asked for in units of 0.5MHz, the one measured in
@@ -231,7 +266,12 @@ module hybrid_host
 	// of the intro (dnkLauncher, docs/dnklauncher.md): that picture from the
 	// start, no black and no intro, and the program's first frame on the
 	// screen at the next frame, without the picture going out first
-	parameter INTRO        = 1
+	parameter INTRO        = 1,
+	// the flicker filter (host version 18; the OSD's Flicker Filter line,
+	// status bits 106:105): 1 in a core with a 640x400 or 640x480 mode, 0 leaves
+	// it out (two more line buffers and two more copies of the palette, 12
+	// M10K blocks); status word 1 bit 2 says which
+	parameter FLICKER      = 0
 )
 (
 	input             clk,          // 50MHz
@@ -294,6 +334,13 @@ module hybrid_host
 	output            f1,
 	// OSD menu mask the game set
 	output reg  [3:0] menumask,
+	// the picture is interlaced (the OSD's Flicker Filter line is greyed out
+	// otherwise)
+	output            lace,
+	// the OSD's status, written back with the Flicker Filter line changed by
+	// the program (w2[63:61]): hps_io's status_in / status_set
+	output reg [127:0] status_out = 0,
+	output reg        status_set = 0,
 
 	// audio, 44.1kHz signed
 	output reg [15:0] audio_l,
@@ -373,6 +420,9 @@ assign ddr_be = 8'hFF;
 
 reg        game_on = 0;       // the game has the screen
 reg        fr_on = 0;         // field rate: interlaced, a frame taken at every field (w2[60])
+reg        filt_req = 0;      // the OSD's Flicker Filter line is Light or Strong (FLICKER)
+reg  [1:0] filt_lvl = 0;      // the line: 0 Off, 1 Light, 2 Strong
+reg        filt_tgl = 0;      // w2[61] of the last request taken
 reg  [3:0] vmode = 4'd4;      // the mode the HPS asks for; 640x480 until the game has the screen
 
 wire       m_dual = (vmode == 4'd2) || (vmode == 4'd4);
@@ -431,6 +481,7 @@ end
 
 assign hires = u_fast | u_lace;
 assign fast  = u_fast;
+assign lace  = u_lace;
 
 // ---- from here on clk_vid ----
 
@@ -444,6 +495,8 @@ reg        v_fast = 0, v_lace = 0;
 reg  [5:0] v_hsize = 0;
 reg  [3:0] v_hpos = 0, v_vpos = 0;
 reg        v_fmt16 = 0, v_valid = 0, v_ovl = 0;
+reg        v_filt = 0;        // the flicker filter: a game's picture, interlaced, the line not Off
+reg        v_light = 0;       // Light, not Strong
 reg        field = 0;         // interlaced: 1 = even rows
 
 assign f1 = v_lace & ~field;
@@ -516,6 +569,14 @@ reg        req_bank;
 reg  [4:0] v_ovl_dy = 0;
 reg        lb_blank[0:1];
 initial {lb_blank[0], lb_blank[1]} = 2'b00;
+// the flicker filter: the rows above and below the one to fetch as well (the
+// picture's first and last rows their own neighbours), and whether it is odd
+// (the filter's dither)
+reg  [9:0] req_up, req_dn;
+reg        req_filt = 0;
+reg        lb_odd[0:1];
+initial {lb_odd[0], lb_odd[1]} = 2'b00;
+wire [9:0] last_row = {V_ACTIVE[8:0] - 9'd1, 1'b1};   // interlaced
 wire [9:0] scr_row = !v_lace ? next2_vc : {next2_vc[8:0], (next2_vc < vc) ? field : ~field};
 reg        vbl_field = 0;
 
@@ -530,6 +591,8 @@ always @(posedge clk_vid) begin
 				v_hpos  <= s_hpos;
 				v_vpos  <= s_vpos;
 				v_fmt16 <= fmt16;
+				v_filt  <= FLICKER != 0 && filt_req && v_lace && game_on && !ovl_left;
+				v_light <= filt_lvl == 2'd1;
 				v_valid <= game_on & ~ovl_left;
 				v_ovl   <= ovl_vis & ~fmt16 & ~game_on;
 				field   <= v_lace & ~field;
@@ -547,6 +610,10 @@ always @(posedge clk_vid) begin
 		req_row  <= (v_ovl && scr_row >= v_ovl_dy) ? scr_row - v_ovl_dy : scr_row;
 		req_bank <= next2_vc[0];
 		lb_blank[next2_vc[0]] <= v_ovl && scr_row < v_ovl_dy;
+		req_up   <= (scr_row == 10'd0) ? scr_row : scr_row - 1'd1;
+		req_dn   <= (scr_row == last_row) ? scr_row : scr_row + 1'd1;
+		req_filt <= v_filt;
+		lb_odd[next2_vc[0]] <= scr_row[0];
 	end
 	if (vbl_start) begin
 		vbl_tgl   <= ~vbl_tgl;
@@ -563,6 +630,7 @@ always @(posedge clk_vid) begin
 		v_hpos  <= s_hpos;
 		v_vpos  <= s_vpos;
 		v_fmt16 <= fmt16;
+		v_filt  <= 0;
 		v_valid <= game_on & ~ovl_left;
 		v_ovl   <= 0;
 		field   <= 0;
@@ -596,14 +664,34 @@ reg  [3:0] pi_info_seen = 0;
 
 // Both are written on clk and read on clk_vid.
 // line buffer: two banks of 256 x 64-bit words (40 used at 320 pixels of
-// 8bpp, 160 at 640 pixels of RGB565)
+// 8bpp, 160 at 640 pixels of RGB565); with the flicker filter (FLICKER) two
+// more, for the rows above and below (lbuf_wpart 1 and 2), and the palette
+// twice more, for their pixels
 reg [63:0] lbuf[0:511];
 reg  [8:0] lbuf_waddr;
 reg        lbuf_we;
+reg  [1:0] lbuf_wpart;
 reg [63:0] lbuf_wdata;
-reg [63:0] lbuf_q;
-always @(posedge clk) if (lbuf_we) lbuf[lbuf_waddr] <= lbuf_wdata;
-always @(posedge clk_vid) lbuf_q <= lbuf[{vc[0], v_fmt16 ? hc[9:2] : {1'b0, hc[9:3]}}];
+reg [63:0] lbuf_q, lbuf_qu, lbuf_qd;
+wire [8:0] lbuf_raddr = {vc[0], v_fmt16 ? hc[9:2] : {1'b0, hc[9:3]}};
+always @(posedge clk) if (lbuf_we && lbuf_wpart == 2'd0) lbuf[lbuf_waddr] <= lbuf_wdata;
+always @(posedge clk_vid) lbuf_q <= lbuf[lbuf_raddr];
+generate
+	if (FLICKER != 0) begin : flicker_rows
+		reg [63:0] lbuf_u[0:511];
+		reg [63:0] lbuf_d[0:511];
+		always @(posedge clk) begin
+			if (lbuf_we && lbuf_wpart == 2'd1) lbuf_u[lbuf_waddr] <= lbuf_wdata;
+			if (lbuf_we && lbuf_wpart == 2'd2) lbuf_d[lbuf_waddr] <= lbuf_wdata;
+		end
+		always @(posedge clk_vid) begin
+			lbuf_qu <= lbuf_u[lbuf_raddr];
+			lbuf_qd <= lbuf_d[lbuf_raddr];
+		end
+	end else begin : no_flicker_rows
+		always @(posedge clk_vid) {lbuf_qu, lbuf_qd} <= 128'd0;
+	end
+endgenerate
 
 // palette: 128 x 64-bit words, two 0x00RRGGBB entries per word
 reg [63:0] pal[0:127];
@@ -621,10 +709,69 @@ always @(posedge clk_vid) begin
 	pal_hi    <= pix_index[0];
 	pix_clear <= pix_index == 8'd0 || lb_blank[vc[0]];
 end
+// the flicker filter's rows above and below, at 8bpp: the palette twice more
+reg [63:0] pal_qu, pal_qd;
+reg        pal_hi_u, pal_hi_d;
+wire [7:0] pix_index_u = lbuf_qu[{byte_sel, 3'b0} +: 8];
+wire [7:0] pix_index_d = lbuf_qd[{byte_sel, 3'b0} +: 8];
+generate
+	if (FLICKER != 0) begin : flicker_pal
+		reg [63:0] pal_u[0:127];
+		reg [63:0] pal_d[0:127];
+		always @(posedge clk) if (pal_we) begin
+			pal_u[pal_waddr] <= pal_wdata;
+			pal_d[pal_waddr] <= pal_wdata;
+		end
+		always @(posedge clk_vid) begin
+			pal_qu   <= pal_u[pix_index_u[7:1]];
+			pal_qd   <= pal_d[pix_index_d[7:1]];
+			pal_hi_u <= pix_index_u[0];
+			pal_hi_d <= pix_index_d[0];
+		end
+	end else begin : no_flicker_pal
+		always @(posedge clk_vid) {pal_qu, pal_qd, pal_hi_u, pal_hi_d} <= 130'd0;
+	end
+endgenerate
 
 // RGB565 pixels skip the palette
 reg [15:0] pix16;
 always @(posedge clk_vid) pix16 <= lbuf_q[{byte_sel[1:0], 4'b0} +: 16];
+
+// The flicker filter (FLICKER, the OSD's line): a quarter of the row above, half of
+// this one and a quarter of the one below, per channel of RGB565, and the
+// two bits that adds dithered away: the 4x4 pattern of dnkLauncher's
+// out_box() (gfx.c), 0 2 0 2 in even rows and 3 1 3 1 in odd ones, so that
+// the picture is the one the program made when it filtered it itself
+reg [15:0] pix16_u, pix16_d;
+reg  [1:0] pix_bias;
+reg        pix_bias_lo;
+always @(posedge clk_vid) begin
+	pix16_u  <= lbuf_qu[{byte_sel[1:0], 4'b0} +: 16];
+	pix16_d  <= lbuf_qd[{byte_sel[1:0], 4'b0} +: 16];
+	pix_bias <= lb_odd[vc[0]] ? (byte_sel[0] ? 2'd1 : 2'd3) : (byte_sel[0] ? 2'd2 : 2'd0);
+	pix_bias_lo <= byte_sel[1];
+end
+wire [6:0] filt_r = pix16_u[15:11] + {pix16[15:11], 1'b0} + pix16_d[15:11] + pix_bias;
+wire [7:0] filt_g = pix16_u[10:5] + {pix16[10:5], 1'b0} + pix16_d[10:5] + pix_bias;
+wire [6:0] filt_b = pix16_u[4:0] + {pix16[4:0], 1'b0} + pix16_d[4:0] + pix_bias;
+wire [15:0] pix16_f = {filt_r[6:2], filt_g[7:2], filt_b[6:2]};
+// Light: an eighth, three quarters and an eighth, the three bits dithered
+// away by the same pattern with a bit more (0..7 over 4x2 pixels)
+wire [2:0] pix_bias8 = {pix_bias, pix_bias_lo};
+wire [7:0] lfilt_r = pix16_u[15:11] + {pix16[15:11], 2'b0} + {pix16[15:11], 1'b0} + pix16_d[15:11] + pix_bias8;
+wire [8:0] lfilt_g = pix16_u[10:5] + {pix16[10:5], 2'b0} + {pix16[10:5], 1'b0} + pix16_d[10:5] + pix_bias8;
+wire [7:0] lfilt_b = pix16_u[4:0] + {pix16[4:0], 2'b0} + {pix16[4:0], 1'b0} + pix16_d[4:0] + pix_bias8;
+wire [15:0] pix16_l = {lfilt_r[7:3], lfilt_g[8:3], lfilt_b[7:3]};
+// at 8bpp after the palette, rounded
+wire [23:0] pix8_c = pal_hi   ? pal_q[55:32]  : pal_q[23:0];
+wire [23:0] pix8_u = pal_hi_u ? pal_qu[55:32] : pal_qu[23:0];
+wire [23:0] pix8_d = pal_hi_d ? pal_qd[55:32] : pal_qd[23:0];
+wire [9:0] filt8_r = pix8_u[23:16] + {pix8_c[23:16], 1'b0} + pix8_d[23:16] + 2'd2;
+wire [9:0] filt8_g = pix8_u[15:8] + {pix8_c[15:8], 1'b0} + pix8_d[15:8] + 2'd2;
+wire [9:0] filt8_b = pix8_u[7:0] + {pix8_c[7:0], 1'b0} + pix8_d[7:0] + 2'd2;
+wire [10:0] lfilt8_r = pix8_u[23:16] + {pix8_c[23:16], 2'b0} + {pix8_c[23:16], 1'b0} + pix8_d[23:16] + 3'd4;
+wire [10:0] lfilt8_g = pix8_u[15:8] + {pix8_c[15:8], 2'b0} + {pix8_c[15:8], 1'b0} + pix8_d[15:8] + 3'd4;
+wire [10:0] lfilt8_b = pix8_u[7:0] + {pix8_c[7:0], 2'b0} + {pix8_c[7:0], 1'b0} + pix8_d[7:0] + 3'd4;
 
 //////////////////////////////////////////////////////////////////
 // Picture without a game
@@ -1577,13 +1724,19 @@ reg  [4:0] state = S_IDLE;
 assign midi_beat = ddr_dout_ready && state == S_MIDI_WAIT;
 // The control block is not read before the core has cleared its magic, in
 // its first 4 vblanks (more than once: the memory may not be there for the
-// very first write). Only when the core starts, not with a reset.
+// very first write). When the core starts, and at the game's reset (host
+// version 18), not with the reset while the core loads.
 reg  [2:0] ctrl_clear = 3'd4;
 reg        line_req = 0;
 reg [15:0] late_lines = 0;
 reg        vbl_req = 0;
 reg  [9:0] fetch_row;
 reg        fetch_bank;
+// the flicker filter: the line's rows above and below as well, each a burst
+// of its own into its line buffer (fetch_part 1 and 2) after the row's (0)
+reg  [9:0] fetch_up, fetch_dn;
+reg        fetch_filt = 0;
+reg  [1:0] fetch_part = 0;
 reg  [7:0] rd_cnt;          // beats received in the current burst
 reg  [7:0] rd_len;          // beats expected in the current burst
 reg  [7:0] line_words;      // words fetched so far for the current line
@@ -1591,6 +1744,17 @@ reg  [3:0] wr_beat;
 
 // requests of the video side
 reg  [2:0] req_s = 0, vbl_s = 0;
+wire       new_req = req_s[2] != req_s[1];
+
+// A reset (see the top): until the core has started (`ran`, its intro over)
+// the core's own, for as long as it is held; after that the game's, at its
+// press alone, counted in `resets`, without the intro again
+reg        ran = 0;
+reg        rst_d = 0;
+reg  [3:0] resets = 0;
+wire       rst_in   = reset | osd_status[0];
+wire       host_rst = ran ? rst_in & ~rst_d : rst_in;
+wire       replay   = INTRO != 0 && !ran;
 reg [19:0] idle_cnt = 0;
 
 // framebuffer address of a row: the framebuffer + row * words in a row, 40
@@ -1598,7 +1762,8 @@ reg [19:0] idle_cnt = 0;
 wire  [6:0] row_bytes = (s_mode == 4'd0 || s_mode == 4'd3) ? 7'd40 : 7'd80;    // words in a row of 8bpp
 wire  [7:0] row_len = fmt16 ? {row_bytes, 1'b0} : {1'b0, row_bytes};
 wire [28:0] fb_addr = FB_ADDR + {10'd0, fb_index, 17'd0};
-wire [28:0] row_addr = fb_addr + fetch_row * row_len;
+wire  [9:0] part_row = (fetch_part == 2'd1) ? fetch_up : (fetch_part == 2'd2) ? fetch_dn : fetch_row;
+wire [28:0] row_addr = fb_addr + part_row * row_len;
 
 // the game gets the screen once the core's picture has faded out; one that
 // asks for the overlay never does. INTRO 0: at once, when a frame starts
@@ -1619,12 +1784,12 @@ reg [63:0] stat_word;
 always @(*) begin
 	case (wr_beat)
 		4'd0:  stat_word = {frame_cnt, STATUS_MAGIC};
-		4'd1:  stat_word = {VERSION, fr_on, ovl_on && ovl_out_req && ovl_t == OVL_T_IN, ovl_on, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, 6'd0, fb_index};
+		4'd1:  stat_word = {VERSION, fr_on, ovl_on && ovl_out_req && ovl_t == OVL_T_IN, ovl_on, MIDI_SYNTH != 0, mt32_reports, mt32_on, osd_open_s[1], msg_timeout, msg_show, game_on, fast, run, 1'b0, s_mode, vbl_field, ctrl_valid, u_lace, fmt16, resets, filt_req, FLICKER != 0, fb_index};
 		4'd2:  stat_word = {joystick_1, joystick_0};
 		4'd3:  stat_word = {joy_r_analog_1, joy_l_analog_1, joy_r_analog_0, joy_l_analog_0};
 		4'd4:  stat_word = {osd_status[63:60], trig_toggle, osd_status[55:17], diag_toggle, osd_status[15:0]};
 		4'd5:  stat_word = {mouse_y, mouse_x};
-		4'd6:  stat_word = {late_lines, 16'd0, mouse_wheel, 13'd0, mouse_btn};
+		4'd6:  stat_word = {late_lines, 13'd0, filt_tgl, filt_lvl, mouse_wheel, 13'd0, mouse_btn};
 		4'd7:  stat_word = {fm_fetch, 3'd0, vclk_count, 8'd0, vclk_code};
 		default: stat_word = keys[{wr_beat[2:0], 6'd0} +: 64];
 	endcase
@@ -1633,6 +1798,7 @@ end
 always @(posedge clk) begin
 	lbuf_we <= 0;
 	pal_we <= 0;
+	status_set <= 0;
 	msg_we <= 0;
 	afifo_we <= 0;
 	fade_start <= 0;
@@ -1655,11 +1821,15 @@ always @(posedge clk) begin
 	// the request and stays until the next one
 	req_s <= {req_s[1:0], req_tgl};
 	vbl_s <= {vbl_s[1:0], vbl_tgl};
-	if (req_s[2] != req_s[1]) begin
+	if (new_req) begin
 		if (line_req || state == S_LINE_WAIT) late_lines <= late_lines + 1'd1;
 		line_req   <= 1;
 		fetch_row  <= req_row;
 		fetch_bank <= req_bank;
+		fetch_up   <= req_up;
+		fetch_dn   <= req_dn;
+		fetch_filt <= req_filt;
+		fetch_part <= 2'd0;
 	end
 	// while the video output is off, the control block is still read and the
 	// status written, about as often
@@ -1699,6 +1869,7 @@ always @(posedge clk) begin
 			end
 			S_LINE_WAIT: begin
 				lbuf_we    <= 1;
+				lbuf_wpart <= fetch_part;
 				lbuf_waddr <= {fetch_bank, line_words};
 				lbuf_wdata <= ddr_dout;
 				line_words <= line_words + 1'd1;
@@ -1776,7 +1947,14 @@ always @(posedge clk) begin
 				end
 
 			S_LINE_WAIT:
-				if (rd_cnt == rd_len) state <= S_IDLE;
+				if (rd_cnt == rd_len) begin
+					state <= S_IDLE;
+					// the flicker filter: the rows above and below next
+					if (fetch_filt && fetch_part != 2'd2 && !new_req) begin
+						fetch_part <= fetch_part + 1'd1;
+						line_req   <= 1;
+					end
+				end
 
 			S_AUD_WAIT:
 				// wait for the FIFO write of the last beat as well
@@ -1903,6 +2081,19 @@ always @(posedge clk) begin
 				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
 				game_on  <= game_take;
 				fr_on    <= u_lace && field_rate;
+				// Off, Light, Strong (3 as Strong)
+				filt_req <= FLICKER != 0 && osd_status[106:105] != 2'd0;
+				filt_lvl <= FLICKER == 0 ? 2'd0 : osd_status[106] ? 2'd2 : osd_status[105] ? 2'd1 : 2'd0;
+				// the program sets the OSD's Flicker Filter line (dnkLauncher's
+				// own row): Main_MiSTer takes the status written back as the
+				// player's change. The momentary bits (Reset, the triggers,
+				// Save Diagnostic Report, Reset Hanging Notes) go back as 0
+				if (FLICKER != 0 && ctrl_magic && ctrl_w2[61] != filt_tgl) begin
+					filt_tgl   <= ctrl_w2[61];
+					status_out <= {osd_status[127:107], ctrl_w2[63:62], 1'b0, osd_status[103:60], 4'd0,
+					               osd_status[55:17], 1'b0, osd_status[15:1], 1'b0};
+					status_set <= 1;
+				end
 				if (ctrl_magic) begin
 					// interlaced, both fields are of the same frame: a new one
 					// is taken when the field with the odd rows has been shown,
@@ -2057,7 +2248,15 @@ always @(posedge clk) begin
 		endcase
 	end
 
-	if (reset) begin
+	rst_d <= rst_in;
+	if (intro_done) ran <= 1;
+	if (host_rst) begin
+		// the game's: its control block forgotten, as when the core starts,
+		// and the HPS side told (status word 1 bits 7..4)
+		if (ran) begin
+			ctrl_clear <= 3'd4;
+			resets     <= resets + 1'd1;
+		end
 		state      <= S_IDLE;
 		ddr_rd     <= 0;
 		ddr_we     <= 0;
@@ -2065,11 +2264,12 @@ always @(posedge clk) begin
 		vbl_req    <= 0;
 		ctrl_valid <= 0;
 		game_on    <= 0;
-		// INTRO 0: the picture at the end of its intro at once
-		wall_hold  <= INTRO ? WALL_HOLD : 8'd0;
-		wall_level <= INTRO ? 9'd0 : 9'd256;
-		intro_on   <= INTRO == 0;
-		intro_skip <= INTRO == 0;
+		// INTRO 0, or the game's reset: the picture at the end of its intro
+		// at once
+		wall_hold  <= replay ? WALL_HOLD : 8'd0;
+		wall_level <= replay ? 9'd0 : 9'd256;
+		intro_on   <= !replay;
+		intro_skip <= !replay;
 		ovl_on     <= 0;
 		msg_keep   <= 0;
 		ovl_left   <= 0;
@@ -2078,7 +2278,7 @@ always @(posedge clk) begin
 		msg_timeout <= 0;
 		msg_show   <= 0;
 		msg_loaded <= 0;
-		intro_t    <= INTRO ? 9'd0 : 9'd0 + WALL_T_END;
+		intro_t    <= replay ? 9'd0 : 9'd0 + WALL_T_END;
 		dot_t      <= 0;
 		fade_start <= 1;
 		pal_loaded <= 0;
@@ -2153,6 +2353,18 @@ always @(posedge clk_vid) begin
 			// the core's picture until the HPS side publishes a valid control
 			// block, and under the overlay
 			{r, g, b} <= (v_ovl && !pix_clear) ? (pal_hi ? pal_q[55:32] : pal_q[23:0]) : wall_rgb;
+		end else if (v_fmt16 && v_filt && v_light) begin
+			r <= {pix16_l[15:11], pix16_l[15:13]};
+			g <= {pix16_l[10:5], pix16_l[10:9]};
+			b <= {pix16_l[4:0], pix16_l[4:2]};
+		end else if (v_fmt16 && v_filt) begin
+			r <= {pix16_f[15:11], pix16_f[15:13]};
+			g <= {pix16_f[10:5], pix16_f[10:9]};
+			b <= {pix16_f[4:0], pix16_f[4:2]};
+		end else if (v_filt && v_light) begin
+			{r, g, b} <= {lfilt8_r[10:3], lfilt8_g[10:3], lfilt8_b[10:3]};
+		end else if (v_filt) begin
+			{r, g, b} <= {filt8_r[9:2], filt8_g[9:2], filt8_b[9:2]};
 		end else if (v_fmt16) begin
 			r <= {pix16[15:11], pix16[15:13]};
 			g <= {pix16[10:5], pix16[10:9]};

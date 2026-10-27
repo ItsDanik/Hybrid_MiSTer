@@ -120,6 +120,15 @@ int MH_CheckAlive(void);
 // about to be replaced. The game should leave with exit code 43, for its
 // launcher to start it again once the core has settled.
 int MH_CoreReloaded(void);
+// The game's reset (host version 18): the USER button or the OSD's Reset
+// line, as in every other MiSTer core. The core shows its own picture at
+// once, and a thread of the library ends the program (exit code 44) within
+// 10ms of it, whatever the game is doing: the launch script starts the same
+// game again (MISTER_HYBRID_RESET=1, with which MH_PickGame() picks the game
+// picked before, from the list too). Nothing the game would write on
+// quitting is written, as on a console (Danik, 2026-10-27). A game needs no
+// code for it.
+#define MH_EXIT_RESET 44
 const char* MH_CoreName(void);
 // The name Main_MiSTer gives the settings (config/<name>.CFG) and button
 // mappings (config/inputs/<name>_input_*) of what was started: the set name
@@ -203,6 +212,25 @@ int MH_Interlaced(void);
 void MH_SetFieldRate(int on);
 // 1 while the mode is interlaced and the core takes a frame at every field
 int MH_FieldRate(void);
+// The flicker filter (host version 18): a core that has it (FLICKER 1 in its
+// core/<Name>.sv: one with a 640x400 or 640x480 mode) has the line Flicker
+// Filter on its OSD's CRT Options page, Off, Light or Strong, greyed out while
+// the picture is not interlaced. The core filters a game's interlaced picture
+// (640x480 and 640x400 on a 15kHz screen, RGB565 or 8bpp) by itself: every row
+// Strong a quarter of the row above, half its own and a quarter of the row
+// below (RGB565 dithered as dnkLauncher's filter on the ARM did it), Light an
+// eighth, three quarters and an eighth. A game needs no code for it.
+// MH_HasFlickerFilter(): the core has it (else a program may filter itself);
+// MH_FlickerFilter(): the OSD's line, MH_FLICKER_*; MH_SetFlickerFilter():
+// sets the OSD's line, as if the player had (a program's own setting kept in
+// step with it: dnkLauncher's Options), MH_FlickerFilter() giving the new one
+// at once.
+#define MH_FLICKER_OFF    0
+#define MH_FLICKER_LIGHT  1
+#define MH_FLICKER_STRONG 2
+void MH_SetFlickerFilter(int level);
+int MH_HasFlickerFilter(void);
+int MH_FlickerFilter(void);
 // Bits 0..3 that hide or grey out lines of the core's OSD ("H0", "D1", ... in
 // its CONF_STR): for options the game cannot honour with the data it has
 void MH_SetMenuMask(int mask);

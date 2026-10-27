@@ -49,6 +49,12 @@ localparam INTRO_P = 0;
 `else
 localparam INTRO_P = 1;
 `endif
+// the flicker filter in the core with -DFLICK (FLICKER 1; +flickeronly)
+`ifdef FLICK
+localparam FLICK_P = 1;
+`else
+localparam FLICK_P = 0;
+`endif
 
 reg clk = 0;
 always #10 clk = ~clk; // 50MHz
@@ -83,29 +89,33 @@ wire [7:0] r, g, b;
 reg  [7:0] osd_mt32 = 8'b0000_00_1_0;  // the Pi's own SoundFont, MT-32 v1, MT-32 mode, on
 reg        notes_trig = 0;              // 104: Reset Hanging Notes
 reg        osd_music = 0;               // 87: Music, MIDI / FM chip
+reg        osd_rst = 0;                 // 0: the OSD's Reset line (R0)
+reg  [1:0] osd_flt = 0;                 // 106:105: Flicker Filter, Off / Light / Strong
 // the Pi: SDA (with the core's, open drain), MIDI in, I2S word select, SCL,
 // bit clock, data
 reg        pi_sda = 1, pi_scl = 1, pi_ws = 0, pi_bclk = 0, pi_dat = 0;
 wire [6:0] user_out;
 wire [6:0] user_in = {1'b1, pi_dat, pi_bclk, pi_scl, pi_ws, 1'b1, pi_sda & user_out[0]};
 wire       mt32_on, info_req;
+wire       dut_lace, status_set;
+wire [127:0] status_out;
 wire [7:0] info;
 reg        clk_audio = 0;
 always #20.345 clk_audio = ~clk_audio; // 24.576MHz
 
 hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_DOTS("rtl/hybrid_wall_dots.hex"),
 	.WALL_EASE("rtl/hybrid_wall_ease.hex"), .WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"),
-	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH), .INTRO(INTRO_P)) dut
+	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH), .INTRO(INTRO_P), .FLICKER(FLICK_P)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(joystick_0), .joystick_1(joystick_1),
 	.joy_l_analog_0(16'h1122), .joy_r_analog_0(16'h3344), .joy_l_analog_1(16'h5566), .joy_r_analog_1(16'h7788),
-	.osd_status({23'h091A, notes_trig, osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0, trig, 39'h0, diag, 16'hCAFE}), .osd_open(osd_open), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
+	.osd_status({21'h0246, osd_flt, notes_trig, osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0, trig, 39'h0, diag, 15'h657F, osd_rst}), .osd_open(osd_open), .ps2_key(ps2_key), .ps2_mouse(ps2_mouse), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
 	.vga31(vga31), .crt_hsize(crt_hsize), .crt_hpos(crt_hpos), .crt_vpos(crt_vpos),
-	.hires(hires), .fast(fast), .f1(f1), .menumask(menumask),
+	.hires(hires), .fast(fast), .f1(f1), .menumask(menumask), .lace(dut_lace), .status_out(status_out), .status_set(status_set),
 	.audio_l(audio_l), .audio_r(audio_r),
 	.clk_audio(clk_audio), .user_in(user_in), .user_out(user_out), .mt32_on(mt32_on), .info_req(info_req), .info(info)
 );
@@ -201,8 +211,53 @@ function [23:0] rgb565(input [15:0] p);
 	rgb565 = {p[15:11], p[15:13], p[10:5], p[10:9], p[4:0], p[4:2]};
 endfunction
 
+// The flicker filter (host version 18). Strong as dnkLauncher's out_box()
+// does it: per channel (above + 2 * this + below + bias) / 4, the rows of the
+// picture's edges their own neighbours, the bias 0 2 0 2 in even rows and
+// 3 1 3 1 in odd ones; Light (above + 6 * this + below + bias) / 8, the bias
+// that one times two plus (x / 2) % 2. h: the picture's rows
+function [15:0] flick16(input integer x, input integer y, input integer h, input integer light);
+	reg [15:0] u, c, d;
+	integer k, rr, gg, bb;
+	begin
+		u = fb_pixel16(x, y == 0 ? 0 : y - 1);
+		c = fb_pixel16(x, y);
+		d = fb_pixel16(x, y == h - 1 ? y : y + 1);
+		k = (y % 2) ? ((x % 2) ? 1 : 3) : ((x % 2) ? 2 : 0);
+		if (light) begin
+			k = k * 2 + (x / 2) % 2;
+			rr = (u[15:11] + 6 * c[15:11] + d[15:11] + k) / 8;
+			gg = (u[10:5] + 6 * c[10:5] + d[10:5] + k) / 8;
+			bb = (u[4:0] + 6 * c[4:0] + d[4:0] + k) / 8;
+		end else begin
+			rr = (u[15:11] + 2 * c[15:11] + d[15:11] + k) / 4;
+			gg = (u[10:5] + 2 * c[10:5] + d[10:5] + k) / 4;
+			bb = (u[4:0] + 2 * c[4:0] + d[4:0] + k) / 4;
+		end
+		flick16 = {rr[4:0], gg[5:0], bb[4:0]};
+	end
+endfunction
+
 function [23:0] pal_rgb(input integer slot, input integer i);
 	pal_rgb = {i[7:0], ~i[7:0], i[7:0] ^ (slot ? 8'h55 : 8'hAA)};
+endfunction
+// at 8bpp after the palette, per 8-bit channel, rounded: Strong
+// (above + 2 * this + below + 2) / 4, Light (above + 6 * this + below + 4) / 8
+function [23:0] flick8(input integer fb, input integer slot, input integer x, input integer y, input integer h,
+                       input integer light);
+	reg [23:0] u, c, d;
+	integer n, sh, v;
+	begin
+		u = pal_rgb(slot, fb_pixel(fb, x, y == 0 ? 0 : y - 1));
+		c = pal_rgb(slot, fb_pixel(fb, x, y));
+		d = pal_rgb(slot, fb_pixel(fb, x, y == h - 1 ? y : y + 1));
+		for (n = 0; n < 3; n = n + 1) begin
+			sh = n * 8;
+			if (light) v = (u[sh +: 8] + 6 * c[sh +: 8] + d[sh +: 8] + 4) / 8;
+			else       v = (u[sh +: 8] + 2 * c[sh +: 8] + d[sh +: 8] + 2) / 4;
+			flick8[sh +: 8] = v[7:0];
+		end
+	end
 endfunction
 
 // mode: pixel format, vmode: video mode
@@ -216,10 +271,13 @@ integer cur_midi = 0, cur_midivol = 32, cur_midiw = 0, cur_info = 0, cur_infocnt
 integer cur_prog = 0, cur_prog_pi = 0;
 // field rate (host version 18): interlaced, a frame at every field
 integer cur_fr = 0;
+// the flicker filter: the line the program asks the OSD to take (w2[63:62])
+// and its request's toggle (w2[61]); the checker expecting it, 1 Light 2 Strong
+integer cur_wlvl = 0, cur_wtgl = 0, chk_filt = 0;
 task set_ctrl(input integer fb, input integer mode, input integer slot, input integer seq);
 	mem[0] = {cur_mask[3:0], 2'd0, cur_fm[0], 1'b1, 7'd64, slot[0], cur_vmode[3:0], 3'd0, mode[0], fb[7:0], 32'h4259484D};
 	mem[1] = {cur_fmw[31:0], seq[31:0]};
-	mem[2] = {3'd0, cur_fr[0], 2'd0, cur_prog_pi[0], cur_prog[0], cur_infocnt[7:0], cur_info[7:0], cur_midi[0], cur_midivol[6:0], cur_midiw[31:0]};
+	mem[2] = {cur_wlvl[1:0], cur_wtgl[0], cur_fr[0], 2'd0, cur_prog_pi[0], cur_prog[0], cur_infocnt[7:0], cur_info[7:0], cur_midi[0], cur_midivol[6:0], cur_midiw[31:0]};
 endtask
 // command c of the MIDI ring: word k is {c, k}
 task midi_cmds(input integer from, input integer to);
@@ -898,7 +956,7 @@ always @(posedge clk_vid) if (ce_pix) begin
 		if (check_enable) begin : chk
 			reg [23:0] exp;
 			row = lace ? py * 2 + (f1 ? 1 : 0) : py;
-			exp = check_black ? 24'd0 : (check_wall && !(check_auto && fld_game)) ? (wall_skip(px, row) ? {r, g, b} : wall_exp(px, row)) : cur_mode ? rgb565(fb_pixel16(px, row)) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
+			exp = check_black ? 24'd0 : (check_wall && !(check_auto && fld_game)) ? (wall_skip(px, row) ? {r, g, b} : wall_exp(px, row)) : cur_mode ? rgb565(chk_filt ? flick16(px, row, mode_h(cur_vmode), chk_filt == 1) : fb_pixel16(px, row)) : chk_filt ? flick8(cur_fb, cur_slot, px, row, mode_h(cur_vmode), chk_filt == 1) : pal_rgb(cur_slot, fb_pixel(cur_fb, px, row));
 			if ({r, g, b} !== exp) begin
 				if (errors < 10) $display("FAIL: fb %0d px %0d row %0d got %h exp %h", cur_fb, px, row, {r, g, b}, exp);
 				errors = errors + 1;
@@ -959,6 +1017,155 @@ task test_field_rate_frames;
 		set_ctrl(0, 0, 0, 10);
 		wait_fields(2);
 		if (mem[9][31]) begin $display("FAIL: field rate in the status without it"); errors = errors + 1; end
+	end
+endtask
+
+// The flicker filter (host version 18, FLICKER): the OSD's Flicker Filter
+// line (status bits 106:105) Off, Strong and Light, in 640x480 and 640x400
+// interlaced, RGB565 and 8bpp: every row the filter's of the framebuffer's
+// rows (flick16(), flick8()); as it is with the line Off and at 31kHz.
+// Status word 1 bit 2: the core has it (with -DFLICK), bit 3: the line is
+// not Off, status word 6 bits 33:32 the line. A core without it (FLICKER 0)
+// filters nothing and says Off. Then the program's request to set the line
+// (w2[63:61], w2[61] the other value than status word 6 bit 34): one
+// status_set, the status written back with the line changed and the
+// momentary bits 0, and bit 34 then w2[61]; none while w2[61] is bit 34, and
+// none in a core without the filter. The lace output: the OSD line greyed.
+integer sets = 0;
+reg [127:0] set_word;
+always @(posedge clk) if (status_set) begin sets = sets + 1; set_word = status_out; end
+task check_fields(input integer n);
+	begin
+		checked = 0;
+		@(negedge vblank);
+		check_enable = 1;
+		wait_fields(n);
+		check_enable = 0;
+	end
+endtask
+task flicker_case(input integer m, input integer fmt, input integer lvl, input integer err0);
+	integer rows, want;
+	begin
+		rows = (m == 4) ? 240 : 200;
+		cur_vmode = m; vga31 = 0;
+		cur_fb = fmt ? 2 : 0; cur_mode = fmt; cur_slot = 0;
+		osd_flt = lvl; chk_filt = FLICK_P ? lvl : 0;
+		set_ctrl(cur_fb, fmt, 0, 10);
+		wait_fields(4);
+		check_fields(2);
+		want = FLICK_P ? lvl : 0;
+		$display("flicker: mode %0d %0s %0s: checked %0d pixels (%0s), %0d errors, status %h / %h", m, fmt ? "RGB565" : "8bpp",
+			lvl == 2 ? "Strong" : lvl == 1 ? "Light" : "Off", checked, chk_filt ? "filtered" : "as they are", errors - err0,
+			mem[9][31:0], mem[14][47:32]);
+		if (checked != 2 * 640 * rows || mem[9][2] != FLICK_P || mem[9][3] != (want != 0) || mem[14][33:32] != want || !dut_lace) begin
+			$display("FAIL: flicker filter, mode %0d format %0d line %0d", m, fmt, lvl); errors = errors + 1;
+		end
+	end
+endtask
+task test_flicker;
+	integer err0, m, fmt, lvl, s0;
+	begin
+		err0 = errors;
+		if (sets != 0) begin $display("FAIL: flicker filter, the status written back without a request"); errors = errors + 1; end
+		for (m = 4; m >= 2; m = m - 2) begin
+			fill(m);
+			for (fmt = 1; fmt >= 0; fmt = fmt - 1)
+				for (lvl = 0; lvl < 3; lvl = lvl + 1)
+					flicker_case(m, fmt, lvl == 0 ? 0 : lvl == 1 ? 2 : 1, err0);
+		end
+		// 31kHz: progressive, as it is
+		osd_flt = 2; chk_filt = 0;
+		cur_fb = 2; cur_mode = 1;
+		set_ctrl(2, 1, 0, 10);
+		vga31 = 1;
+		wait_fields(10);
+		check_fields(2);
+		$display("flicker: 640x400 at 31kHz, Strong: checked %0d pixels, %0d errors, status %h, lace %0d", checked, errors - err0, mem[9][31:0], dut_lace);
+		if (checked != 2 * 640 * 400 || dut_lace) begin $display("FAIL: flicker filter at 31kHz"); errors = errors + 1; end
+		vga31 = 0;
+		osd_flt = 0;
+		wait_fields(10);
+		// the program sets the line: one write-back per request
+		s0 = sets;
+		if (mem[14][34] != cur_wtgl) begin $display("FAIL: flicker filter, toggle %0d before a request", mem[14][34]); errors = errors + 1; end
+		cur_wlvl = 1; cur_wtgl = 1 - cur_wtgl;
+		set_ctrl(2, 1, 0, 10);
+		wait_fields(3);
+		if (FLICK_P && mem[14][34] != cur_wtgl) begin $display("FAIL: flicker filter, the request's toggle not taken"); errors = errors + 1; end
+		$display("flicker: the program asks for Light: %0d writes, bits 106:105 %0d, 104 %0d, 59:56 %h, 16 %0d, 0 %0d, the rest %0s",
+			sets - s0, set_word[106:105], set_word[104], set_word[59:56], set_word[16], set_word[0],
+			(set_word[127:107] == 21'h0246 && set_word[103:60] == {osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0} && set_word[15:1] == 15'h657F) ? "kept" : "CHANGED");
+		if (sets - s0 != FLICK_P || (FLICK_P && (set_word[106:105] != 1 || set_word[104] || set_word[59:56] || set_word[16] || set_word[0] ||
+		    set_word[127:107] != 21'h0246 || set_word[15:1] != 15'h657F))) begin
+			$display("FAIL: flicker filter, the program's request"); errors = errors + 1;
+		end
+		// the same request again: nothing
+		s0 = sets;
+		set_ctrl(2, 1, 0, 10);
+		wait_fields(3);
+		if (sets != s0) begin $display("FAIL: flicker filter, a request written twice"); errors = errors + 1; end
+		cur_wlvl = 0;
+		chk_filt = 0;
+		if (errors != err0) $display("FAIL: flicker filter, %0d errors", errors - err0);
+	end
+endtask
+
+// The game's reset (host version 18): the OSD's Reset line, then the USER
+// button (the reset input), each held 3 fields while a game has the screen
+// in 640x480 RGB565. At the press the core's picture comes back at once, as
+// at the end of its intro (not the intro again), and status word 1 bits
+// 7..4 count up once; the status goes on being written while it is held;
+// the control block's magic is cleared. The program attaching again gets
+// the screen as after the intro.
+task game_back;
+	begin
+		cur_fb = 2; cur_mode = 1; cur_slot = 0; chk_filt = 0;
+		set_ctrl(2, 1, 0, 10);
+		i = 0;
+		while (!dut.game_on && i < 80) begin
+			wait_fields(1);
+			i = i + 1;
+		end
+		wait_fields(2);
+		check_fields(2);
+		if (!dut.game_on || checked != 2 * 153600) begin $display("FAIL: reset, the game back (%0d pixels)", checked); errors = errors + 1; end
+	end
+endtask
+task test_reset;
+	integer err0, k, c0, w0;
+	begin
+		err0 = errors;
+		fill(4);
+		cur_vmode = 4; vga31 = 0;
+		game_back;
+		for (k = 0; k < 2; k = k + 1) begin
+			c0 = mem[9][7:4];
+			@(negedge vblank);
+			repeat (200) @(posedge clk);
+			if (k == 0) osd_rst = 1; else reset = 1;
+			w0 = stat_writes;
+			wait_fields(1);
+			if (dut.game_on || dut.wall_level != 256 || !dut.intro_done) begin
+				$display("FAIL: reset %0d: game_on %0d, level %0d, intro_t %0d", k, dut.game_on, dut.wall_level, dut.intro_t); errors = errors + 1;
+			end
+			// the core's picture, at its full level
+			check_wall = 1;
+			check_fields(1);
+			check_wall = 0;
+			wait_fields(1);
+			if (stat_writes == w0 || mem[9][7:4] != ((c0 + 1) & 15)) begin
+				$display("FAIL: reset %0d held: status writes %0d, resets %0d (were %0d)", k, stat_writes - w0, mem[9][7:4], c0); errors = errors + 1;
+			end
+			if (k == 0) osd_rst = 0; else reset = 0;
+			wait_fields(6);
+			$display("reset %0d (%0s): resets %0d -> %0d, picture checked %0d pixels, magic %h, intro_t %0d, %0d errors",
+				k, k ? "USER button" : "OSD", c0, mem[9][7:4], checked, mem[0][31:0], dut.intro_t, errors - err0);
+			if (mem[9][7:4] != ((c0 + 1) & 15) || mem[0][31:0] != 0 || checked != 153600 || dut.wall_level != 256) begin
+				$display("FAIL: reset %0d", k); errors = errors + 1;
+			end
+			game_back;
+		end
+		if (errors != err0) $display("FAIL: reset, %0d errors", errors - err0);
 	end
 endtask
 
@@ -1060,6 +1267,19 @@ initial begin
 		end
 		wait_fields(2);
 		test_field_rate_frames;
+		if (errors != 0) $display("FAIL: %0d errors", errors);
+		else $display("PASS");
+		$finish;
+	end
+	// +flickeronly (with -DFLICK, or without to see it does nothing), +resetonly:
+	// the flicker filter or the game's reset alone (host version 18), after the
+	// intro cut short
+	if ($test$plusargs("flickeronly") || $test$plusargs("resetonly")) begin
+		dut.intro_t = 242;
+		while (!dut.intro_done) wait_fields(1);
+		wait_fields(2);
+		if ($test$plusargs("flickeronly")) test_flicker;
+		else test_reset;
 		if (errors != 0) $display("FAIL: %0d errors", errors);
 		else $display("PASS");
 		$finish;
