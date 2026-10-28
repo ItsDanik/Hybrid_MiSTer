@@ -577,6 +577,18 @@ int MH_GameFound(const mh_game* game, const char* dir);
 // whose files are missing has "Checking Game Data..." before the message
 // (MH_GameLogoMissing()).
 int MH_PickGame(const mh_game* games, int count, const char* dir, const char* none, int* listed);
+// The game's files from a CD image (host version 18): GOG's and Steam's DOSBox
+// games come as one (GAME.DAT, GAME.GOG its cue sheet), and a player may have
+// ripped the CD (.bin, .iso). If a file in `dir` (NULL: the current folder) is
+// a CD image whose data track has the folders `folders` (NULL at the end, any
+// case: "DATA", "FMV"), copies every file of theirs that is not there yet, or
+// not as big, into `dir`. Meanwhile "Checking Game Data..." and "Unpacking
+// <image>... <n>%" under the MiSTer logo, once the intro is over; MH_PickGame()
+// after it checks again and goes on with its lines. Each file is written as
+// <name>.part and renamed once whole, so a start that was cut short goes on
+// where it was. Returns the number of files copied (0: no image, or nothing
+// to copy), or -1 after a message that waits (the drive is full).
+int MH_UnpackDisc(const char* dir, const char* const* folders);
 
 // The game's logo at its start (host version 17, docs/game_logo.md): once the
 // core's intro is over, "Checking Game Data..." and "Game Data OK" under the

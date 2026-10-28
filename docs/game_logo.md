@@ -12,6 +12,7 @@ Danik's idea, 2026-10-22; the answers below are Danik's of the same day. It is p
    Game Data OK
    ```
    - **Data missing:** "Checking Game Data..." is replaced by the message there is now, naming the files and where they go (the rule "missing game files are said on the purple screen"), under the MiSTer logo. No game logo comes. The message waits until the player leaves the core.
+   - **Data in a CD image** (host version 18, `MH_UnpackDisc()`, README "Several games in one core"): before the pick, "Unpacking <image>... <n>%" comes under "Checking Game Data..." while the folders are copied out of the image, once; then the start as above, from "Checking Game Data...".
    - A game without files to check (the MIDI Player) has neither line.
 4. The handover (the overlay's, `docs/midiplayer.md`, "The screen"):
    - the MiSTer logo goes as it came, its intro step backwards: fading out while it sinks 16 pixels, 31 fields (0.5 s); the dots and the two lines go with it;
