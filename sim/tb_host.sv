@@ -1102,7 +1102,7 @@ task test_flicker;
 			$display("flicker: the program asks for %0s: %0d writes, bits 106:105 %0d, 104 %0d, 59:56 %h, 16 %0d, 0 %0d, the rest %0s",
 				lvl == 2 ? "Strong" : lvl == 1 ? "Light" : "Off",
 				sets - s0, set_word[106:105], set_word[104], set_word[59:56], set_word[16], set_word[0],
-				(set_word[127:107] == 21'h0246 && set_word[103:60] == {osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0} && set_word[15:1] == 15'h657F) ? "kept" : "CHANGED");
+				sets == s0 ? "(none)" : (set_word[127:107] == 21'h0246 && set_word[103:60] == {osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0} && set_word[15:1] == 15'h657F) ? "kept" : "CHANGED");
 			if (sets - s0 != FLICK_P || (FLICK_P && (set_word[106:105] != flt_line(lvl) || set_word[104] || set_word[59:56] || set_word[16] || set_word[0] ||
 			    set_word[127:107] != 21'h0246 || set_word[15:1] != 15'h657F))) begin
 				$display("FAIL: flicker filter, the program's request"); errors = errors + 1;
