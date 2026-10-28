@@ -23,73 +23,85 @@
 <tr><th align="left">Port</th><th>Framework</th><th>Logo</th><th>Screenshots</th></tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/ChocolateQuake_MiSTer"><b>ChocolateQuake</b></a><br><sub>Quake, Quake - Scourge of Armagon, Quake - Dissolution of Eternity</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/ChocolateQuake_logo.png" alt="Quake" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/ChocolateQuake_1.png" alt="Quake, the title screen" width="176"> <img src="docs/overview/ChocolateQuake_2.png" alt="Quake, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/CrispyDoom_MiSTer"><b>CrispyDoom</b></a><br><sub>Doom, Doom - SIGIL, Doom - SIGIL II, Doom II, Doom II - No Rest for the Living, Doom II - Master Levels, Final Doom - TNT Evilution, Final Doom - Plutonia Experiment, Heretic, Hexen, Hexen - Deathkings, Strife</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/CrispyDoom_logo.png" alt="Doom" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/CrispyDoom_1.png" alt="Doom, the title screen" width="176"> <img src="docs/overview/CrispyDoom_2.png" alt="Doom, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/Dethrace_MiSTer"><b>Dethrace</b></a><br><sub>Carmageddon, Carmageddon: Splat Pack</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/Dethrace_logo.png" alt="Carmageddon" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/Dethrace_1.png" alt="Carmageddon, the title screen" width="176"> <img src="docs/overview/Dethrace_2.png" alt="Carmageddon, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/DXXRebirth_MiSTer"><b>DXXRebirth</b></a><br><sub>Descent, Descent II</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/DXXRebirth_logo.png" alt="Descent" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/DXXRebirth_1.png" alt="Descent, the title screen" width="176"> <img src="docs/overview/DXXRebirth_2.png" alt="Descent, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/ecwolf_MiSTer"><b>ECWolf</b></a><br><sub>Wolfenstein 3D, Spear of Destiny, SoD: Return to Danger, SoD: Ultimate Challenge</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/ECWolf_logo.png" alt="Wolfenstein 3D" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/ECWolf_1.png" alt="Wolfenstein 3D, the title screen" width="176"> <img src="docs/overview/ECWolf_2.png" alt="Wolfenstein 3D, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/EDuke32_MiSTer"><b>EDuke32</b></a><br><sub>Duke Nukem 3D, DN3D: Duke It Out in D.C., DN3D: Life&#x27;s a Beach, DN3D: Nuclear Winter, DN3D: Duke!ZONE II, DN3D: Penthouse Paradise</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/EDuke32_logo.png" alt="Duke Nukem 3D" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/EDuke32_1.png" alt="Duke Nukem 3D, the title screen" width="176"> <img src="docs/overview/EDuke32_2.png" alt="Duke Nukem 3D, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/jfSW_MiSTer"><b>jfSW</b></a><br><sub>Shadow Warrior, SW: Wanton Destruction, SW: Twin Dragon</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/jfSW_logo.png" alt="Shadow Warrior" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/jfSW_1.png" alt="Shadow Warrior, the title screen" width="176"> <img src="docs/overview/jfSW_2.png" alt="Shadow Warrior, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/MIDIPlayer_MiSTer"><b>MIDIPlayer</b></a><br><sub>MIDI Player</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/MIDIPlayer_logo.png" alt="MIDI Player" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/MIDIPlayer_1.png" alt="MIDI Player, the title screen" width="176"> <img src="docs/overview/MIDIPlayer_2.png" alt="MIDI Player, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/openscreamer_MiSTer"><b>OpenScreamer</b></a><br><sub>Screamer, Screamer 2</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/OpenScreamer_logo.png" alt="Screamer" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/OpenScreamer_1.png" alt="Screamer, the title screen" width="176"> <img src="docs/overview/OpenScreamer_2.png" alt="Screamer, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/ReNFS_MiSTer"><b>ReNFS</b></a><br><sub>Need for Speed SE</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/ReNFS_logo.png" alt="Need for Speed SE" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/ReNFS_1.png" alt="Need for Speed SE, the title screen" width="176"> <img src="docs/overview/ReNFS_2.png" alt="Need for Speed SE, playing" width="176"></td>
 </tr>
 <tr>
+<td width="190"><a href="https://github.com/ItsDanik/ScummVM_MiSTer"><b>ScummVM</b></a><br><sub>ScummVM</sub></td>
+<td width="90" align="center">v18</td>
+<td width="192" align="center"><img src="docs/overview/ScummVM_logo.png" alt="ScummVM" width="176"></td>
+<td width="376" align="center"><img src="docs/overview/ScummVM_1.png" alt="ScummVM, the title screen" width="176"> <img src="docs/overview/ScummVM_2.png" alt="ScummVM, playing" width="176"></td>
+</tr>
+<tr>
+<td width="190"><a href="https://github.com/ItsDanik/TheForceEngine_MiSTer"><b>TheForceEngine</b></a><br><sub>Dark Forces</sub></td>
+<td width="90" align="center">v18</td>
+<td width="192" align="center"><img src="docs/overview/TheForceEngine_logo.png" alt="Dark Forces" width="176"></td>
+<td width="376" align="center"><img src="docs/overview/TheForceEngine_1.png" alt="Dark Forces, the title screen" width="176"> <img src="docs/overview/TheForceEngine_2.png" alt="Dark Forces, playing" width="176"></td>
+</tr>
+<tr>
 <td width="190"><a href="https://github.com/ItsDanik/Xash3D_MiSTer"><b>Xash3D</b></a><br><sub>Half-Life, HL: Opposing Force, HL: Blue Shift</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/Xash3D_logo.png" alt="Half-Life" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/Xash3D_1.png" alt="Half-Life, the title screen" width="176"> <img src="docs/overview/Xash3D_2.png" alt="Half-Life, playing" width="176"></td>
 </tr>
 <tr>
 <td width="190"><a href="https://github.com/ItsDanik/YQuake2_MiSTer"><b>YQuake2</b></a><br><sub>Quake II, Q2: The Reckoning, Q2: Ground Zero</sub></td>
-<td width="90" align="center">v17</td>
+<td width="90" align="center">v18</td>
 <td width="192" align="center"><img src="docs/overview/YQuake2_logo.png" alt="Quake II" width="176"></td>
 <td width="376" align="center"><img src="docs/overview/YQuake2_1.png" alt="Quake II, the title screen" width="176"> <img src="docs/overview/YQuake2_2.png" alt="Quake II, playing" width="176"></td>
 </tr>
@@ -104,6 +116,8 @@
 - One frame for every field of the screen at 59.6Hz, timed by the core itself, for smooth motion.
 - 8-bit palettes done in the FPGA, so palette fades and flashes cost nothing.
 - *CRT Options*: the picture's width and position, adjusted for your screen without touching the pixels.
+- A *Flicker Filter* for interlaced pictures (Light, Strong or Off), done in the FPGA: fine lines no longer blink at 480i.
+- Menus at 480i move at 60 pictures a second on a CRT, not 30.
 - 240-line modes where the game allows them: the view fills the whole screen, and *HUD (Top)* / *HUD (Bottom)* move the HUD out of your CRT's overscan, live while you watch.
 - *FPS Counter* in the OSD.
 
@@ -129,6 +143,7 @@
 - Missing files are said on screen: which files, for which game and where they go.
 - Game files can be on the SD card or on a USB drive.
 - [tty2oled+](https://github.com/ItsDanik/MiSTer-tty2oled-plus) OLED display: each game's logo, then its details, description and icon, also for a game picked from a port's list; the Hybrid Core Framework's banner while the list is up.
+- The MiSTer's USER button and the OSD's *Reset* start the game again from its beginning, as in every other core.
 - *Save Diagnostic Report* in the OSD: if something is wrong, it saves the last 60 seconds of what the game did, to attach to a bug report. Nothing in it identifies you or your network.
 
 ### Installing and updating

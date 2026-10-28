@@ -7,7 +7,8 @@
 # changes; the rest of OVERVIEW.md (what the framework does, the credits) is
 # written by hand.
 #
-# Each port's release zip is looked for in the core repositories (`releases/`):
+# Each port's release zip is looked for in the core repositories (`releases/`,
+# or `dist/` for a port without zips on GitHub, ScummVM):
 # its games are those of the zip's games.txt; the host version is the VERSION
 # of hybrid_host.sv in the hybrid/ the repository had when the zip was
 # committed; the logo is package/logos/<id>.png of the first game, as it is; the screenshots are docs/screenshot1.png and screenshot2.png.
@@ -52,7 +53,10 @@ def host_version(rev):
 
 def built_on(repo, zname):
     """The host version of the release: hybrid/ as the repository had it when
-    the zip was committed"""
+    the zip was committed; a port without zips on GitHub (ScummVM, too big
+    for it: its zip in dist/), hybrid/ as the repository has it now"""
+    if not os.path.isfile(os.path.join(repo, "releases", zname)):
+        return host_version(git(repo, "rev-parse", "HEAD:hybrid"))
     commit = git(repo, "log", "-1", "--format=%H", "--", "releases/" + zname)
     if not commit:
         die("%s/releases/%s is not committed: release it first" % (repo, zname))
@@ -80,10 +84,12 @@ with open(os.path.join(checkout, "ports.txt"), encoding="utf-8") as f:
 os.makedirs(out_dir, exist_ok=True)
 rows, kept = [], {"banner.png"}
 for engine, zname in ports:
-    repo = next((r for r in repos if os.path.isfile(os.path.join(r, "releases", zname))), None)
-    if repo is None:
-        die("no core repository has releases/%s (give the repositories as arguments)" % zname)
-    with zipfile.ZipFile(os.path.join(repo, "releases", zname)) as z:
+    zpath = next((os.path.join(r, d, zname) for d in ("releases", "dist") for r in repos
+                  if os.path.isfile(os.path.join(r, d, zname))), None)
+    if zpath is None:
+        die("no core repository has releases/%s or dist/%s (give the repositories as arguments)" % (zname, zname))
+    repo = os.path.dirname(os.path.dirname(zpath))
+    with zipfile.ZipFile(zpath) as z:
         games = [l.split("|", 1) for l in z.read("games/dnk/%s/games.txt" % engine).decode().splitlines()
                  if l.strip() and not l.startswith("#")]
     first = games[0][0]
