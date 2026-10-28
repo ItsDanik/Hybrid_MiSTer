@@ -109,9 +109,12 @@
 //                   filter: the core has the flicker filter (host version
 //                   18, FLICKER); filter on: the OSD's Flicker Filter line
 //                   (status bits 106:105: 0 Light, the default, 1 Strong,
-//                   2 Off) is Light or Strong (which: w6).
+//                   2 Off; FLICKER 2: 0 Strong, 1 Light) is Light or Strong
+//                   (which: w6).
 //                   The filter acts on a game's picture while it is
-//                   interlaced, RGB565 or 8bpp, never on the core's own:
+//                   interlaced, RGB565 or 8bpp, and on a program's page on
+//                   the overlay (the MIDI Player's; its transparent pixels
+//                   the background), never on the core's own picture:
 //                   each row Strong a quarter of the row above, half its
 //                   own and a quarter of the row below; Light an eighth,
 //                   three quarters and an eighth. RGB565 has the bits that
@@ -271,7 +274,9 @@ module hybrid_host
 	// the flicker filter (host version 18; the OSD's Flicker Filter line,
 	// status bits 106:105, 0 Light, the default, 1 Strong, 2 Off): 1 in a core with a 640x400 or 640x480 mode, 0 leaves
 	// it out (two more line buffers and two more copies of the palette, 12
-	// M10K blocks); status word 1 bit 2 says which
+	// M10K blocks); status word 1 bit 2 says which. 2: as 1, but Strong the
+	// default (the line's entries 0 Strong, 1 Light, 2 Off; ReNFS, Danik
+	// 2026-10-28)
 	parameter FLICKER      = 0
 )
 (
@@ -430,9 +435,12 @@ wire       m_dual = (vmode == 4'd2) || (vmode == 4'd4);
 wire       t_fast = m_dual & vga31;
 wire       t_lace = m_dual & ~vga31;
 // the size is -24..+7: beyond that the blanking gets too short or the clock too fast.
-// Only for a game's picture: the core's own (the purple screen) has nothing at
-// its edges, and its text would get narrow and hard to read
-wire [5:0] hsize  = !game_on ? 6'd0 :
+// Only for a game's picture and a program's page on the overlay (the MIDI
+// Player's, with the purple screen under it; Danik, 2026-10-28): the core's
+// own picture alone has nothing at its edges, and its text would get narrow
+// and hard to read
+reg        ovl_page = 0;      // a program's page on the overlay: not the logo, from its fade-in
+wire [5:0] hsize  = !(game_on || ovl_page) ? 6'd0 :
                     ($signed(crt_hsize) > 6'sd7) ? 6'sd7 : ($signed(crt_hsize) < -6'sd24) ? -6'sd24 : crt_hsize;
 wire [7:0] t_code = t_fast ? 8'd100 : 8'd100 - {{2{hsize[5]}}, hsize};
 
@@ -592,7 +600,9 @@ always @(posedge clk_vid) begin
 				v_hpos  <= s_hpos;
 				v_vpos  <= s_vpos;
 				v_fmt16 <= fmt16;
-				v_filt  <= FLICKER != 0 && filt_req && v_lace && game_on && !ovl_left;
+				// a game's picture, or the program's page on the overlay
+				// (the MIDI Player's; not the game's logo, which rises in)
+				v_filt  <= FLICKER != 0 && filt_req && v_lace && ((game_on && !ovl_left) || (ovl_page && ovl_vis && !fmt16 && !game_on && !pal_lv[9]));
 				v_light <= filt_lvl == 2'd1;
 				v_valid <= game_on & ~ovl_left;
 				v_ovl   <= ovl_vis & ~fmt16 & ~game_on;
@@ -713,6 +723,7 @@ end
 // the flicker filter's rows above and below, at 8bpp: the palette twice more
 reg [63:0] pal_qu, pal_qd;
 reg        pal_hi_u, pal_hi_d;
+reg        pix_clear_u, pix_clear_d;   // index 0 there: on the overlay, the background
 wire [7:0] pix_index_u = lbuf_qu[{byte_sel, 3'b0} +: 8];
 wire [7:0] pix_index_d = lbuf_qd[{byte_sel, 3'b0} +: 8];
 generate
@@ -728,9 +739,11 @@ generate
 			pal_qd   <= pal_d[pix_index_d[7:1]];
 			pal_hi_u <= pix_index_u[0];
 			pal_hi_d <= pix_index_d[0];
+			pix_clear_u <= pix_index_u == 8'd0;
+			pix_clear_d <= pix_index_d == 8'd0;
 		end
 	end else begin : no_flicker_pal
-		always @(posedge clk_vid) {pal_qu, pal_qd, pal_hi_u, pal_hi_d} <= 130'd0;
+		always @(posedge clk_vid) {pal_qu, pal_qd, pal_hi_u, pal_hi_d, pix_clear_u, pix_clear_d} <= 132'd0;
 	end
 endgenerate
 
@@ -763,10 +776,12 @@ wire [7:0] lfilt_r = pix16_u[15:11] + {pix16[15:11], 2'b0} + {pix16[15:11], 1'b0
 wire [8:0] lfilt_g = pix16_u[10:5] + {pix16[10:5], 2'b0} + {pix16[10:5], 1'b0} + pix16_d[10:5] + pix_bias8;
 wire [7:0] lfilt_b = pix16_u[4:0] + {pix16[4:0], 2'b0} + {pix16[4:0], 1'b0} + pix16_d[4:0] + pix_bias8;
 wire [15:0] pix16_l = {lfilt_r[7:3], lfilt_g[8:3], lfilt_b[7:3]};
-// at 8bpp after the palette, rounded
-wire [23:0] pix8_c = pal_hi   ? pal_q[55:32]  : pal_q[23:0];
-wire [23:0] pix8_u = pal_hi_u ? pal_qu[55:32] : pal_qu[23:0];
-wire [23:0] pix8_d = pal_hi_d ? pal_qd[55:32] : pal_qd[23:0];
+// at 8bpp after the palette, rounded. On the overlay a transparent pixel is
+// the purple screen's background (one colour there: the program keeps clear
+// of the badge), which the overlay's palette fades in from
+wire [23:0] pix8_c = (v_ovl && pix_clear)   ? wall_bg : pal_hi   ? pal_q[55:32]  : pal_q[23:0];
+wire [23:0] pix8_u = (v_ovl && pix_clear_u) ? wall_bg : pal_hi_u ? pal_qu[55:32] : pal_qu[23:0];
+wire [23:0] pix8_d = (v_ovl && pix_clear_d) ? wall_bg : pal_hi_d ? pal_qd[55:32] : pal_qd[23:0];
 wire [9:0] filt8_r = pix8_u[23:16] + {pix8_c[23:16], 1'b0} + pix8_d[23:16] + 2'd2;
 wire [9:0] filt8_g = pix8_u[15:8] + {pix8_c[15:8], 1'b0} + pix8_d[15:8] + 2'd2;
 wire [9:0] filt8_b = pix8_u[7:0] + {pix8_c[7:0], 1'b0} + pix8_d[7:0] + 2'd2;
@@ -1778,6 +1793,10 @@ wire       lace_hold  = u_lace && run && vbl_field && !field_rate;
 wire       ovl_want   = ctrl_magic && ctrl_w0[58];
 assign     ovl_out_req = ctrl_magic && ctrl_w2[58];
 assign     ovl_rise    = ctrl_w2[59];
+// the page comes in (or the overlay without a logo): Horizontal Size and the
+// flicker filter take it as a game's picture; the size's new clock is taken
+// while the screen is the background alone, the overlay not yet in
+always @(posedge clk) ovl_page <= ovl_on && ovl_want && !ovl_rise && ovl_t >= OVL_T_IN;
 wire       game_take  = ctrl_magic && !ovl_want && (game_on || wall_level == 0 || (INTRO == 0 && !lace_hold));
 wire [9:0] pal_want   = !ovl_on ? 10'd256 : (wall_level != 9'd256) ? {1'b1, wall_level} : {1'b0, lv_ovl};
 
@@ -2085,15 +2104,16 @@ always @(posedge clk) begin
 				// the line Light (the default, Danik 2026-10-28), Strong, Off
 				// (3 as Off), as the level 1, 2, 0 the program sees
 				filt_req <= FLICKER != 0 && !osd_status[106];
-				filt_lvl <= FLICKER == 0 || osd_status[106] ? 2'd0 : osd_status[105] ? 2'd2 : 2'd1;
+				filt_lvl <= FLICKER == 0 || osd_status[106] ? 2'd0 : (osd_status[105] ^ (FLICKER == 2)) ? 2'd2 : 2'd1;
 				// the program sets the OSD's Flicker Filter line (dnkLauncher's
 				// own row): Main_MiSTer takes the status written back as the
 				// player's change. The momentary bits (Reset, the triggers,
 				// Save Diagnostic Report, Reset Hanging Notes) go back as 0
 				if (FLICKER != 0 && ctrl_magic && ctrl_w2[61] != filt_tgl) begin
 					filt_tgl   <= ctrl_w2[61];
-					// the level as the line's entry: Off 2, Light 0, Strong (3 as Strong) 1
-					status_out <= {osd_status[127:107], ctrl_w2[63:62] == 2'd0, ctrl_w2[63], 1'b0, osd_status[103:60], 4'd0,
+					// the level as the line's entry: Off 2, Light 0, Strong (3 as Strong) 1;
+					// with FLICKER 2 Strong 0 and Light 1
+					status_out <= {osd_status[127:107], ctrl_w2[63:62] == 2'd0, FLICKER == 2 ? ctrl_w2[63:62] == 2'd1 : ctrl_w2[63], 1'b0, osd_status[103:60], 4'd0,
 					               osd_status[55:17], 1'b0, osd_status[15:1], 1'b0};
 					status_set <= 1;
 				end
@@ -2352,6 +2372,10 @@ always @(posedge clk_vid) begin
 
 		if (o_hbl | o_vbl) begin
 			{r, g, b} <= 24'd0;
+		end else if (!v_valid && v_filt && !(pix_clear && pix_clear_u && pix_clear_d)) begin
+			// the program's page on the overlay, filtered where it is or is
+			// next to it
+			{r, g, b} <= v_light ? {lfilt8_r[10:3], lfilt8_g[10:3], lfilt8_b[10:3]} : {filt8_r[9:2], filt8_g[9:2], filt8_b[9:2]};
 		end else if (!v_valid) begin
 			// the core's picture until the HPS side publishes a valid control
 			// block, and under the overlay

@@ -49,11 +49,17 @@ localparam INTRO_P = 0;
 `else
 localparam INTRO_P = 1;
 `endif
-// the flicker filter in the core with -DFLICK (FLICKER 1; +flickeronly)
-`ifdef FLICK
+// the flicker filter in the core with -DFLICK (FLICKER 1; +flickeronly),
+// with Strong the default with -DFLICK2 (FLICKER 2)
+`ifdef FLICK2
 localparam FLICK_P = 1;
+localparam FLICK_V = 2;
+`elsif FLICK
+localparam FLICK_P = 1;
+localparam FLICK_V = 1;
 `else
 localparam FLICK_P = 0;
+localparam FLICK_V = 0;
 `endif
 
 reg clk = 0;
@@ -105,7 +111,7 @@ always #20.345 clk_audio = ~clk_audio; // 24.576MHz
 
 hybrid_host #(.WALL("rtl/hybrid_wall.hex"), .WALL_PAL("rtl/hybrid_wall_pal.hex"), .WALL_DOTS("rtl/hybrid_wall_dots.hex"),
 	.WALL_EASE("rtl/hybrid_wall_ease.hex"), .WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"),
-	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH), .INTRO(INTRO_P), .FLICKER(FLICK_P)) dut
+	.WALL_TIMEOUT(1500), .MT32_QUIET(10_000_000), .MIDI_SYNTH(SYNTH), .INTRO(INTRO_P), .FLICKER(FLICK_V)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(ddr_busy), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
@@ -1034,9 +1040,10 @@ endtask
 integer sets = 0;
 reg [127:0] set_word;
 // the line's entry for a level (0 Off, 1 Light, 2 Strong): Light, the
-// default, is entry 0, then Strong and Off (Danik, 2026-10-28)
+// default, is entry 0, then Strong and Off (Danik, 2026-10-28); FLICKER 2
+// Strong 0, Light 1
 function [1:0] flt_line(input integer lvl);
-	flt_line = lvl == 0 ? 2'd2 : lvl == 1 ? 2'd0 : 2'd1;
+	flt_line = lvl == 0 ? 2'd2 : (lvl == 1) == (FLICK_V != 2) ? 2'd0 : 2'd1;
 endfunction
 always @(posedge clk) if (status_set) begin sets = sets + 1; set_word = status_out; end
 task check_fields(input integer n);

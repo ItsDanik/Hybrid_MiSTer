@@ -15,7 +15,8 @@ docker image inspect mister-hybrid-sim > /dev/null 2>&1 || docker build -t miste
 # tb_host.sv): -DNO_INTRO (a frontend's core without the intro, a few
 # minutes), +introonly (the intro and the handover after it), -DNO_SYNTH
 # +trigonly, +mt32only, +fieldrate (host version 18: field rate alone),
-# +resetonly (the game's reset), -DFLICK +flickeronly (the flicker filter).
+# +resetonly (the game's reset), -DFLICK +flickeronly (the flicker filter;
+# -DFLICK2 with Strong its default).
 if [ "$1" = host ]; then
   shift
   DEFS= ARGS=

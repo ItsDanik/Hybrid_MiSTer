@@ -101,7 +101,7 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    - *HDMI Only*: what it does in this port (a port without 640x400 or more says nothing changes in the game), and, word for word as `template/README.md` has it, that the core's own screen is progressive with it too and combs on HDMI without it: from host version 18 it moves at every field for a CRT (Danik, 2026-10-27; a port takes the line at its v18 build)
    - *CRT Options*, the game's options, *Cheats*, then `| Reset | starts the game again from its beginning, as the USER button does |` (host version 18; a port takes the line at its v18 build) and `| Save Diagnostic Report | the last line: see [If something is wrong](#if-something-is-wrong) |`
 
-   *Flicker Filter* only in a port with a 640x400 or 640x480 mode (`FLICKER` 1, host version 18), which takes the line at its v18 build.
+   *Flicker Filter* only in a port with a 640x400 or 640x480 mode (`FLICKER` 1, host version 18), which takes the line at its v18 build; with `FLICKER` 2 (Strong the default) it says "Strong (default), Light or Off".
 
    **An option with several settings or values** (*CRT Options*, *Resolution*, *FM Music*, *Cheats*) has a line for each, `**<Name>**: <a few words>`, `<br>` between them, the default marked `(default)`, no full stop; then, if it needs one, `<br><br>` and a short explanation of a sentence or two. A one-liner is a few words: "**Give Weapons/Ammo/Keys**: every weapon, full ammo and both keys", not when or how often it applies. *CRT Options*, its lines as the OSD has them:
    ```markdown

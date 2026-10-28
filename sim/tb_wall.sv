@@ -17,6 +17,10 @@
 // page_pal.hex its page (640x480 8bpp, index 0 transparent): after the logo's
 // 2 seconds the overlay goes out (w2[58]), the line is cleared, the page and
 // its palette are put up and the overlay comes in again, without rising.
+// FLICKER, FLT: the core's FLICKER and the OSD's Flicker Filter line (status
+// bits 106:105), the page filtered at 480i (sim/page_flicker.sh checks it).
+// HSIZE: the OSD's Horizontal Size (-24..7), which the page takes and the
+// core's own picture does not.
 `timescale 1ns/1ps
 
 // Stand-in for hybrid_vclk.sv, as in tb_host.sv
@@ -57,7 +61,10 @@ module tb_wall
 	parameter MSG       = "",
 	parameter TIMEOUT   = 0,
 	parameter LOGO      = "",
-	parameter PAGE      = 0
+	parameter PAGE      = 0,
+	parameter FLICKER   = 0,
+	parameter FLT       = 0,
+	parameter HSIZE     = 0
 );
 
 // the timeline of a game starting with its logo, in fields from the intro's
@@ -194,16 +201,16 @@ wire clk_vid, ce_pix, hsync, vsync, hblank, vblank, hires, fast, f1;
 wire [7:0] r, g, b;
 
 hybrid_host #(.WALL(WALL), .WALL_PAL(WALL_PAL), .WALL_DOTS(WALL_DOTS), .WALL_EASE(WALL_EASE),
-	.WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"), .WALL_TIMEOUT(TIMEOUT ? 2 : 716)) dut
+	.WALL_FONT("rtl/hybrid_wall_font.hex"), .WALL_ALONE("rtl/hybrid_wall_alone.hex"), .WALL_TIMEOUT(TIMEOUT ? 2 : 716), .FLICKER(FLICKER)) dut
 (
 	.clk(clk), .reset(reset), .refclk(clk),
 	.ddr_busy(1'b0), .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_dout(ddr_dout),
 	.ddr_dout_ready(ddr_dout_ready), .ddr_rd(ddr_rd), .ddr_din(ddr_din), .ddr_be(ddr_be), .ddr_we(ddr_we),
 	.joystick_0(32'd0), .joystick_1(32'd0),
 	.joy_l_analog_0(16'd0), .joy_r_analog_0(16'd0), .joy_l_analog_1(16'd0), .joy_r_analog_1(16'd0),
-	.osd_status(128'd0), .osd_open(1'b0), .ps2_key(11'd0), .ps2_mouse(25'd0), .ps2_mouse_ext(16'd0),
+	.osd_status({21'd0, 2'(FLT), 105'd0}), .osd_open(1'b0), .ps2_key(11'd0), .ps2_mouse(25'd0), .ps2_mouse_ext(16'd0),
 	.clk_vid(clk_vid), .ce_pix(ce_pix), .r(r), .g(g), .b(b), .hsync(hsync), .vsync(vsync), .hblank(hblank), .vblank(vblank),
-	.vga31(VGA31 != 0), .crt_hsize(6'd0), .crt_hpos(4'd0), .crt_vpos(4'd0),
+	.vga31(VGA31 != 0), .crt_hsize(6'(HSIZE)), .crt_hpos(4'd0), .crt_vpos(4'd0),
 	.hires(hires), .fast(fast), .f1(f1), .menumask(),
 	.clk_audio(1'b0), .user_in(7'h7F), .user_out(), .mt32_on(), .info_req(), .info(),
 	.audio_l(), .audio_r()
@@ -328,8 +335,8 @@ initial begin
 	end
 	$display("tb_wall: %0d frames of %0d pixels, %0d rows per field, %s, intro field %0d at the end%0s", FRAMES, seen, rows,
 		lace ? "480i" : "480p", dut.intro_t, LOGO != "" ? "" : "");
-	if (LOGO != "") $display("tb_wall: logo timeline field %0d, overlay field %0d, level %0d, game %0d", tl, dut.ovl_t,
-		dut.wall_level, dut.game_on);
+	if (LOGO != "") $display("tb_wall: logo timeline field %0d, overlay field %0d, level %0d, game %0d, size %0d", tl, dut.ovl_t,
+		dut.wall_level, dut.game_on, $signed(dut.v_hsize));
 	$finish;
 end
 

@@ -168,7 +168,8 @@ localparam MIDI_SYNTH = 1;
 localparam INTRO = 1;
 // GAME: 1 in a core with a 640x400 or 640x480 mode (interlaced at 15kHz):
 // the OSD's Flicker Filter line (host version 18). It costs two more line
-// buffers and two more copies of the palette, 12 M10K blocks; 0 hides the line
+// buffers and two more copies of the palette, 12 M10K blocks; 0 hides the line.
+// 2: as 1 with Strong the default (the line's entries "Strong,Light,Off")
 localparam FLICKER = 0;
 
 wire         forced_scandoubler;
