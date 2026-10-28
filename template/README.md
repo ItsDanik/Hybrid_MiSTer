@@ -35,6 +35,9 @@ With `update_all` (Downloader 2.4 or newer, which update_all keeps up to date):
 > [!NOTE]
 > The game data can go on a USB drive instead, into the same folder there (`/media/usb0/games/dnk/@NAME@/`): the game looks for it there first, and then keeps its settings and saved games there as well. Everything else stays on the SD card.
 
+> [!IMPORTANT]
+> **HDMI or VGA:** if you play on HDMI or on a VGA monitor rather than a 15kHz CRT, open the OSD and set *HDMI Only* to **Yes**. TODO (only in a port with a 640x400 or 640x480 mode, else remove this box): what is drawn at 640x480, e.g. "The game's menus are" / "Its screen is", then: drawn at 640x480, which is interlaced for a CRT and shows combing on any other screen without it.
+
 The game's log is in `/media/fat/logs/dnk/@NAME@/@name@.log`. TODO: where settings and saved games are.
 
 ## The launcher

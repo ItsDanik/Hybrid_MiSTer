@@ -67,6 +67,11 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    > [!NOTE]
    > The game data can go on a USB drive instead, into the same folder there (`/media/usb0/games/dnk/<Engine>/`): the game looks for it there first, and then keeps its settings and saved games there as well. Everything else stays on the SD card.
    ```
+   In a port with a 640x400 or 640x480 mode (`FLICKER` 1), right after that note, GitHub's important box, word for word but for what is drawn at 640x480 (Danik, 2026-10-28; until the next host version's *Video Out* takes the place of *HDMI Only*, when the box is changed in every port):
+   ```markdown
+   > [!IMPORTANT]
+   > **HDMI or VGA:** if you play on HDMI or on a VGA monitor rather than a 15kHz CRT, open the OSD and set *HDMI Only* to **Yes**. <What> is drawn at 640x480, which is interlaced for a CRT and shows combing on any other screen without it.
+   ```
    Then one paragraph of what a player may want to know of the menu entries (with several games: what each starts when its data is missing, that each keeps its own OSD settings and button mappings, the core file's list of games) and where the game's log, settings and saved games are.
 8. **`## The launcher`**, right after *Installation*, word for word (Danik, 2026-10-25): what the launcher does and what its screen has, with its screenshot, the same picture in every port, `docs/launcher.png` of this repository (made by `launcher/ui/screenshot.py`), by its address on GitHub:
    ```markdown
