@@ -108,7 +108,8 @@
 //                   field, ctrl_valid, lace, format, resets[3:0], filter on, filter, fb_index[1:0]}
 //                   filter: the core has the flicker filter (host version
 //                   18, FLICKER); filter on: the OSD's Flicker Filter line
-//                   (status bits 106:105) is Light or Strong (which: w6).
+//                   (status bits 106:105: 0 Light, the default, 1 Strong,
+//                   2 Off) is Light or Strong (which: w6).
 //                   The filter acts on a game's picture while it is
 //                   interlaced, RGB565 or 8bpp, never on the core's own:
 //                   each row Strong a quarter of the row above, half its
@@ -268,7 +269,7 @@ module hybrid_host
 	// screen at the next frame, without the picture going out first
 	parameter INTRO        = 1,
 	// the flicker filter (host version 18; the OSD's Flicker Filter line,
-	// status bits 106:105): 1 in a core with a 640x400 or 640x480 mode, 0 leaves
+	// status bits 106:105, 0 Light, the default, 1 Strong, 2 Off): 1 in a core with a 640x400 or 640x480 mode, 0 leaves
 	// it out (two more line buffers and two more copies of the palette, 12
 	// M10K blocks); status word 1 bit 2 says which
 	parameter FLICKER      = 0
@@ -2081,16 +2082,18 @@ always @(posedge clk) begin
 				menumask <= ctrl_magic ? ctrl_w0[63:60] : 4'd0;
 				game_on  <= game_take;
 				fr_on    <= u_lace && field_rate;
-				// Off, Light, Strong (3 as Strong)
-				filt_req <= FLICKER != 0 && osd_status[106:105] != 2'd0;
-				filt_lvl <= FLICKER == 0 ? 2'd0 : osd_status[106] ? 2'd2 : osd_status[105] ? 2'd1 : 2'd0;
+				// the line Light (the default, Danik 2026-10-28), Strong, Off
+				// (3 as Off), as the level 1, 2, 0 the program sees
+				filt_req <= FLICKER != 0 && !osd_status[106];
+				filt_lvl <= FLICKER == 0 || osd_status[106] ? 2'd0 : osd_status[105] ? 2'd2 : 2'd1;
 				// the program sets the OSD's Flicker Filter line (dnkLauncher's
 				// own row): Main_MiSTer takes the status written back as the
 				// player's change. The momentary bits (Reset, the triggers,
 				// Save Diagnostic Report, Reset Hanging Notes) go back as 0
 				if (FLICKER != 0 && ctrl_magic && ctrl_w2[61] != filt_tgl) begin
 					filt_tgl   <= ctrl_w2[61];
-					status_out <= {osd_status[127:107], ctrl_w2[63:62], 1'b0, osd_status[103:60], 4'd0,
+					// the level as the line's entry: Off 2, Light 0, Strong (3 as Strong) 1
+					status_out <= {osd_status[127:107], ctrl_w2[63:62] == 2'd0, ctrl_w2[63], 1'b0, osd_status[103:60], 4'd0,
 					               osd_status[55:17], 1'b0, osd_status[15:1], 1'b0};
 					status_set <= 1;
 				end

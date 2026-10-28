@@ -90,7 +90,7 @@ reg  [7:0] osd_mt32 = 8'b0000_00_1_0;  // the Pi's own SoundFont, MT-32 v1, MT-3
 reg        notes_trig = 0;              // 104: Reset Hanging Notes
 reg        osd_music = 0;               // 87: Music, MIDI / FM chip
 reg        osd_rst = 0;                 // 0: the OSD's Reset line (R0)
-reg  [1:0] osd_flt = 0;                 // 106:105: Flicker Filter, Off / Light / Strong
+reg  [1:0] osd_flt = 2;                 // 106:105: Flicker Filter, Light / Strong / Off (Off here)
 // the Pi: SDA (with the core's, open drain), MIDI in, I2S word select, SCL,
 // bit clock, data
 reg        pi_sda = 1, pi_scl = 1, pi_ws = 0, pi_bclk = 0, pi_dat = 0;
@@ -1033,6 +1033,11 @@ endtask
 // none in a core without the filter. The lace output: the OSD line greyed.
 integer sets = 0;
 reg [127:0] set_word;
+// the line's entry for a level (0 Off, 1 Light, 2 Strong): Light, the
+// default, is entry 0, then Strong and Off (Danik, 2026-10-28)
+function [1:0] flt_line(input integer lvl);
+	flt_line = lvl == 0 ? 2'd2 : lvl == 1 ? 2'd0 : 2'd1;
+endfunction
 always @(posedge clk) if (status_set) begin sets = sets + 1; set_word = status_out; end
 task check_fields(input integer n);
 	begin
@@ -1049,7 +1054,7 @@ task flicker_case(input integer m, input integer fmt, input integer lvl, input i
 		rows = (m == 4) ? 240 : 200;
 		cur_vmode = m; vga31 = 0;
 		cur_fb = fmt ? 2 : 0; cur_mode = fmt; cur_slot = 0;
-		osd_flt = lvl; chk_filt = FLICK_P ? lvl : 0;
+		osd_flt = flt_line(lvl); chk_filt = FLICK_P ? lvl : 0;
 		set_ctrl(cur_fb, fmt, 0, 10);
 		wait_fields(4);
 		check_fields(2);
@@ -1074,7 +1079,7 @@ task test_flicker;
 					flicker_case(m, fmt, lvl == 0 ? 0 : lvl == 1 ? 2 : 1, err0);
 		end
 		// 31kHz: progressive, as it is
-		osd_flt = 2; chk_filt = 0;
+		osd_flt = flt_line(2); chk_filt = 0;
 		cur_fb = 2; cur_mode = 1;
 		set_ctrl(2, 1, 0, 10);
 		vga31 = 1;
@@ -1083,21 +1088,25 @@ task test_flicker;
 		$display("flicker: 640x400 at 31kHz, Strong: checked %0d pixels, %0d errors, status %h, lace %0d", checked, errors - err0, mem[9][31:0], dut_lace);
 		if (checked != 2 * 640 * 400 || dut_lace) begin $display("FAIL: flicker filter at 31kHz"); errors = errors + 1; end
 		vga31 = 0;
-		osd_flt = 0;
+		osd_flt = flt_line(0);
 		wait_fields(10);
 		// the program sets the line: one write-back per request
 		s0 = sets;
 		if (mem[14][34] != cur_wtgl) begin $display("FAIL: flicker filter, toggle %0d before a request", mem[14][34]); errors = errors + 1; end
-		cur_wlvl = 1; cur_wtgl = 1 - cur_wtgl;
-		set_ctrl(2, 1, 0, 10);
-		wait_fields(3);
-		if (FLICK_P && mem[14][34] != cur_wtgl) begin $display("FAIL: flicker filter, the request's toggle not taken"); errors = errors + 1; end
-		$display("flicker: the program asks for Light: %0d writes, bits 106:105 %0d, 104 %0d, 59:56 %h, 16 %0d, 0 %0d, the rest %0s",
-			sets - s0, set_word[106:105], set_word[104], set_word[59:56], set_word[16], set_word[0],
-			(set_word[127:107] == 21'h0246 && set_word[103:60] == {osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0} && set_word[15:1] == 15'h657F) ? "kept" : "CHANGED");
-		if (sets - s0 != FLICK_P || (FLICK_P && (set_word[106:105] != 1 || set_word[104] || set_word[59:56] || set_word[16] || set_word[0] ||
-		    set_word[127:107] != 21'h0246 || set_word[15:1] != 15'h657F))) begin
-			$display("FAIL: flicker filter, the program's request"); errors = errors + 1;
+		for (lvl = 1; lvl != 3; lvl = lvl == 1 ? 2 : lvl == 2 ? 0 : 3) begin
+			s0 = sets;
+			cur_wlvl = lvl; cur_wtgl = 1 - cur_wtgl;
+			set_ctrl(2, 1, 0, 10);
+			wait_fields(3);
+			if (FLICK_P && mem[14][34] != cur_wtgl) begin $display("FAIL: flicker filter, the request's toggle not taken"); errors = errors + 1; end
+			$display("flicker: the program asks for %0s: %0d writes, bits 106:105 %0d, 104 %0d, 59:56 %h, 16 %0d, 0 %0d, the rest %0s",
+				lvl == 2 ? "Strong" : lvl == 1 ? "Light" : "Off",
+				sets - s0, set_word[106:105], set_word[104], set_word[59:56], set_word[16], set_word[0],
+				(set_word[127:107] == 21'h0246 && set_word[103:60] == {osd_mt32, 8'h78, osd_music, 23'h1A_BCDE, 4'h0} && set_word[15:1] == 15'h657F) ? "kept" : "CHANGED");
+			if (sets - s0 != FLICK_P || (FLICK_P && (set_word[106:105] != flt_line(lvl) || set_word[104] || set_word[59:56] || set_word[16] || set_word[0] ||
+			    set_word[127:107] != 21'h0246 || set_word[15:1] != 15'h657F))) begin
+				$display("FAIL: flicker filter, the program's request"); errors = errors + 1;
+			end
 		end
 		// the same request again: nothing
 		s0 = sets;

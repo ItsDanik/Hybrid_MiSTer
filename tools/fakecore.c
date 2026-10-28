@@ -42,9 +42,10 @@
 //
 // FAKECORE_FLICKER=1: a core with the flicker filter (FLICKER 1, host version
 // 18): status bit 2; the OSD's Flicker Filter line (0 Off, 1 Light, 2
-// Strong) in word 6 bits 33:32 and bit 3 while it is not Off. The script's
-// line "flicker <n>" sets it as the OSD does, FAKECORE_FLICKER=2 or 3 starts
-// with Light or Strong, and the program's request (w2[63:61]) sets it as
+// Strong) in word 6 bits 33:32 and bit 3 while it is not Off, Light at the
+// start as the core's line by default (Danik, 2026-10-28). The script's
+// line "flicker <n>" sets it as the OSD does (0 Off), FAKECORE_FLICKER=2 or 3
+// starts with Light or Strong, and the program's request (w2[63:61]) sets it as
 // Main_MiSTer takes the core's write. The shots and the picture stay
 // unfiltered.
 // The game's reset (host version 18; the USER button or the OSD's Reset):
@@ -599,8 +600,7 @@ int main(int argc, char** argv) {
     synth = getenv("FAKECORE_SYNTH") == NULL || atoi(getenv("FAKECORE_SYNTH")) != 0;
     lace_on = getenv("FAKECORE_LACE") != NULL && atoi(getenv("FAKECORE_LACE")) != 0;
     flicker_has = getenv("FAKECORE_FLICKER") != NULL && atoi(getenv("FAKECORE_FLICKER")) != 0;
-    flicker_level = flicker_has ? atoi(getenv("FAKECORE_FLICKER")) - 1 : 0;
-    flicker_level = flicker_level > 2 ? 2 : flicker_level;
+    flicker_level = !flicker_has ? 0 : atoi(getenv("FAKECORE_FLICKER")) >= 3 ? 2 : 1;
     signal(SIGUSR1, on_usr1);
     vsync_lock = getenv("FAKECORE_VSYNC") != NULL && atoi(getenv("FAKECORE_VSYNC")) != 0;
     if (getenv("FAKECORE_VERSION")) {

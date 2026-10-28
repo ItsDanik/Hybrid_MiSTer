@@ -1617,7 +1617,7 @@ def export_layers(fonts_dir, out, repos):
                    .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
     F = fonts["chakra"][1]
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
-              "direction": "Down and right", "speed": "Normal", "filter": "Off", "buttons": "Auto: PlayStation",
+              "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
               "pointer": "Arrow", "sort": "A-Z"}
     colours = {}
     for theme in THEMES:
@@ -1676,7 +1676,7 @@ def main():
     screens["confirm_exit_switch"] = confirm_screen(F, badge, ports, "switch")
     screens["wait_ports"] = wait_screen(F, badge, ports)
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
-              "direction": "Down and right", "speed": "Normal", "filter": "Off", "buttons": "Auto: PlayStation",
+              "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
               "pointer": "Arrow", "sort": "A-Z"}
     screens["options_font"] = options_screen(F, badge, fonts, 0, values)
     screens["options_colours"] = options_screen(F, badge, fonts, 1, values)

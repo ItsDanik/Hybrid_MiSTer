@@ -214,7 +214,7 @@ void MH_SetFieldRate(int on);
 int MH_FieldRate(void);
 // The flicker filter (host version 18): a core that has it (FLICKER 1 in its
 // core/<Name>.sv: one with a 640x400 or 640x480 mode) has the line Flicker
-// Filter on its OSD's CRT Options page, Off, Light or Strong, greyed out while
+// Filter on its OSD's CRT Options page, Light (the default), Strong or Off, greyed out while
 // the picture is not interlaced. The core filters a game's interlaced picture
 // (640x480 and 640x400 on a 15kHz screen, RGB565 or 8bpp) by itself: every row
 // Strong a quarter of the row above, half its own and a quarter of the row

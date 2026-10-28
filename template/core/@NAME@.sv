@@ -67,7 +67,7 @@ localparam CONF_STR = {
 	// hybrid/README.md "Video modes"): hidden in a core without it (FLICKER 0,
 	// menu mask bit 9), greyed out while the picture is not interlaced (bit 10)
 	"H9P1-;",
-	"H9DAP1O[106:105],Flicker Filter,Off,Light,Strong;",
+	"H9DAP1O[106:105],Flicker Filter,Light,Strong,Off;",
 	// GAME: the HUD margins (MH_HudMargins(), hybrid/README.md "HUD
 	// margins"): pixels between the HUD and the top / bottom edge of a
 	// 240-line screen, 0 the default (host version 16; up to 15 entry 0 was
