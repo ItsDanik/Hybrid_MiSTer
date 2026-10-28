@@ -51,7 +51,9 @@ unsigned MiSTer_WaitFrame(void)
         LastField = MH_FieldCounter();
         FieldValid = 1;
     }
-    if (DrawAhead && !MH_Interlaced()) {
+    // interlaced a frame takes two fields, and the core shows it at once; at
+    // field rate (MH_SetFieldRate()) one field, as progressive
+    if (DrawAhead && (!MH_Interlaced() || MH_FieldRate())) {
         uint32_t target = LastField + 1;
 
         MH_WaitField(target - 3); // not before the field two before its own
