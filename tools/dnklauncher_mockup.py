@@ -104,7 +104,8 @@ M = 30                          # from the sides; a 15kHz screen hides some of t
 
 # The player's choice in Options (Danik, 2026-10-25: Chakra Petch the default;
 # their places in tools/dnklauncher_fonts.py's ranking by flicker after them)
-SIZES = dict(row=16, text=15, title=20, small=12, chip=13, head=18, desc=14)
+# big and mid: a title where a logo is (a ScummVM game's, title_picture())
+SIZES = dict(row=16, text=15, title=20, small=12, chip=13, head=18, desc=14, big=26, mid=22)
 FONTS = {   # key: (label, file in the fonts dir, weight of a variable font, sizes)
     "chakra": ("Chakra Petch SemiBold", "ChakraPetch-SemiBold.ttf", None, SIZES),       # 5
     "nunito": ("Nunito ExtraBold", "Nunito.ttf", 800, SIZES),                           # 1
@@ -1709,16 +1710,24 @@ def layer_card(game, xy, alpha=1.0):
     return fade(out, alpha)
 
 
+TITLE_SIZES = (26, 22, 20)   # the roles big, mid and title: the program has its fonts at these sizes alone
+
+
 def title_picture(F, title, box_w, box_h, size):
     """The title in the launcher's font where a port's logo is: two lines at
-    most, each centred, smaller until it fits the box"""
-    while True:
-        f = F.sized(size)
+    most, each centred, at the largest of TITLE_SIZES from size down that fits
+    the box; at the smallest the second line cut short"""
+    for s in [t for t in TITLE_SIZES if t <= size]:
+        f = F.sized(s)
         lines = wrap(title, f, box_w)
-        lh = round(size * 1.12)
+        lh = round(s * 1.12)
         if len(lines) <= 2 and len(lines) * lh <= box_h + 2 and max(f.getlength(t) for t in lines) <= box_w:
             break
-        size -= 1
+    else:
+        lines = [clip(t, f, box_w) for t in lines[:1]] + [clip(" ".join(lines[1:]), f, box_w)] if len(lines) > 1 \
+            else [clip(lines[0], f, box_w)]
+        if len(lines) * lh > box_h + 2:
+            lines = [clip(title, f, box_w)]
     im = Image.new("RGBA", (box_w, len(lines) * lh), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     for n, t in enumerate(lines):
