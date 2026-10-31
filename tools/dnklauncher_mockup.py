@@ -28,6 +28,7 @@
 #   every theme's main screen, Details and Options without their ground, and
 #   the themes' colours (themes.json), for the page that tries grounds (GROUND)
 import glob
+import math
 import os
 import re
 import sys
@@ -1085,7 +1086,7 @@ def layer_details_desc(F, game):
 def details_hints(game):
     if game["id"] in NO_DATA:
         return [("fav", "Favourite"), ("back", "Back")]
-    return [("ok", "Play"), ("fav", "Favourite"), ("back", "Back")]
+    return [("ok", "Play"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Back")]
 
 
 def details_layers(F, badge_font, game, port, family="ps"):
@@ -1196,6 +1197,10 @@ OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settin
                            "unless you pick the other."),
     ("Start in", "start", "Where the launcher opens: the System you were in last, on the game you were on, "
                           "or the Systems screen. The last System unless you pick the other."),
+    ("Cores not installed", "missing", "Off shows only what is on this MiSTer. On adds the other cores of the MiSTer "
+     "database at the bottom of Systems, greyed out, to see what there is."),
+    ("System logos", "logos", "One colour draws the logos on Systems in the screens' text colour. In colour shows "
+     "each logo's own colours, where it has them. One colour unless you pick the other."),
     ("Sort games", "sort", "How the list is sorted when the frontend starts. Select changes it at any time."),
 ]
 OPT_ROW = 34
@@ -1635,8 +1640,9 @@ SYSTEMS = [("hybrid", "Hybrid Ports"), ("scummvm", "ScummVM")]
 # Its sort modes: By engine, By publisher and By year (Danik, 2026-10-29), named without "By": five with
 # "By" reach the MiSTer logo (CREATE at x 182 to 201 by the font, the logo ends at 240); without it 242 to 257
 SV_CHIPS = ["A-Z", "Engine", "Publisher", "Year", "Recent"]
-SV_HINTS = [("ok", "Details"), ("options", "Options"), ("back", "Back")]
-SYS_HINTS = [("ok", "Open"), ("options", "Options"), ("back", "Exit")]
+# Repo on every screen but Options and the Repo page itself (Danik, 2026-10-31)
+SV_HINTS = [("ok", "Details"), ("ports", "Repo"), ("options", "Options"), ("back", "Back")]
+SYS_HINTS = [("ok", "Open"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
 SV_ICON = 192             # a ScummVM game's icon on its card
 SV_ICONS = os.path.expanduser("~/MiSTer-scummvm/build/icons")   # the packs (its tools/icons.sh)
 
@@ -1819,40 +1825,8 @@ def sv_details_layers(F, badge_font, g, family="ps"):
             "shot_panel": layer_panel(D_SHOT_PANEL), "shot": layer_card(g, D_SHOT),
             "info_panel": layer_panel(D_INFO_PANEL), "info": info,
             "desc_panel": layer_panel(D_DESC_PANEL), "desc": c.im,
-            "hints": layer_hints(F, [("ok", "Play"), ("back", "Back")], badge_font, family),
+            "hints": layer_hints(F, [("ok", "Play"), ("ports", "Repo"), ("back", "Back")], badge_font, family),
             "badge": layer_badge(badge_font)}
-
-
-# The Systems screen: a panel each, the card in it and under the card how many
-# games it has. The cursor (Danik, 2026-10-29, from three drafts): a ring in the
-# bar's colours round the whole panel, the panel floating up and down as the
-# Carousel's middle card (BOB of the program's carousel.c), the other card
-# darker. Only with more than one System: without ScummVM's core installed
-# Hybrid Ports is the only one, and the launcher opens on its list, B exits
-# and Options has no Start in (Danik, 2026-10-29).
-
-SYS_PANEL = (SHOT[0] + 16, 8 + SHOT[1] + 8 + 22 + 6)   # 272 x 236
-SYS_GAP = W - 2 * M - 2 * SYS_PANEL[0]
-SYS_Y = MAIN[0] + (MAIN[1] - MAIN[0] - SYS_PANEL[1]) // 2
-SYS_DARK = 0.35       # the card without the cursor
-SYS_RING = (2, 3)     # the ring: its gap to the panel, its width
-SYS_BOB = 6.0         # as the Carousel's: 6 pixels up and down,
-SYS_BOB_HZ = 0.45     # 0.45 times a second (sin of field / 59.64 * pi * 0.9)
-
-
-def sys_bob(field):
-    import math
-    return SYS_BOB * math.sin(field / 59.64 * math.pi * 2 * SYS_BOB_HZ)
-
-
-def sys_box(n, dy=0.0):
-    x0 = M + n * (SYS_PANEL[0] + SYS_GAP)
-    return (x0, round(SYS_Y + dy), x0 + SYS_PANEL[0], round(SYS_Y + dy) + SYS_PANEL[1])
-
-
-def sys_card_xy(n, dy=0.0):
-    x0, y0, x1, y1 = sys_box(n, dy)
-    return x0 + 8, y0 + 8
 
 
 def system_card(key):
@@ -1861,96 +1835,425 @@ def system_card(key):
     return _cache[("system", key)]
 
 
-def layer_system(F, n, counts, dark=0.0, dy=0.0):
-    """System n's panel, its card and its count"""
-    key, name = SYSTEMS[n]
+# The Systems screen as banners (Danik, 2026-10-31, from the options on
+# https://claude.ai/artifact/PHYJuHtNcR3CBqTYAV4nnx; docs/dnklauncher.md, "Other
+# cores"): wide banners, four in sight, Hybrid Ports and ScummVM first with their
+# approved colours, then the favourites, then A to Z. A banner of a core is the
+# scheme's panel with a strip of the system's colours at its left and its logo in
+# the scheme's text colour. Those not installed, with the option on, come last
+# in grey under a heading; the cursor goes on over them in a grey ring. The ring
+# stays with its row, it does not float.
+
+BAN_H, BAN_GAP = 70, 8
+BAN_X, BAN_W = M, W - 2 * M - 10        # the scroll bar's place at the right
+BAN_TOP = MAIN[0] + 3
+BAN_SHOWN = 4
+BAN_HEADING = 22         # the heading's height over the first row not installed
+BAN_STRIP = 12           # the system's colours
+BAN_RADIUS = 8
+BAN_LOGO = (22, 240, 56)         # the logo's x and its largest size
+BAN_RING = (2, 3)        # its gap to the banner, its width
+RING_BREATHE = 1.5       # how far the ring grows and shrinks, in pixels either way
+RING_BREATHE_HZ = 0.45
+RING_SWAP_HZ = 0.25      # the bar's two colours changing places along the ring
+BAN_CHIPS = ["All", "Consoles", "Computers"]
+BAN_MARGIN = 1           # rows kept in sight beyond the cursor, as the game list
+
+# what the mock-ups show of a player's MiSTer
+MOCK_NOT_INSTALLED = ("crayxmp", "edsac", "pdp1", "sgiindy", "sun", "uknc", "vt52", "x68000")
+MOCK_FAVOURITES = ("c64", "snes")
+MOCK_COUNTS = {"hybrid": "43 games", "scummvm": "12 games"}
+
+
+def read_systems():
+    rows = []
+    for line in open(os.path.join(SYSTEMS_DIR, "systems.txt"), encoding="utf-8"):
+        if line.startswith("#") or not line.strip():
+            continue
+        key, title, kind, maker, year, c1, c2, entries, desc = line.rstrip("\n").split("|")
+        variants = []
+        for e in entries.split(","):
+            label, _, what = e.rpartition("=")
+            variants.append((label, what.partition(">")[0]))
+        rows.append(dict(key=key, title=title, kind=kind, maker=maker, year=year, c1=hex_rgb(c1), c2=hex_rgb(c2),
+                         variants=variants, desc=desc, installed=key not in MOCK_NOT_INSTALLED,
+                         fav=key in MOCK_FAVOURITES))
+    return rows
+
+
+def hex_rgb(h):
+    h = h.lstrip("#") or "555566"
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def mock_rows(chip="All", missing=False):
+    """The rows of Systems. With a type chosen, its cores alone"""
+    all_ = read_systems()
+    rows = []
+    if chip == "All":
+        rows = [dict(key=k, title=t, special=True, installed=True, fav=False, count=MOCK_COUNTS[k]) for k, t in SYSTEMS]
+    of = [s for s in all_ if chip == "All" or s["kind"] + "s" == chip]
+    title = lambda s: s["title"].lower()
+    rows += sorted((s for s in of if s["installed"] and s["fav"]), key=title)
+    rows += sorted((s for s in of if s["installed"] and not s["fav"]), key=title)
+    if missing:
+        rows += sorted((s for s in of if not s["installed"]), key=title)
+    return rows
+
+
+def row_y(rows, i):
+    """Row i's top in the list, from the list's top"""
+    y = i * (BAN_H + BAN_GAP)
+    if not rows[i]["installed"]:
+        y += BAN_HEADING
+    return y
+
+
+def list_height(rows):
+    return row_y(rows, len(rows) - 1) + BAN_H if rows else 0
+
+
+def list_scroll(rows, cursor, at):
+    """The list's offset that keeps the cursor and a row beyond it in sight,
+    moving as little as it can from `at`"""
+    view = MAIN[1] - BAN_TOP
+    lo = row_y(rows, max(0, cursor - BAN_MARGIN))
+    hi = row_y(rows, min(len(rows) - 1, cursor + BAN_MARGIN)) + BAN_H
+    if lo < at:
+        at = lo
+    if hi - at > view:
+        at = hi - view
+    return max(0, min(at, max(0, list_height(rows) - view)))
+
+
+def round_mask(w, h, r):
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), r, fill=255)
+    return mask
+
+
+def gradient(w, h, c1, c2, vertical=False):
+    im = Image.new("RGBA", (w, h))
+    d = ImageDraw.Draw(im)
+    n = (h if vertical else w) - 1 or 1
+    for i in range(n + 1):
+        col = tuple(round(a + (b - a) * i / n) for a, b in zip(c1, c2)) + (255,)
+        d.line((0, i, w, i) if vertical else (i, 0, i, h), fill=col)
+    return im
+
+
+def system_logo(F, s):
+    """A core's logo as a mask"""
+    path = os.path.join(SYSTEMS_DIR, "logos", s["key"] + ".png")
+    if os.path.exists(path):
+        return Image.open(path).convert("L")
+    font = F.sized(26)
+    im = Image.new("L", (round(font.getlength(s["title"])) + 4, 40), 0)
+    ImageDraw.Draw(im).text((2, 20), s["title"], font=font, fill=255, anchor="lm")
+    return im.crop(im.getbbox())
+
+
+# Options' System logos (Danik, 2026-10-31): one colour unless picked, else the theme's
+# logos in their own colours, where there is one: those a system has none of stay in
+# one colour, as do the grey rows and the card of Details (red on a red card goes)
+LOGO_COLOUR = [False]
+
+
+def system_logo_colour(s):
+    """A core's logo in its colours, and the mask of what the text colour draws, or None"""
+    base = os.path.join(SYSTEMS_DIR, "logos_colour", s["key"])
+    if not os.path.exists(base + ".png"):
+        return None, None
+    ink = Image.open(base + "_ink.png").convert("L") if os.path.exists(base + "_ink.png") else None
+    return Image.open(base + ".png").convert("RGBA"), ink
+
+
+def inked(mask, ink, alpha=1.0):
+    im = Image.new("RGBA", mask.size, ink + (0,))
+    im.putalpha(mask.point(lambda v: round(v * alpha)))
+    return im
+
+
+def special_art(key):
+    """The picture on Hybrid Ports' or ScummVM's banner, scaled, and its place"""
+    h = BAN_H
+    if key == "hybrid":
+        cat = system_card(key).crop((10, 6, 246, 142))
+        r = (h - 8) / cat.height
+        return cat.resize((round(cat.width * r), round(cat.height * r)), Image.LANCZOS), (10, 4)
+    logo = Image.open(os.path.join(SYSTEMS_DIR, "scummvm_logo.png")).convert("RGBA")
+    logo = logo.crop(logo.getbbox())
+    r = min((h - 12) / logo.height, 150 / logo.width)
+    logo = logo.resize((round(logo.width * r), round(logo.height * r)), Image.LANCZOS)
+    return logo, (14, (h - logo.height) // 2)
+
+
+def special_banner(F, s):
+    """Hybrid Ports' or ScummVM's: the approved card's colours and what it shows"""
+    w, h = BAN_W, BAN_H
+    art, at = special_art(s["key"])
+    if s["key"] == "hybrid":
+        ink = (0x1E, 0x1A, 0x2C)
+        im = Image.new("RGBA", (w, h), system_card(s["key"]).getpixel((3, 3))[:3] + (255,))
+        im.alpha_composite(art, at)
+        d = ImageDraw.Draw(im)
+        d.text((18 + art.width, h // 2), s["title"], font=F.sized(26), fill=ink + (255,), anchor="lm")
+    else:
+        ink = INK
+        im = gradient(w, h, BG_TOP, BG_BOTTOM)
+        im.alpha_composite(art, at)
+        ImageDraw.Draw(im).rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, outline=EDGE + (200,))
+        d = ImageDraw.Draw(im)
+    d.text((w - 14, h // 2), s["count"], font=F.chip, fill=ink + (255,), anchor="rm")
+    im.putalpha(round_mask(w, h, BAN_RADIUS))
+    return im
+
+
+def banner(F, s):
+    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0])
+    if k in _cache:
+        return _cache[k]
+    w, h = BAN_W, BAN_H
+    if s.get("special"):
+        _cache[k] = special_banner(F, s)
+        return _cache[k]
+    grey = not s["installed"]
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, fill=PANEL + (120 if grey else PANEL_ALPHA,),
+                        outline=EDGE + (70 if grey else 150,))
+    d.line((BAN_RADIUS, 1, w - BAN_RADIUS, 1), fill=(255, 255, 255, 16 if grey else 50))
+    ink, dim = INK, DIM
+    x = 14
+    if grey:
+        ink = dim = tuple(round(a * 0.62 + b * 0.38) for a, b in zip(DIM, PANEL))
+    else:
+        x = BAN_LOGO[0]
+        strip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        strip.paste(gradient(BAN_STRIP, h, s["c1"], s["c2"], vertical=True), (1, 0))
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((1, 1, w - 2, h - 2), BAN_RADIUS - 1, fill=255)
+        ImageDraw.Draw(mask).rectangle((BAN_STRIP + 1, 0, w, h), fill=0)
+        strip.putalpha(mask)
+        im.alpha_composite(strip)
+    pic, part = system_logo_colour(s) if LOGO_COLOUR[0] and not grey else (None, None)
+    if pic:
+        if part:
+            im.alpha_composite(inked(part, ink), (x, (h - pic.height) // 2))
+        im.alpha_composite(pic, (x, (h - pic.height) // 2))
+    else:
+        mask = system_logo(F, s)
+        r = min(BAN_LOGO[1] / mask.width, BAN_LOGO[2] / mask.height, 1.0)
+        if r < 1:
+            mask = mask.resize((max(1, round(mask.width * r)), max(1, round(mask.height * r))), Image.LANCZOS)
+        im.alpha_composite(inked(mask, ink, 0.8 if grey else 1.0), (x, (h - mask.height) // 2))
     c = Canvas(ground=False)
-    box = sys_box(n, dy)
-    c.panel(box)
-    cx, cy = sys_card_xy(n, dy)
-    c.picture(system_card(key), (cx, cy))
-    if dark > 0:
-        layer = c.layer()
-        ImageDraw.Draw(layer).rectangle((cx, cy, cx + SHOT[0] - 1, cy + SHOT[1] - 1), fill=(10, 0, 18, round(255 * dark)))
-        c.over(layer)
-    c.text((box[0] + SYS_PANEL[0] / 2, cy + SHOT[1] + 17), counts[n], F.chip, DIM, anchor="mm")
-    return c.im
+    c.im = im
+    d = ImageDraw.Draw(im)
+    right = w - 14
+    if grey:
+        d.text((right, h // 2), "Not installed", font=F.chip, fill=ink + (255,), anchor="rm")
+    else:
+        d.text((right, h // 2 - 9), s["maker"], font=F.chip, fill=ink + (255,), anchor="rm")
+        d.text((right, h // 2 + 9), "%s  %s" % (s["year"], s["kind"]), font=F.small, fill=dim + (255,), anchor="rm")
+        if s["fav"]:
+            Canvas.star(c, right - F.chip.getlength(s["maker"]) - 12, h // 2 - 9, 6, GOLD)
+    _cache[k] = im
+    return im
 
 
-def layer_ring(x, y, alpha=1.0, radius=10):
-    """The ring in the bar's colours round a panel whose top left is (x, y)"""
-    x, y = round(x), round(y)
-    gap, width = SYS_RING
-    o = gap + width
-    w = SYS_PANEL[0] + 2 * o
-    grad = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(grad)
-    for i in range(w):
-        t = i / (w - 1)
-        gd.line((x - o + i, y - o, x - o + i, y + SYS_PANEL[1] + o),
-                fill=tuple(round(a + (b - a) * t) for a, b in zip(PINK, PEACH)) + (255,))
+def shadow_of(w, h):
+    k = ("banner_shadow", w, h)
+    if k not in _cache:
+        pad = 10
+        im = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
+        ImageDraw.Draw(im).rounded_rectangle((pad + 1, pad + 3, pad + w, pad + h + 2), BAN_RADIUS, fill=(20, 0, 30, 110))
+        _cache[k] = im.filter(ImageFilter.GaussianBlur(4))
+    return _cache[k]
+
+
+def band(layer):
+    """What of the banners lies within the band of the list"""
     mask = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(mask).rectangle((0, MAIN[0] - 6, W, MAIN[1] + 5), fill=255)
+    layer.putalpha(ImageChops.multiply(layer.getchannel("A"), mask))
+    return layer
+
+
+def layer_banner(F, s, y):
+    out = blank()
+    y = round(y)
+    if s["installed"]:
+        out.alpha_composite(shadow_of(BAN_W, BAN_H), (BAN_X - 10, max(0, y - 10)))
+    out.alpha_composite(banner(F, s), (BAN_X, y))
+    return band(out)
+
+
+def ring_colours(x, w, field, swap):
+    """The bar's colours at column x of a ring w wide: pink to peach as the bar;
+    with swap the two change places along it and back"""
+    t = x / (w - 1)
+    if swap:
+        phase = math.sin(field / 59.64 * math.pi * 2 * RING_SWAP_HZ)   # -1..1: which way the gradient runs
+        t = 0.5 + (t - 0.5) * phase
+    return tuple(round(a + (b - a) * t) for a, b in zip(PINK, PEACH))
+
+
+def layer_ring_at(y, field=0, style="both", grey=False):
+    """The cursor. style: still, breathe (it grows and shrinks a little), swap
+    (its colours change places), both. Drawn 4 times larger, so that it grows
+    by less than a pixel at a time"""
+    gap, width = BAN_RING
+    if style in ("breathe", "both") and not grey:
+        gap += RING_BREATHE * (0.5 + 0.5 * math.sin(field / 59.64 * math.pi * 2 * RING_BREATHE_HZ)) * 2 - RING_BREATHE + 0
+    o = gap + width
+    big = 4
+    pad = 9
+    bw, bh = BAN_W + 2 * pad, BAN_H + 2 * pad
+    mask = Image.new("L", (bw * big, bh * big), 0)
     d = ImageDraw.Draw(mask)
-    d.rounded_rectangle((x - o, y - o, x + SYS_PANEL[0] - 1 + o, y + SYS_PANEL[1] - 1 + o), radius + o, fill=255)
-    d.rounded_rectangle((x - gap, y - gap, x + SYS_PANEL[0] - 1 + gap, y + SYS_PANEL[1] - 1 + gap), radius + gap, fill=0)
-    grad.putalpha(ImageChops.multiply(mask, Image.new("L", (W, H), round(255 * alpha))))
-    return grad
+    d.rounded_rectangle(((pad - o) * big, (pad - o) * big, (pad + BAN_W + o) * big - 1, (pad + BAN_H + o) * big - 1),
+                        (BAN_RADIUS + o) * big, fill=255)
+    d.rounded_rectangle(((pad - gap) * big, (pad - gap) * big, (pad + BAN_W + gap) * big - 1,
+                         (pad + BAN_H + gap) * big - 1), (BAN_RADIUS + max(gap, 0)) * big, fill=0)
+    mask = mask.resize((bw, bh), Image.BOX)
+    ring = Image.new("RGBA", (bw, bh), DIM + (0,))
+    if not grey:
+        rd = ImageDraw.Draw(ring)
+        for x in range(bw):
+            rd.line((x, 0, x, bh), fill=ring_colours(x, bw, field, style in ("swap", "both")) + (0,))
+    ring.putalpha(mask.point(lambda v: round(v * 0.78)) if grey else mask)
+    out = blank()
+    out.alpha_composite(ring, (BAN_X - pad, max(0, round(y) - pad)))
+    return band(out)
 
 
-def sys_counts(ports, sv_games):
-    return ["%d games" % sum(len(p["games"]) for p in ports), "%d games" % len(sv_games)]
+def layer_list_bar(rows, at):
+    view = MAIN[1] - BAN_TOP
+    total = list_height(rows)
+    out = blank()
+    if total <= view:
+        return out
+    d = ImageDraw.Draw(out)
+    x, y0, y1 = W - M - 4, MAIN[0], MAIN[1]
+    d.rounded_rectangle((x, y0, x + 3, y1 - 1), 2, fill=EDGE + (60,))
+    h = y1 - y0
+    knob = max(16, h * view // total)
+    k0 = y0 + (h - knob) * at / (total - view)
+    d.rounded_rectangle((x, k0, x + 3, k0 + knob - 1), 2, fill=EDGE + (230,))
+    return out
 
 
-def systems_layers(F, badge_font, counts, cursor, family="ps", field=0):
-    """The Systems screen with the cursor on system `cursor` (a fraction while
-    it moves), at a field of the float"""
+def sys_hints(s):
+    if s.get("special"):
+        return [("ok", "Open"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+    if not s["installed"]:
+        return [("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+    return [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+
+
+def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", field=0, style="both"):
+    """Systems with the cursor on row `cursor` (a fraction while it moves), the
+    list at offset `at`, at a field of the ring"""
+    c = round(cursor)
     L = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, "Systems"),
-         "hints": layer_hints(F, SYS_HINTS, badge_font, family), "badge": layer_badge(badge_font)}
-    bob = sys_bob(field)
-    for n in range(len(SYSTEMS)):
-        on = max(0.0, 1 - abs(cursor - n))
-        L["sys%d" % n] = layer_system(F, n, counts, SYS_DARK * (1 - on), bob * on)
-    near = max(0.0, 1 - 2 * min(abs(cursor - n) for n in range(len(SYSTEMS))))   # the ring floats only at a panel
-    L["cursor"] = layer_ring(lerp(sys_box(0)[0], sys_box(1)[0], cursor), SYS_Y + bob * near)
+         "count": layer_count(F, "%d systems" % sum(s["installed"] for s in rows), "Systems"),
+         "chips": layer_chips(F, family, chip_rects(F, BAN_CHIPS)[chip], BAN_CHIPS),
+         "hints": layer_hints(F, sys_hints(rows[c]), badge_font, family), "badge": layer_badge(badge_font)}
+    others = blank()
+    for n, s in enumerate(rows):
+        y = BAN_TOP + row_y(rows, n) - at
+        if y + BAN_H < MAIN[0] - 8 or y > MAIN[1] + 8:
+            continue
+        banner_layer = layer_banner(F, s, y)
+        L["ban%d" % n] = banner_layer
+        others.alpha_composite(banner_layer)
+        if not s["installed"] and (n == 0 or rows[n - 1]["installed"]):
+            head = blank()
+            ImageDraw.Draw(head).text((BAN_X + 4, y - 8), "Not installed: %d cores" % sum(not r["installed"] for r in rows),
+                                      font=F.chip, fill=INK + (255,), anchor="lb")
+            others.alpha_composite(band(head))
+    L["banners"] = others
+    a, b = int(math.floor(cursor)), min(int(math.floor(cursor)) + 1, len(rows) - 1)
+    y = lerp(row_y(rows, a), row_y(rows, b), cursor - a) + BAN_TOP - at
+    L["cursor"] = layer_ring_at(y, field, style, grey=not rows[c]["installed"])
+    L["bar"] = layer_list_bar(rows, at)
     return L
 
 
-SYS_ORDER = ["ground", "logo", "title", "sys0", "sys1", "cursor", "hints", "badge"]
+SYS_ORDER = ["ground", "logo", "title", "count", "chips", "banners", "cursor", "bar", "hints", "badge"]
 
 
-def systems_screen(F, badge_font, counts, cursor, family="ps", field=0):
-    return compose(systems_layers(F, badge_font, counts, cursor, family, field), SYS_ORDER).convert("RGB")
+def systems_screen(F, badge_font, rows, cursor, at=None, chip="All", family="ps", field=0, style="both"):
+    if at is None:
+        at = list_scroll(rows, cursor, 0)
+    return compose(systems_layers(F, badge_font, rows, cursor, at, chip, family, field, style), SYS_ORDER).convert("RGB")
 
 
-def anim_systems_cursor(F, badge_font, counts):
-    """Still a second (the panel floating), right, still a second, left: the
-    cursor glides from one panel to the other in 7 fields, as the list's bar
-    from row to row"""
+def anim_ring(F, badge_font, rows, style):
+    """The cursor still on a row for four seconds"""
+    return [systems_screen(F, badge_font, rows, 3, field=f, style=style) for f in range(0, 240, 2)]
+
+
+def anim_systems_cursor(F, badge_font, rows):
+    """The cursor down, held: a row every 12 fields, gliding in 7 as the list's
+    bar does, the list scrolling with it; then up"""
     frames, field = [], 0
-    for a, b in ((0, 1), (1, 0)):
-        for f in range(60 + 12):
-            e = ease_out(span(f, 60, 67))
-            frames.append(systems_screen(F, badge_font, counts, lerp(a, b, e), field=field))
+    cur, at = 0, 0.0
+    for step in [1] * 9 + [-1] * 6:
+        nxt = cur + step
+        at2 = list_scroll(rows, nxt, round(at))
+        for f in range(12):
+            e = ease_out(span(f, 0, 7))
+            frames.append(systems_screen(F, badge_font, rows, lerp(cur, nxt, e), lerp(at, at2, e), field=field))
             field += 1
+        cur, at = nxt, at2
     return frames
 
 
-def anim_system_open(F, badge_font, counts, m, n, back=False):
-    """A on System n: its card travels to the preview's screenshot (the same
-    size: it only moves) and crosses over into the game under the list's
-    cursor, the other panel sinks and fades, the list comes in from the left,
-    the sort modes come down; B on the list is the same backwards"""
-    S = systems_layers(F, badge_font, counts, n)
+def anim_chip(F, badge_font, rows_a, rows_b, a, b):
+    """Select: the pill slides as in the game list, the rows give way to the
+    others, which come up"""
+    frames = []
+    rects = chip_rects(F, BAN_CHIPS)
+    La = systems_layers(F, badge_font, rows_a, 2, 0, a)
+    Lb = systems_layers(F, badge_font, rows_b, 1, 0, b)
+    for f in range(20):
+        fr = compose({k: La[k] for k in ("ground", "logo", "title", "hints", "badge")},
+                     ["ground", "logo", "title", "hints", "badge"]).convert("RGBA")
+        e = ease_out(span(f, 0, 8))
+        x0, w0 = rects[a]
+        x1, w1 = rects[b]
+        fr.alpha_composite(layer_chips(F, "ps", (lerp(x0, x1, e), lerp(w0, w1, e)), BAN_CHIPS))
+        fr.alpha_composite(place(La["count"], alpha=1 - span(f, 0, 6)))
+        fr.alpha_composite(place(Lb["count"], alpha=span(f, 6, 12)))
+        out = ease_in_out(span(f, 0, 9))
+        fr.alpha_composite(place(La["banners"], 0, 10 * out, 1 - out))
+        fr.alpha_composite(place(La["cursor"], alpha=1 - span(f, 0, 5)))
+        inn = ease_out(span(f, 6, 18))
+        fr.alpha_composite(place(Lb["banners"], 0, 14 * (1 - inn), inn))
+        fr.alpha_composite(place(Lb["cursor"], 0, 14 * (1 - inn), inn))
+        fr.alpha_composite(place(Lb["bar"], alpha=inn))
+        frames.append(fr.convert("RGB"))
+    return frames
+
+
+def anim_system_open(F, badge_font, rows, m, n, back=False):
+    """A on Hybrid Ports or ScummVM: the other banners sink and fade, the card
+    comes in where the preview's screenshot goes and crosses over into the game
+    under the list's cursor, the banner slides into the list coming in from the
+    left, the sort modes change; B on the list is the same backwards"""
+    S = systems_layers(F, badge_font, rows, n, 0)
     L = m.frame_layers()
     g = m.game()
     base = compose({k: L[k] for k in ("ground", "logo", "badge")}, ["logo", "badge"])
-    key = SYSTEMS[n][0]
-    c0, c1 = sys_card_xy(n), preview_shot_xy()
-    # the selected panel without its card: the card travels by itself
-    panel_only = layer_system(F, n, counts)
-    hole = blank()
-    ImageDraw.Draw(hole).rectangle((c0[0], c0[1], c0[0] + SHOT[0] - 1, c0[1] + SHOT[1] - 1), fill=(255, 255, 255, 255))
-    panel_only.putalpha(ImageChops.subtract(panel_only.getchannel("A"), hole.getchannel("A")))
+    key = rows[n]["key"]
+    y = BAN_TOP + row_y(rows, n)
+    others = blank()
+    for i in range(len(rows)):
+        if i != n and "ban%d" % i in S:
+            others.alpha_composite(S["ban%d" % i])
+    c1 = preview_shot_xy()
     frames = []
     total = 24
     for f in range(total):
@@ -1958,25 +2261,28 @@ def anim_system_open(F, badge_font, counts, m, n, back=False):
         fr = base.copy()
         fr.alpha_composite(place(S["title"], alpha=1 - span(k, 0, 6)))
         fr.alpha_composite(place(L["title"], alpha=span(k, 6, 12)))
+        fr.alpha_composite(place(S["count"], alpha=1 - span(k, 0, 6)))
         fr.alpha_composite(place(L["count"], 8 * (1 - ease_out(span(k, 8, 14))), 0, span(k, 8, 14)))
+        fr.alpha_composite(place(S["chips"], 0, -8 * ease_in_out(span(k, 0, 7)), 1 - span(k, 0, 7)))
         q = ease_out(span(k, 9, 16))
         fr.alpha_composite(place(L["chips"], 0, -8 * (1 - q), q))
         p = ease_in_out(span(k, 0, 8))
-        fr.alpha_composite(place(S["sys%d" % (1 - n)], 0, 12 * p, 1 - p))
-        fr.alpha_composite(place(panel_only, alpha=1 - ease_in_out(span(k, 2, 9))))
+        fr.alpha_composite(place(others, 0, 12 * p, 1 - p))
+        fr.alpha_composite(place(S["bar"], alpha=1 - p))
         fr.alpha_composite(place(S["cursor"], alpha=1 - span(k, 0, 5)))
+        t = ease_in_out(span(k, 1, 11))
+        fr.alpha_composite(place(S["ban%d" % n], -40 * t, 0, 1 - t))
         fr.alpha_composite(place(L["prev_panel"], alpha=ease_out(span(k, 6, 14))))
         r = ease_out(span(k, 10, 20))
         for name in ("list_panel", "rows"):
             fr.alpha_composite(place(L[name], -28 * (1 - r), 0, r))
-        t = ease_in_out(span(k, 2, 15))
-        xy = (lerp(c0[0], c1[0], t), lerp(c0[1], c1[1], t))
         cross = span(k, 13, 19)
+        come = ease_out(span(k, 4, 13))
         card = blank()
-        card.alpha_composite(system_card(key), (round(xy[0]), round(xy[1])))
-        fr.alpha_composite(place(card, alpha=1 - cross))
+        card.alpha_composite(system_card(key), (round(c1[0]), round(c1[1] + 12 * (1 - come))))
+        fr.alpha_composite(place(card, alpha=come * (1 - cross)))
         if cross > 0:
-            fr.alpha_composite(place(m.preview_shot(g, xy), alpha=cross))
+            fr.alpha_composite(place(m.preview_shot(g, c1), alpha=cross))
         s = ease_out(span(k, 16, 23))
         if s > 0:
             fr.alpha_composite(place(m.preview_logo(g, 10 * (1 - s)), alpha=s))
@@ -1986,13 +2292,14 @@ def anim_system_open(F, badge_font, counts, m, n, back=False):
     return frames
 
 
-def anim_start_systems(F, badge_font, counts):
+def anim_start_systems(F, badge_font, rows):
     """Start in: Systems. From the core's own screen as anim_start(), the
-    panels rising one after the other, the ring round the first"""
-    S = systems_layers(F, badge_font, counts, 0)
+    banners rising one after the other, the ring round the one it is on"""
+    S = systems_layers(F, badge_font, rows, 0, 0)
     flat = Image.new("RGBA", (W, H), WALL_BG + (255,))
-    groups = [(["title"], 18, 32, 16, 0), (["sys0"], 20, 36, 0, 18), (["sys1"], 24, 40, 0, 18),
-              (["cursor"], 30, 42, 0, 0), (["hints"], 28, 44, 0, 10)]
+    groups = [(["title", "count"], 18, 32, 16, 0), (["chips"], 20, 34, 0, -8)]
+    groups += [(["ban%d" % n], 20 + 3 * n, 36 + 3 * n, 0, 18) for n in range(BAN_SHOWN) if "ban%d" % n in S]
+    groups += [(["cursor"], 30, 42, 0, 0), (["bar"], 30, 42, 0, 0), (["hints"], 28, 44, 0, 10)]
     frames = []
     for f in range(46):
         fr = flat.copy()
@@ -2009,6 +2316,166 @@ def anim_start_systems(F, badge_font, counts):
     return frames
 
 
+# Details of a core (Danik, 2026-10-31): laid out as a game's, its logo on the
+# system's colours where the screenshot goes. A says Start. A system with several
+# cores (Game Boy and its two-player core, the Macs) has a row Version in its
+# facts, left and right changing it; only the ones installed are offered.
+
+def core_card(F, s):
+    k = ("core_card", s["key"], id(F))
+    if k not in _cache:
+        im = gradient(SHOT[0], SHOT[1], s["c1"], s["c2"])
+        mask = system_logo(F, s)
+        r = min((SHOT[0] - 16) / mask.width, 120 / mask.height, 1.0)
+        if r < 1:
+            mask = mask.resize((max(1, round(mask.width * r)), max(1, round(mask.height * r))), Image.LANCZOS)
+        im.alpha_composite(inked(mask, (255, 255, 255)), ((SHOT[0] - mask.width) // 2, (SHOT[1] - mask.height) // 2))
+        im.putalpha(round_mask(SHOT[0], SHOT[1], 6))
+        _cache[k] = im
+    return _cache[k]
+
+
+CORE_HINTS = [("ok", "Start"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Back")]
+
+
+def core_facts(s, version):
+    label, core = s["variants"][version]
+    facts = [("Maker", s["maker"], INK), ("Year", s["year"], CYAN), ("Type", s["kind"], INK)]
+    if label:
+        facts.append(("Version", label, None))
+    facts += [("Core", "%s_20260823" % core, CYAN), ("Last played", "3 days ago", INK)]
+    return facts
+
+
+def core_details_layers(F, badge_font, s, version=0, family="ps"):
+    title = s["title"]
+    L = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, title),
+         "count": layer_count(F, "Details", title), "badge": layer_badge(badge_font),
+         "hints": layer_hints(F, CORE_HINTS, badge_font, family),
+         "shot_panel": layer_panel(D_SHOT_PANEL), "info_panel": layer_panel(D_INFO_PANEL),
+         "desc_panel": layer_panel(D_DESC_PANEL)}
+    pic = blank()
+    pic.alpha_composite(core_card(F, s), D_SHOT)
+    L["shot"] = pic
+    x0, y0, x1, y1 = D_INFO_PANEL
+    pw = x1 - x0
+    c = Canvas(ground=False)
+    t = clip(title, F.title, pw - 28 - (18 if s["fav"] else 0))
+    c.text((x0 + 14, y0 + 14), t, F.title, INK)
+    if s["fav"]:
+        c.star(x0 + 24 + F.title.getlength(t), y0 + 26, 7, GOLD)
+    layer = c.layer()
+    ImageDraw.Draw(layer).line((x0 + 14, y0 + 45, x1 - 14, y0 + 45), fill=EDGE + (90,))
+    c.over(layer)
+    facts = core_facts(s, version)
+    lw = max(F.small.getlength(k) for k, v, ink in facts) + 12
+    for n, (k, v, ink) in enumerate(facts):
+        y = y0 + 56 + n * 22
+        c.text((x0 + 14, y + 1), k, F.small, DIM)
+        if ink is None:     # the choice of version: its arrows and the value between them
+            ax = x0 + 14 + lw
+            layer = c.layer()
+            d = ImageDraw.Draw(layer)
+            d.polygon(((ax + 6, y + 3), (ax, y + 8), (ax + 6, y + 13)), fill=PINK + (255,))
+            room = pw - 28 - lw - 30
+            v = clip(v, F.chip, room)
+            c.over(layer)
+            c.text((ax + 12, y), v, F.chip, INK)
+            bx = ax + 12 + F.chip.getlength(v) + 6
+            layer = c.layer()
+            ImageDraw.Draw(layer).polygon(((bx, y + 3), (bx + 6, y + 8), (bx, y + 13)), fill=PINK + (255,))
+            c.over(layer)
+        else:
+            c.text((x0 + 14 + lw, y), clip(v, F.chip, pw - 28 - lw), F.chip, ink)
+    L["info"] = c.im
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = D_DESC_PANEL
+    lines = wrap(s["desc"], F.desc, x1 - x0 - 32)
+    top = y0 + (y1 - y0 - len(lines) * 17) // 2
+    for n, line in enumerate(lines):
+        c.text((x0 + 16, top + n * 17), line, F.desc, INK)
+    L["desc"] = c.im
+    return L
+
+
+def core_details_screen(F, badge_font, s, version=0):
+    return compose(core_details_layers(F, badge_font, s, version), D_ORDER).convert("RGB")
+
+
+def anim_core_details(F, badge_font, rows, n, back=False):
+    """A on a core's banner: the other banners sink and fade, the logo leaves its
+    banner for the card, which comes in round it, the panels rise; B the same
+    backwards"""
+    s = rows[n]
+    at = list_scroll(rows, n, 0)
+    S = systems_layers(F, badge_font, rows, n, at)
+    D = core_details_layers(F, badge_font, s)
+    base = compose({k: S[k] for k in ("ground", "logo", "badge")}, ["logo", "badge"])
+    y = BAN_TOP + row_y(rows, n) - at
+    others = blank()
+    for i in range(len(rows)):
+        if i != n and "ban%d" % i in S:
+            others.alpha_composite(S["ban%d" % i])
+    frames = []
+    total = 24
+    panel_keys = ("shot_panel", "info_panel", "desc_panel")
+    for f in range(total):
+        k = total - 1 - f if back else f
+        fr = base.copy()
+        fr.alpha_composite(place(S["title"], alpha=1 - span(k, 0, 6)))
+        fr.alpha_composite(place(D["title"], alpha=span(k, 6, 12)))
+        fr.alpha_composite(place(S["count"], alpha=1 - span(k, 0, 6)))
+        fr.alpha_composite(place(D["count"], alpha=span(k, 8, 14)))
+        fr.alpha_composite(place(S["chips"], 0, -8 * ease_in_out(span(k, 0, 7)), 1 - span(k, 0, 7)))
+        p = ease_in_out(span(k, 0, 8))
+        fr.alpha_composite(place(others, 0, 12 * p, 1 - p))
+        fr.alpha_composite(place(S["bar"], alpha=1 - p))
+        fr.alpha_composite(place(S["cursor"], alpha=1 - span(k, 0, 5)))
+        fr.alpha_composite(place(S["ban%d" % n], 0, 0, 1 - ease_in_out(span(k, 1, 9))))
+        r = ease_out(span(k, 6, 18))
+        for name in panel_keys:
+            fr.alpha_composite(place(D[name], 0, 16 * (1 - r), r))
+        q = ease_in_out(span(k, 4, 16))
+        fr.alpha_composite(place(D["shot"], 0, lerp(y - D_SHOT[1] - 61, 0, q), q))
+        w = ease_out(span(k, 12, 22))
+        fr.alpha_composite(place(D["info"], 12 * (1 - w), 0, w))
+        fr.alpha_composite(place(D["desc"], 0, 8 * (1 - w), w))
+        fr.alpha_composite(place(S["hints"], alpha=1 - span(k, 0, 6)))
+        fr.alpha_composite(place(D["hints"], alpha=span(k, 12, 19)))
+        frames.append(fr.convert("RGB"))
+    return frames
+
+
+def anim_core_start(F, badge_font, s):
+    """Start: as Play (anim_play), the card the screenshot"""
+    full = compose(core_details_layers(F, badge_font, s), D_ORDER)
+    src = Image.new("RGB", SHOT, (0, 0, 0))
+    card = core_card(F, s)
+    src.paste(card.convert("RGB"), (0, 0))
+    sx, sy = D_SHOT
+    frames = []
+    for f in range(38):
+        fr = full.copy()
+        flash = 1 - span(f, 0, 7)
+        if flash > 0:
+            glow = blank()
+            ImageDraw.Draw(glow).rounded_rectangle((sx - 6, sy - 6, sx + SHOT[0] + 5, sy + SHOT[1] + 5), 6,
+                                                   outline=PINK + (round(255 * flash),), width=4)
+            fr.alpha_composite(glow.filter(ImageFilter.GaussianBlur(2)))
+        dark = ease_in_out(span(f, 3, 16))
+        if dark > 0:
+            fr.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, round(255 * dark))))
+        t = ease_in_out(span(f, 3, 22))
+        if f >= 3:
+            w, h = lerp(SHOT[0], W, t), lerp(SHOT[1], H, t)
+            fr.paste(src.resize((round(w), round(h)), Image.NEAREST), (round(lerp(sx, 0, t)), round(lerp(sy, 0, t))))
+        out = span(f, 24, 36)
+        if out > 0:
+            fr.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, round(255 * out))))
+        frames.append(fr.convert("RGB"))
+    return frames
+
+
 # Hybrid Ports alone (no ScummVM installed): its list is the first screen, B
 # asks to exit as before Systems, and Options has no Start in
 ALONE_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
@@ -2020,12 +2487,49 @@ def systems_mockups(F, badge_font, ports, fonts, values):
     sv_port = next(p for p in ports if p["engine"] == "ScummVM")
     launcher = dict(sv_port["games"][0], launcher=True)
     hports = [p for p in ports if p["engine"] != "ScummVM"]   # its entry is ScummVM's list's first row
-    counts = sys_counts(hports, sv)
+    rows = mock_rows()
+    rows_out = mock_rows(missing=True)
+    idx = {r["key"]: n for n, r in enumerate(rows_out)}
     screens, anims = {}, {}
-    screens["systems"] = systems_screen(F, badge_font, counts, 0)
-    screens["systems_scummvm"] = systems_screen(F, badge_font, counts, 1)
-    screens["systems_floating_up"] = systems_screen(F, badge_font, counts, 0, field=33)
-    anims["systems_cursor"] = anim_systems_cursor(F, badge_font, counts)
+    screens["systems"] = systems_screen(F, badge_font, rows, 0)
+    screens["systems_scummvm"] = systems_screen(F, badge_font, rows, 1)
+    screens["systems_favourite"] = systems_screen(F, badge_font, rows, idx["c64"])
+    screens["systems_core"] = systems_screen(F, badge_font, rows, idx["nes"])
+    screens["systems_consoles"] = systems_screen(F, badge_font, mock_rows("Consoles"), 2, chip="Consoles")
+    screens["systems_computers"] = systems_screen(F, badge_font, mock_rows("Computers"), 2, chip="Computers")
+    last = len(rows) - 1
+    screens["systems_end"] = systems_screen(F, badge_font, rows_out, last)
+    screens["systems_not_installed"] = systems_screen(F, badge_font, rows_out, last + 3)
+    screens["systems_not_installed_end"] = systems_screen(F, badge_font, rows_out, len(rows_out) - 1)
+    for style in ("still", "breathe", "swap", "both"):
+        anims["ring_" + style] = anim_ring(F, badge_font, rows, style)
+    anims["systems_cursor"] = anim_systems_cursor(F, badge_font, rows)
+    anims["systems_chip"] = anim_chip(F, badge_font, rows, mock_rows("Consoles"), "All", "Consoles")
+    by = {r["key"]: r for r in rows_out}
+    for key in ("nes", "c64", "amiga"):
+        screens["core_%s" % key] = core_details_screen(F, badge_font, by[key])
+    screens["core_gameboy_version"] = core_details_screen(F, badge_font, by["gameboy"], 1)
+    screens["core_mac_version"] = core_details_screen(F, badge_font, by["mac"], 3)
+    missing = next(n for n, o in enumerate(OPTIONS) if o[1] == "missing")
+    screens["options_missing"] = options_screen(F, badge_font, fonts, missing, values)
+    logos = next(n for n, o in enumerate(OPTIONS) if o[1] == "logos")
+    screens["options_logos"] = options_screen(F, badge_font, fonts, logos, dict(values, logos="In colour"))
+    LOGO_COLOUR[0] = True
+    screens["systems_colour"] = systems_screen(F, badge_font, rows, idx["nes"])
+    screens["systems_colour_c64"] = systems_screen(F, badge_font, rows, idx["c64"])
+    for theme in ("lavender", "amber"):
+        apply_theme(theme)
+        screens["systems_colour_%s" % theme] = systems_screen(F, badge_font, rows, idx["nes"])
+    apply_theme("purple")
+    LOGO_COLOUR[0] = False
+    for theme in ("lavender", "amber"):
+        apply_theme(theme)
+        screens["systems_%s" % theme] = systems_screen(F, badge_font, rows, idx["nes"])
+        screens["core_nes_%s" % theme] = core_details_screen(F, badge_font, by["nes"])
+    apply_theme("purple")
+    anims["core_details"] = anim_core_details(F, badge_font, rows, idx["nes"])
+    anims["core_back"] = anim_core_details(F, badge_font, rows, idx["nes"], back=True)
+    anims["core_start"] = anim_core_start(F, badge_font, by["nes"])
     for mode, cur in (("A-Z", "monkey-cd"), ("Engine", "sky"), ("Publisher", "lure"), ("Year", "atlantis"),
                       ("Recent", "monkey-cd")):
         m = ScummMain(F, badge_font, sv, launcher, mode, cur)
@@ -2034,7 +2538,7 @@ def systems_mockups(F, badge_font, ports, fonts, values):
     screens["scummvm_launcher"] = compose(sm.frame_layers()).convert("RGB")
     D = details_layers(F, badge_font, launcher, sv_port)
     D.update(title=layer_title(F, "ScummVM"), count=layer_count(F, "Details", "ScummVM"),
-             hints=layer_hints(F, [("ok", "Play"), ("back", "Back")], badge_font, "ps"))
+             hints=layer_hints(F, [("ok", "Play"), ("ports", "Repo"), ("back", "Back")], badge_font, "ps"))
     screens["scummvm_details_launcher"] = compose(D, D_ORDER).convert("RGB")
     for gid in ("monkey-cd", "atlantis"):
         screens["scummvm_details_%s" % gid] = compose(
@@ -2049,10 +2553,10 @@ def systems_mockups(F, badge_font, ports, fonts, values):
                                               options=[o for o in OPTIONS if o[1] != "start"])
     hm = Main(F, badge_font, hports, "A-Z", "doom2")
     sm = ScummMain(F, badge_font, sv, launcher, "A-Z", "monkey-cd")
-    anims["open_hybrid"] = anim_system_open(F, badge_font, counts, hm, 0)
-    anims["open_scummvm"] = anim_system_open(F, badge_font, counts, sm, 1)
-    anims["back_scummvm"] = anim_system_open(F, badge_font, counts, sm, 1, back=True)
-    anims["start_systems"] = anim_start_systems(F, badge_font, counts)
+    anims["open_hybrid"] = anim_system_open(F, badge_font, rows, hm, 0)
+    anims["open_scummvm"] = anim_system_open(F, badge_font, rows, sm, 1)
+    anims["back_scummvm"] = anim_system_open(F, badge_font, rows, sm, 1, back=True)
+    anims["start_systems"] = anim_start_systems(F, badge_font, rows)
     return screens, anims
 
 
@@ -2077,7 +2581,7 @@ def export_layers(fonts_dir, out, repos):
     F = fonts["chakra"][1]
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "start": "Last System", "sort": "A-Z"}
+              "pointer": "Arrow", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     colours = {}
     for theme in THEMES:
         apply_theme(theme)
@@ -2123,7 +2627,7 @@ def main():
                    .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "start": "Last System", "sort": "A-Z"}
+              "pointer": "Arrow", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     if only_systems:
         return save_all(out, *systems_mockups(fonts["chakra"][1], badge, ports, fonts, values))
     screens = {}
