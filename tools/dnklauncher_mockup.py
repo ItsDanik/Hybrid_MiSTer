@@ -124,19 +124,23 @@ FAMILIES = {
     "switch": ("Nintendo Switch", {
         "south": ("B", (0xF0, 0xF0, 0xF0), (0x2E, 0x2E, 0x33)), "east": ("A", (0xF0, 0xF0, 0xF0), (0x2E, 0x2E, 0x33)),
         "north": ("X", (0xF0, 0xF0, 0xF0), (0x2E, 0x2E, 0x33)), "west": ("Y", (0xF0, 0xF0, 0xF0), (0x2E, 0x2E, 0x33)),
-        "select": ("-", None, None), "start": ("+", None, None)}),
+        "select": ("-", None, None), "start": ("+", None, None),
+        "l1": ("L", None, None), "r1": ("R", None, None), "l2": ("ZL", None, None), "r2": ("ZR", None, None)}),
     "xbox": ("Xbox", {
         "south": ("A", (0x6C, 0xC6, 0x2E), (0x22, 0x22, 0x26)), "east": ("B", (0xEE, 0x4B, 0x4B), (0x22, 0x22, 0x26)),
         "north": ("Y", (0xF5, 0xC4, 0x1A), (0x22, 0x22, 0x26)), "west": ("X", (0x3F, 0x8F, 0xEF), (0x22, 0x22, 0x26)),
-        "select": ("VIEW", None, None), "start": ("MENU", None, None)}),
+        "select": ("VIEW", None, None), "start": ("MENU", None, None),
+        "l1": ("LB", None, None), "r1": ("RB", None, None), "l2": ("LT", None, None), "r2": ("RT", None, None)}),
     "ps": ("PlayStation", {
         "south": ("cross", (0x8F, 0xB4, 0xF2), (0x22, 0x22, 0x2A)), "east": ("circle", (0xF2, 0x6B, 0x75), (0x22, 0x22, 0x2A)),
         "north": ("triangle", (0x4F, 0xD1, 0xB0), (0x22, 0x22, 0x2A)), "west": ("square", (0xEE, 0x9C, 0xDC), (0x22, 0x22, 0x2A)),
-        "select": ("CREATE", None, None), "start": ("OPTIONS", None, None)}),
+        "select": ("CREATE", None, None), "start": ("OPTIONS", None, None),
+        "l1": ("L1", None, None), "r1": ("R1", None, None), "l2": ("L2", None, None), "r2": ("R2", None, None)}),
     "snes": ("SNES (MiSTer's names)", {
         "south": ("B", (0xFF, 0xFF, 0xFF), (0xF5, 0xC5, 0x42)), "east": ("A", (0xFF, 0xFF, 0xFF), (0xE8, 0x4A, 0x5F)),
         "north": ("X", (0xFF, 0xFF, 0xFF), (0x4A, 0x90, 0xE2)), "west": ("Y", (0xFF, 0xFF, 0xFF), (0x5C, 0xC2, 0x6A)),
-        "select": ("SELECT", None, None), "start": ("START", None, None)}),
+        "select": ("SELECT", None, None), "start": ("START", None, None),
+        "l1": ("L", None, None), "r1": ("R", None, None), "l2": ("L2", None, None), "r2": ("R2", None, None)}),
 }
 # Where the frontend's actions are: by letter (Danik, 2026-10-25), the same
 # letter on every pad: Play A, Exit B, Favourite Y, Repo X (PlayStation:
@@ -150,6 +154,11 @@ def places(family):
     if family == "switch":
         return {"ok": "east", "back": "south", "fav": "west", "ports": "north", "sort": "select", "options": "start"}
     return {"ok": "south", "back": "east", "fav": "north", "ports": "west", "sort": "select", "options": "start"}
+
+
+# The legend's second row (Danik, 2026-10-31): the bumpers and triggers, which
+# are not each a button's own action as the first row's are, and are not clicked
+SHOULDERS = {"page": ("l1", "r1"), "layout": ("l2", "r2"), "l2": ("l2",)}
 
 
 class Fonts:
@@ -321,6 +330,9 @@ INFO = {   # a game's year, developer and description; the main screen shows non
               "puzzles that span them."),
 }
 FAVOURITES = {"doom2", "QUAKE", "DN3D"}
+# Hidden with Shift + Favourite (Danik, 2026-11-01); with Options' Show hidden on
+# they are in the lists, dimmed and marked, so that they can be unhidden
+HIDDEN = set()
 NO_DATA = {"hexen", "hexdd", "strife", "S2"}
 RECENT = [("DN3D", "today"), ("doom2", "today"), ("Q2", "yesterday"), ("WL", "3 days ago"),
           ("CARMA", "last week"), ("HL", "2 weeks ago"), ("SE", "a month ago")]
@@ -369,6 +381,7 @@ def load_ports(repos):
 HEAD = (19, 75)           # the MiSTer logo and the sort modes
 MAIN = (83, 393)          # the pages' panels (Details, Options, the ports page)
 FOOT = (405, 441)         # the buttons and the badge
+HINT_ROW = 19             # the legend's second row under its first
 LIST_X = (M, 330)
 PREV_X = (342, W - M)
 ROW = 24
@@ -637,10 +650,25 @@ def layer_count(F, count, title="Hybrid Ports"):
     return c.im
 
 
+CHIP_STAR = "*"      # the filter of favourites: a star for its name
+CHIP_STAR_W = 30
+
+
+def chip_name(d, F, m, x, w, y0, ink):
+    """A chip's name, or its star"""
+    if m == CHIP_STAR:
+        cx, cy = x + w / 2, y0 + 10
+        d.polygon([(cx + (7 if i % 2 == 0 else 7 * 0.45) * math.cos(-math.pi / 2 + i * math.pi / 5),
+                    cy + (7 if i % 2 == 0 else 7 * 0.45) * math.sin(-math.pi / 2 + i * math.pi / 5)) for i in range(10)],
+                  fill=ink + (255,))
+    else:
+        d.text((x + w / 2, y0 + 10), m, font=F.chip, fill=ink + (255,), anchor="mm")
+
+
 def chip_rects(F, chips=None):
     rects, x = {}, W - M
     for m in reversed(chips or CHIPS):
-        w = round(F.chip.getlength(m)) + 16
+        w = CHIP_STAR_W if m == CHIP_STAR else round(F.chip.getlength(m)) + 16
         x -= w
         rects[m] = (x, w)
         x -= 6
@@ -660,7 +688,7 @@ def layer_chips(F, family, on, chips=None):
     d = ImageDraw.Draw(layer)
     for m, (x, w) in rects.items():
         d.rounded_rectangle((x, y0, x + w, y1), 10, fill=PANEL + (150,), outline=EDGE + (120,))
-        d.text((x + w / 2, y0 + 10), m, font=F.chip, fill=DIM + (255,), anchor="mm")
+        chip_name(d, F, m, x, w, y0, DIM)
     c.over(layer)
     ox, ow = on
     pill = blank()
@@ -669,7 +697,7 @@ def layer_chips(F, family, on, chips=None):
     ink = blank()
     d = ImageDraw.Draw(ink)
     for m, (x, w) in rects.items():
-        d.text((x + w / 2, y0 + 10), m, font=F.chip, fill=SEL_INK + (255,), anchor="mm")
+        chip_name(d, F, m, x, w, y0, SEL_INK)
     mask = Image.new("L", (W, H), 0)
     ImageDraw.Draw(mask).rounded_rectangle((ox, y0, ox + ow, y1), 10, fill=255)
     ink.putalpha(ImageChops.multiply(ink.getchannel("A"), mask))
@@ -711,7 +739,11 @@ def list_strips(F, rows):
             elif tag:
                 c.text((right, mid), tag, F.small, SEL_INK if sel else DIM, anchor="rm")
                 right -= F.small.getlength(tag) + 8
-            ink = SEL_INK if sel else (DIM if nodata else INK)
+            hidden = game["id"] in HIDDEN
+            if hidden:
+                c.text((right, mid), "hidden", F.small, SEL_INK if sel else DIM, anchor="rm")
+                right -= F.small.getlength("hidden") + 8
+            ink = SEL_INK if sel else (DIM if nodata or hidden else INK)
             c.text((28, mid), clip(label, F.row, right - 28), F.row, ink, anchor="lm")
         out.append(c.im)
     return out
@@ -769,6 +801,35 @@ def layer_shot(F, game, xy):
     return c.im
 
 
+# The game's cover (Danik, 2026-11-01; docs/dnklauncher.md, "Covers"): exactly 2:3,
+# his pictures being 600x900, in the preview's panel in place of its logo and
+# screenshot, centred, in the same dark frame
+COVER = (178, 267)
+
+
+def cover_path(game):
+    return os.path.join(os.path.dirname(os.path.dirname(game["logo"])), "covers", game["id"] + ".png")
+
+
+def preview_cover_xy():
+    pw = PREV_X[1] - PREV_X[0]
+    return PREV_X[0] + (pw - COVER[0]) // 2, LIST_Y[0] + (LIST_Y[1] - LIST_Y[0] - COVER[1]) // 2
+
+
+def layer_cover(game):
+    """The cover in its dark frame"""
+    c = Canvas(ground=False)
+    x, y = preview_cover_xy()
+    layer = c.layer()
+    ImageDraw.Draw(layer).rectangle((x - 2, y - 2, x + COVER[0] + 1, y + COVER[1] + 1), fill=(15, 0, 22, 255))
+    c.over(layer)
+    key = ("cover", game["logo"])
+    if key not in _cache:
+        _cache[key] = to_linear_resize(Image.open(cover_path(game)).convert("RGB"), COVER)
+    c.picture(_cache[key], (x, y))
+    return c.im
+
+
 def layer_preview_logo(game, dx=0.0):
     out = blank()
     pw = PREV_X[1] - PREV_X[0]
@@ -784,27 +845,37 @@ def layer_preview(F, game, logo_dx=0.0):
     return out
 
 
-def layer_hints(F, hints, badge_font, family, boxes=None):
+def hint_button(c, F, family, action, x, y):
+    """The action's button, or the two of a pair, at x; returns the width"""
+    if action in SHOULDERS:
+        w = 0
+        for place_ in SHOULDERS[action]:
+            w += button(c, F, family, place_, x + w, y) + 2
+        return w - 2
+    return button(c, F, family, places(family)[action], x, y)
+
+
+def layer_hints(F, hints, badge_font, family, boxes=None, second=None):
     """hints: (action, what it does); the action's button as the family prints
     it. boxes: a list that gets each hint's box (x0, y0, x1, y1), where a click
-    does what it says"""
+    does what it says. second: the second row's, under them; of those only
+    Options has a box (Danik, 2026-11-01: it went there from the first row)"""
     c = Canvas(ground=False)
-    y = FOOT[0] + 9
-    where = places(family)
-    # the gaps shrink to keep the hints clear of the badge, whatever the font
     probe = Canvas(ground=False)
-    width = sum(button(probe, F, family, where[a], 0, 0) + 4 + round(F.chip.getlength(w)) for a, w in hints)
     room = W - M - 36 - 8 - badge_font.getbbox("Hybrid Core Framework v%d" % VERSION)[2] - 12 - M
-    gap = max(4, min(12, (room - width) // max(1, len(hints) - 1)))
-    x = M
-    for action, what in hints:
-        x0 = x
-        x += button(c, F, family, where[action], x, y) + 4
-        c.text((x, y + 9), what, F.chip, INK, anchor="lm")
-        x += round(F.chip.getlength(what))
-        if boxes is not None:
-            boxes.append((x0, y, x, y + 18))
-        x += gap
+    for y, row in ((FOOT[0], hints), (FOOT[0] + HINT_ROW, second or [])):
+        # the gaps shrink to keep the hints clear of the badge, whatever the font
+        width = sum(hint_button(probe, F, family, a, 0, 0) + 4 + round(F.chip.getlength(w)) for a, w in row)
+        gap = max(4, min(12, (room - width) // max(1, len(row) - 1)))
+        x = M
+        for action, what in row:
+            x0 = x
+            x += hint_button(c, F, family, action, x, y) + 4
+            c.text((x, y + 9), what, F.chip, INK, anchor="lm")
+            x += round(F.chip.getlength(what))
+            if boxes is not None and (row is hints or action == "options"):
+                boxes.append((x0, y, x, y + 18))
+            x += gap
     return c.im
 
 
@@ -892,7 +963,7 @@ def pointer_screens(F, badge_font, ports):
         m = Main(F, badge_font, ports, "A-Z", "doom2")
         L = m.frame_layers()
         boxes = []
-        L["hints"] = layer_hints(F, MAIN_HINTS, badge_font, m.family, boxes)
+        L["hints"] = layer_hints(F, MAIN_HINTS, badge_font, m.family, boxes, LIST_SECOND)
         under = compose(L)
         hint = boxes[1]   # Favourite
         hovered = under.copy()
@@ -957,16 +1028,27 @@ def rows_for(ports, mode):
 
 
 # B goes up to Systems (Danik, 2026-10-29), where it asks to exit ("Systems" did not fit beside the badge)
-MAIN_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("options", "Options"), ("back", "Back")]
+MAIN_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Back")]
+LIST_SECOND = [("page", "Page"), ("layout", "Layout"), ("sort", "Hold: Shift"), ("options", "Options")]
+# Select held (Danik, 2026-11-01): the legend says what the buttons do with it
+# (a quick press of Select still changes the sort mode)
+SHIFT_SECOND = [("sort", "Shift")]
+
+
+def shift_hints(hidden=False):
+    return [("fav", "Unhide" if hidden else "Hide")]
+
+
+DETAILS_SECOND = [("page", "Previous / Next")]
 
 
 class Main:
     """The main screen's state and its layers: the System Hybrid Ports' list"""
     title, chips, hints = "Hybrid Ports", CHIPS, MAIN_HINTS
 
-    def __init__(self, F, badge_font, ports, mode, cursor_id, family="ps"):
+    def __init__(self, F, badge_font, ports, mode, cursor_id, family="ps", art="shot", shift=False):
         self.F, self.badge_font, self.family, self.mode = F, badge_font, family, mode
-        self.ports = ports
+        self.ports, self.art, self.shift = ports, art, shift
         self.rows = rows_for(ports, mode)
         self.count = "%d games" % sum(len(p["games"]) for p in ports)
         self.port_of = {g["id"] + g["engine"]: p for p in ports for g in p["games"]}
@@ -999,8 +1081,11 @@ class Main:
             "list_panel": layer_panel((LIST_X[0], LIST_Y[0], LIST_X[1], LIST_Y[1])),
             "prev_panel": layer_panel((PREV_X[0], LIST_Y[0], PREV_X[1], LIST_Y[1])),
             "rows": layer_rows(self.strips, len(self.rows), self.first, self.cursor),
-            "prev_logo": self.preview_logo(g), "prev_shot": self.preview_shot(g),
-            "hints": layer_hints(F, self.hints, self.badge_font, self.family), "badge": layer_badge(self.badge_font),
+            "prev_logo": blank() if self.art == "cover" else self.preview_logo(g),
+            "prev_shot": layer_cover(g) if self.art == "cover" else self.preview_shot(g),
+            "hints": (layer_hints(F, shift_hints(g["id"] in HIDDEN), self.badge_font, self.family, second=SHIFT_SECOND)
+                      if self.shift else layer_hints(F, self.hints, self.badge_font, self.family, second=LIST_SECOND)),
+            "badge": layer_badge(self.badge_font),
         }
 
 
@@ -1016,8 +1101,8 @@ def compose(layers, order=ORDER):
     return out
 
 
-def main_screen(F, badge_font, ports, mode, cursor_id, family="ps"):
-    return compose(Main(F, badge_font, ports, mode, cursor_id, family).frame_layers()).convert("RGB")
+def main_screen(F, badge_font, ports, mode, cursor_id, family="ps", art="shot", shift=False):
+    return compose(Main(F, badge_font, ports, mode, cursor_id, family, art, shift).frame_layers()).convert("RGB")
 
 
 # Details: A on a game. Everything the frontend knows of it; A plays, Y marks
@@ -1094,7 +1179,7 @@ def details_layers(F, badge_font, game, port, family="ps"):
             "shot_panel": layer_panel(D_SHOT_PANEL), "shot": layer_shot(F, game, D_SHOT),
             "info_panel": layer_panel(D_INFO_PANEL), "info": layer_details_info(F, game, port),
             "desc_panel": layer_panel(D_DESC_PANEL), "desc": layer_details_desc(F, game),
-            "hints": layer_hints(F, details_hints(game), badge_font, family), "badge": layer_badge(badge_font)}
+            "hints": layer_hints(F, details_hints(game), badge_font, family, second=DETAILS_SECOND), "badge": layer_badge(badge_font)}
 
 
 D_ORDER = ["ground", "logo", "title", "count", "shot_panel", "shot", "info_panel", "info", "desc_panel", "desc",
@@ -1114,8 +1199,8 @@ def header(c, F, mode, count, family):
         c.over(layer_chips(F, family, chip_rects(F)[mode]))
 
 
-def footer(c, F, hints, badge_font, family):
-    c.over(layer_hints(F, hints, badge_font, family))
+def footer(c, F, hints, badge_font, family, second=None):
+    c.over(layer_hints(F, hints, badge_font, family, second=second))
     c.over(layer_badge(badge_font))
 
 
@@ -1174,7 +1259,7 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
     c.text((px0 + 14, y + 58), "%d games" % len(port["games"]), F.text, DIM)
     c.text((px0 + 14, y + 80), "Installed" if port["engine"] in INSTALLED else "Not installed", F.text,
            GOLD if port["engine"] in INSTALLED else DIM)
-    footer(c, F, [("ok", "Tick"), ("fav", "Apply"), ("back", "Back")], badge_font, family)
+    footer(c, F, [("ok", "Tick"), ("fav", "Apply"), ("back", "Back")], badge_font, family, [("page", "Page")])
     return c.im.convert("RGB")
 
 
@@ -1195,6 +1280,10 @@ OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settin
                                   "Xbox or PlayStation one. Pick one for any other."),
     ("Pointer", "pointer", "The mouse's pointer, shown while the mouse moves: an arrow or a dart. The arrow "
                            "unless you pick the other."),
+    ("Game art", "art", "What a game shows in the list and the carousel: its logo and screenshot, or its cover. "
+                        "A game with no cover keeps its logo and screenshot."),
+    ("Show hidden", "hidden", "On shows what you hid, dimmed and marked, so that you can unhide it: hold Select "
+                              "and press Favourite. It stays hidden when this is off."),
     ("Start in", "start", "Where the launcher opens: the System you were in last, on the game you were on, "
                           "or the Systems screen. The last System unless you pick the other."),
     ("Cores not installed", "missing", "Off shows only what is on this MiSTer. On adds the other cores of the MiSTer "
@@ -1641,8 +1730,8 @@ SYSTEMS = [("hybrid", "Hybrid Ports"), ("scummvm", "ScummVM")]
 # "By" reach the MiSTer logo (CREATE at x 182 to 201 by the font, the logo ends at 240); without it 242 to 257
 SV_CHIPS = ["A-Z", "Engine", "Publisher", "Year", "Recent"]
 # Repo on every screen but Options and the Repo page itself (Danik, 2026-10-31)
-SV_HINTS = [("ok", "Details"), ("ports", "Repo"), ("options", "Options"), ("back", "Back")]
-SYS_HINTS = [("ok", "Open"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+SV_HINTS = [("ok", "Details"), ("ports", "Repo"), ("back", "Back")]
+SYS_HINTS = [("ok", "Open"), ("ports", "Repo"), ("back", "Exit")]
 SV_ICON = 192             # a ScummVM game's icon on its card
 SV_ICONS = os.path.expanduser("~/MiSTer-scummvm/build/icons")   # the packs (its tools/icons.sh)
 
@@ -1825,7 +1914,7 @@ def sv_details_layers(F, badge_font, g, family="ps"):
             "shot_panel": layer_panel(D_SHOT_PANEL), "shot": layer_card(g, D_SHOT),
             "info_panel": layer_panel(D_INFO_PANEL), "info": info,
             "desc_panel": layer_panel(D_DESC_PANEL), "desc": c.im,
-            "hints": layer_hints(F, [("ok", "Play"), ("ports", "Repo"), ("back", "Back")], badge_font, family),
+            "hints": layer_hints(F, [("ok", "Play"), ("ports", "Repo"), ("back", "Back")], badge_font, family, second=DETAILS_SECOND),
             "badge": layer_badge(badge_font)}
 
 
@@ -1854,9 +1943,11 @@ BAN_RADIUS = 8
 BAN_LOGO = (22, 240, 56)         # the logo's x and its largest size
 BAN_RING = (2, 3)        # its gap to the banner, its width
 RING_BREATHE = 1.5       # how far the ring grows and shrinks, in pixels either way
-RING_BREATHE_HZ = 0.45
+RING_BREATHE_HZ = 0.9    # (Danik, 2026-10-31: twice as fast as first)
 RING_SWAP_HZ = 0.25      # the bar's two colours changing places along the ring
-BAN_CHIPS = ["All", "Consoles", "Computers"]
+BAN_CHIPS = ["All", "Consoles", "Computers", CHIP_STAR]
+PICK_DX = 14             # L2 held: how far the picked banner slides out to the left
+PICK_FIELDS = 10         # in how many fields
 BAN_MARGIN = 1           # rows kept in sight beyond the cursor, as the game list
 
 # what the mock-ups show of a player's MiSTer
@@ -1892,7 +1983,7 @@ def mock_rows(chip="All", missing=False):
     rows = []
     if chip == "All":
         rows = [dict(key=k, title=t, special=True, installed=True, fav=False, count=MOCK_COUNTS[k]) for k, t in SYSTEMS]
-    of = [s for s in all_ if chip == "All" or s["kind"] + "s" == chip]
+    of = [s for s in all_ if chip == "All" or s["kind"] + "s" == chip or (chip == CHIP_STAR and s["fav"])]
     title = lambda s: s["title"].lower()
     rows += sorted((s for s in of if s["installed"] and s["fav"]), key=title)
     rows += sorted((s for s in of if s["installed"] and not s["fav"]), key=title)
@@ -2010,7 +2101,7 @@ def special_banner(F, s):
 
 
 def banner(F, s):
-    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0])
+    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0], s.get("hidden"))
     if k in _cache:
         return _cache[k]
     w, h = BAN_W, BAN_H
@@ -2058,6 +2149,11 @@ def banner(F, s):
         d.text((right, h // 2 + 9), "%s  %s" % (s["year"], s["kind"]), font=F.small, fill=dim + (255,), anchor="rm")
         if s["fav"]:
             Canvas.star(c, right - F.chip.getlength(s["maker"]) - 12, h // 2 - 9, 6, GOLD)
+    if s.get("hidden"):   # shown by Options' Show hidden: dimmed and marked
+        im.putalpha(im.getchannel("A").point(lambda v: round(v * 0.45)))
+        d = ImageDraw.Draw(im)
+        tw = F.small.getlength("hidden")
+        d.text((w // 2 - tw / 2, h // 2), "hidden", font=F.small, fill=DIM + (255,), anchor="lm")
     _cache[k] = im
     return im
 
@@ -2144,25 +2240,52 @@ def layer_list_bar(rows, at):
     return out
 
 
+def sys_second(s):
+    if s["installed"]:
+        return [("page", "Page"), ("l2", "Hold: Move"), ("sort", "Hold: Shift"), ("options", "Options")]
+    return [("page", "Page"), ("sort", "Hold: Shift"), ("options", "Options")]
+
+
 def sys_hints(s):
     if s.get("special"):
-        return [("ok", "Open"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+        return [("ok", "Open"), ("ports", "Repo"), ("back", "Exit")]
     if not s["installed"]:
-        return [("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
-    return [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+        return [("ports", "Repo"), ("back", "Exit")]
+    return [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Exit")]
 
 
-def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", field=0, style="both"):
+PICK_HINTS = [("l2", "Up / Down: Move, Release: Place")]
+
+
+def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", field=0, style="both", pick=None, shift=False):
     """Systems with the cursor on row `cursor` (a fraction while it moves), the
-    list at offset `at`, at a field of the ring"""
+    list at offset `at`, at a field of the ring. pick: L2 held, the row under
+    the cursor picked: (how far it is out to the left, {row: its offset down
+    from its place, while it makes way}, False once L2 is let go)"""
     c = round(cursor)
     L = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, "Systems"),
          "count": layer_count(F, "%d systems" % sum(s["installed"] for s in rows), "Systems"),
          "chips": layer_chips(F, family, chip_rects(F, BAN_CHIPS)[chip], BAN_CHIPS),
-         "hints": layer_hints(F, sys_hints(rows[c]), badge_font, family), "badge": layer_badge(badge_font)}
+         "badge": layer_badge(badge_font)}
+    if not rows:
+        L["hints"] = layer_hints(F, sys_hints(dict(installed=False)), badge_font, family)
+        L["banners"], L["cursor"], L["bar"] = blank(), blank(), blank()
+        if chip == CHIP_STAR:
+            none = Canvas(ground=False)
+            none.text(((M + W - M) / 2, (MAIN[0] + MAIN[1]) / 2), "No favourites yet", F.chip, DIM, anchor="mm")
+            L["banners"] = none.im
+        return L
+    # Hybrid Ports and ScummVM cannot be hidden: nothing else would lead to their games
+    L["hints"] = (layer_hints(F, [] if rows[c].get("special") else shift_hints(rows[c].get("hidden")), badge_font, family, second=SHIFT_SECOND) if shift else
+                  layer_hints(F, PICK_HINTS, badge_font, family) if pick and (len(pick) < 3 or pick[2]) else
+                  layer_hints(F, sys_hints(rows[c]), badge_font, family, second=sys_second(rows[c])))
     others = blank()
     for n, s in enumerate(rows):
+        if pick and n == c:
+            continue
         y = BAN_TOP + row_y(rows, n) - at
+        if pick:
+            y += pick[1].get(n, 0)
         if y + BAN_H < MAIN[0] - 8 or y > MAIN[1] + 8:
             continue
         banner_layer = layer_banner(F, s, y)
@@ -2177,6 +2300,10 @@ def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", fie
     a, b = int(math.floor(cursor)), min(int(math.floor(cursor)) + 1, len(rows) - 1)
     y = lerp(row_y(rows, a), row_y(rows, b), cursor - a) + BAN_TOP - at
     L["cursor"] = layer_ring_at(y, field, style, grey=not rows[c]["installed"])
+    if pick:
+        dx = -round(pick[0])
+        others.alpha_composite(place(layer_banner(F, rows[c], y), dx))
+        L["cursor"] = place(L["cursor"], dx)
     L["bar"] = layer_list_bar(rows, at)
     return L
 
@@ -2184,10 +2311,10 @@ def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", fie
 SYS_ORDER = ["ground", "logo", "title", "count", "chips", "banners", "cursor", "bar", "hints", "badge"]
 
 
-def systems_screen(F, badge_font, rows, cursor, at=None, chip="All", family="ps", field=0, style="both"):
+def systems_screen(F, badge_font, rows, cursor, at=None, chip="All", family="ps", field=0, style="both", pick=None, shift=False):
     if at is None:
-        at = list_scroll(rows, cursor, 0)
-    return compose(systems_layers(F, badge_font, rows, cursor, at, chip, family, field, style), SYS_ORDER).convert("RGB")
+        at = list_scroll(rows, cursor, 0) if rows else 0
+    return compose(systems_layers(F, badge_font, rows, cursor, at, chip, family, field, style, pick, shift), SYS_ORDER).convert("RGB")
 
 
 def anim_ring(F, badge_font, rows, style):
@@ -2208,6 +2335,34 @@ def anim_systems_cursor(F, badge_font, rows):
             frames.append(systems_screen(F, badge_font, rows, lerp(cur, nxt, e), lerp(at, at2, e), field=field))
             field += 1
         cur, at = nxt, at2
+    return frames
+
+
+def anim_system_pick(F, badge_font, rows, start):
+    """L2 held (Danik, 2026-10-31): the banner slides out to the left, Down and
+    Up move it, the row it passes making way, and let go it slides back"""
+    rows = list(rows)
+    frames, field = [], 0
+    cur, at = start, list_scroll(rows, start, 0)
+    for f in range(PICK_FIELDS + 6):
+        out = PICK_DX * ease_out(span(f, 0, PICK_FIELDS))
+        frames.append(systems_screen(F, badge_font, rows, cur, at, field=field, pick=(out, {})))
+        field += 1
+    for step in (1, 1, 1, -1):
+        nxt = cur + step
+        rows[cur], rows[nxt] = rows[nxt], rows[cur]
+        at2 = list_scroll(rows, nxt, at)
+        for f in range(14):
+            e = ease_out(span(f, 0, 7))
+            make_way = (row_y(rows, nxt) - row_y(rows, cur)) * (1 - e)
+            frames.append(systems_screen(F, badge_font, rows, lerp(cur, nxt, e) if step > 0 else lerp(nxt, cur, 1 - e),
+                                         lerp(at, at2, e), field=field, pick=(PICK_DX, {cur: make_way})))
+            field += 1
+        cur, at = nxt, at2
+    for f in range(PICK_FIELDS + 6):
+        out = PICK_DX * (1 - ease_out(span(f, 0, PICK_FIELDS)))
+        frames.append(systems_screen(F, badge_font, rows, cur, at, field=field, pick=(out, {}, False) if out > 0 else None))
+        field += 1
     return frames
 
 
@@ -2351,7 +2506,7 @@ def core_details_layers(F, badge_font, s, version=0, family="ps"):
     title = s["title"]
     L = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, title),
          "count": layer_count(F, "Details", title), "badge": layer_badge(badge_font),
-         "hints": layer_hints(F, CORE_HINTS, badge_font, family),
+         "hints": layer_hints(F, CORE_HINTS, badge_font, family, second=DETAILS_SECOND),
          "shot_panel": layer_panel(D_SHOT_PANEL), "info_panel": layer_panel(D_INFO_PANEL),
          "desc_panel": layer_panel(D_DESC_PANEL)}
     pic = blank()
@@ -2478,7 +2633,7 @@ def anim_core_start(F, badge_font, s):
 
 # Hybrid Ports alone (no ScummVM installed): its list is the first screen, B
 # asks to exit as before Systems, and Options has no Start in
-ALONE_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("options", "Options"), ("back", "Exit")]
+ALONE_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Exit")]
 
 
 def systems_mockups(F, badge_font, ports, fonts, values):
@@ -2495,6 +2650,11 @@ def systems_mockups(F, badge_font, ports, fonts, values):
     screens["systems_scummvm"] = systems_screen(F, badge_font, rows, 1)
     screens["systems_favourite"] = systems_screen(F, badge_font, rows, idx["c64"])
     screens["systems_core"] = systems_screen(F, badge_font, rows, idx["nes"])
+    screens["systems_shift"] = systems_screen(F, badge_font, rows, idx["nes"], shift=True)
+    screens["systems_shift_special"] = systems_screen(F, badge_font, rows, 0, shift=True)
+    shown = [dict(r, hidden=r["key"] == "nes") for r in rows]
+    screens["systems_hidden_shown"] = systems_screen(F, badge_font, shown, idx["nes"])
+    screens["systems_shift_unhide"] = systems_screen(F, badge_font, shown, idx["nes"], shift=True)
     screens["systems_consoles"] = systems_screen(F, badge_font, mock_rows("Consoles"), 2, chip="Consoles")
     screens["systems_computers"] = systems_screen(F, badge_font, mock_rows("Computers"), 2, chip="Computers")
     last = len(rows) - 1
@@ -2505,6 +2665,10 @@ def systems_mockups(F, badge_font, ports, fonts, values):
         anims["ring_" + style] = anim_ring(F, badge_font, rows, style)
     anims["systems_cursor"] = anim_systems_cursor(F, badge_font, rows)
     anims["systems_chip"] = anim_chip(F, badge_font, rows, mock_rows("Consoles"), "All", "Consoles")
+    anims["system_pick"] = anim_system_pick(F, badge_font, rows, idx["nes"])
+    screens["systems_favourites"] = systems_screen(F, badge_font, mock_rows(CHIP_STAR), 0, chip=CHIP_STAR)
+    screens["systems_favourites_none"] = systems_screen(F, badge_font, [], 0, chip=CHIP_STAR)
+    screens["systems_picked"] = systems_screen(F, badge_font, rows, idx["nes"], pick=(PICK_DX, {}))
     by = {r["key"]: r for r in rows_out}
     for key in ("nes", "c64", "amiga"):
         screens["core_%s" % key] = core_details_screen(F, badge_font, by[key])
@@ -2538,7 +2702,7 @@ def systems_mockups(F, badge_font, ports, fonts, values):
     screens["scummvm_launcher"] = compose(sm.frame_layers()).convert("RGB")
     D = details_layers(F, badge_font, launcher, sv_port)
     D.update(title=layer_title(F, "ScummVM"), count=layer_count(F, "Details", "ScummVM"),
-             hints=layer_hints(F, [("ok", "Play"), ("ports", "Repo"), ("back", "Back")], badge_font, "ps"))
+             hints=layer_hints(F, [("ok", "Play"), ("ports", "Repo"), ("back", "Back")], badge_font, "ps", second=DETAILS_SECOND))
     screens["scummvm_details_launcher"] = compose(D, D_ORDER).convert("RGB")
     for gid in ("monkey-cd", "atlantis"):
         screens["scummvm_details_%s" % gid] = compose(
@@ -2581,7 +2745,7 @@ def export_layers(fonts_dir, out, repos):
     F = fonts["chakra"][1]
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
+              "pointer": "Arrow", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     colours = {}
     for theme in THEMES:
         apply_theme(theme)
@@ -2627,7 +2791,7 @@ def main():
                    .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
+              "pointer": "Arrow", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     if only_systems:
         return save_all(out, *systems_mockups(fonts["chakra"][1], badge, ports, fonts, values))
     screens = {}
@@ -2643,6 +2807,12 @@ def main():
     screens["details_dn3d"] = details_screen(F, badge, ports, "DN3D")
     screens["details_nodata"] = details_screen(F, badge, ports, "hexen")
     screens["chakra_ports"] = ports_screen(F, badge, ports, "CrispyDoom")
+    screens["cover_list"] = main_screen(F, badge, ports, "A-Z", "doom2", art="cover")
+    screens["shift_hide"] = main_screen(F, badge, ports, "A-Z", "doom2", shift=True)
+    HIDDEN.update(("doom2", "heretic"))
+    screens["hidden_shown"] = main_screen(F, badge, ports, "A-Z", "heretic")
+    screens["shift_unhide"] = main_screen(F, badge, ports, "A-Z", "doom2", shift=True)
+    HIDDEN.clear()
     screens["confirm_exit"] = confirm_screen(F, badge, ports)
     screens["confirm_exit_switch"] = confirm_screen(F, badge, ports, "switch")
     screens["wait_ports"] = wait_screen(F, badge, ports)
@@ -2650,6 +2820,8 @@ def main():
     screens["options_colours"] = options_screen(F, badge, fonts, 1, values)
     screens["options_pattern"] = options_screen(F, badge, fonts, 2, values)
     screens["options_buttons"] = options_screen(F, badge, fonts, 8, values)
+    screens["options_art"] = options_screen(F, badge, fonts, 10, dict(values, art="Cover"))
+    screens["options_hidden"] = options_screen(F, badge, fonts, 11, values)
     screens["options_scroll"] = options_screen(F, badge, fonts, len(OPTIONS) - 1, values)   # the list scrolled to its end
     for theme in THEMES:     # the colour schemes
         apply_theme(theme)

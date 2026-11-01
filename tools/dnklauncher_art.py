@@ -32,6 +32,12 @@
 #   ~/dnk_Distribution_MiSTer has. --png writes each picture also as
 #   <name>.png, as the frontend would draw it (to look at). Writes the tree
 #   that goes to games/dnk/dnkLauncher/art/ on the SD card.
+#
+# usage: dnklauncher_art.py --covers <dir of <id>.png> <out dir>
+#   a port's covers (package/covers/<id>.png, by package.sh): <id>.cover at the
+#   size of COVER, as above. They go with the port, into games/dnk/<Engine>/covers/,
+#   not with the frontend, so a new port needs no new frontend. A format 1 picture
+#   too; a game without one shows its logo and screenshot.
 import os
 import struct
 import sys
@@ -109,10 +115,25 @@ def read_info(repo):
     return info
 
 
+def covers(src, out, png):
+    names = sorted(n for n in os.listdir(src) if n.endswith(".png"))
+    if names:
+        os.makedirs(out, exist_ok=True)
+    total = 0
+    for n in names:
+        im = Image.open(os.path.join(src, n)).convert("RGB")
+        total += write(os.path.join(out, n[:-4] + ".cover"), linear_resize(im, mock.COVER), False, png)
+    print("%d covers, %.1f MB" % (len(names), total / 1e6))
+
+
 def main():
     args = sys.argv[1:]
     png = "--png" in args
     args = [a for a in args if a != "--png"]
+    if args[:1] == ["--covers"]:
+        if len(args) != 3:
+            sys.exit("usage: dnklauncher_art.py --covers <dir of <id>.png> <out dir>")
+        return covers(args[1], args[2], png)
     if not args:
         sys.exit("usage: dnklauncher_art.py <out dir> [--png] [repositories...]")
     out, repos = args[0], args[1:]
@@ -146,6 +167,8 @@ def main():
             total += write(base + ".clogo", fit(logo, *clogo_box), True, png)
             if gid not in info:
                 missing.append("%s/%s info" % (engine, gid))
+            if not os.path.exists(os.path.join(repo, "package", "covers", gid + ".png")):
+                missing.append("%s/%s cover" % (engine, gid))
             # tty2oled+'s icon (docs/oled.md), which package.sh also needs
             if not os.path.exists(os.path.join(repo, "package", "oled", gid + "_icon.png")):
                 missing.append("%s/%s OLED icon" % (engine, gid))
