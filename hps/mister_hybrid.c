@@ -101,6 +101,8 @@ static int palette_slot;
 static uint32_t palette_seq;
 static int ctrl_enabled;
 static int screen_ours; // the core's own picture is gone
+static int32_t mouse_off[2]; // the mouse's movement while the OSD was open, MH_ReadInput()
+static void pointer_stop(void);
 static int menu_mask;
 static int audio_enabled;
 // set once the core is gone: another core may own the memory now, never write to it again
@@ -524,6 +526,7 @@ void MH_Close(void) {
             logo.t0, logo.first, logo.lines, logo.id, logo.title);
         setenv("MISTER_HYBRID_LOGO", state, 1);
     }
+    pointer_stop();
     stop_present_thread();
     if (open_cpus_saved) {
         sched_setaffinity(0, sizeof(open_cpus), &open_cpus);
@@ -842,6 +845,197 @@ static void pace_flip(uint32_t field) {
     }
 }
 
+// The pointer, MH_SetPointer(): on the frame shown, and on each new one before
+// it is shown; what it covers is kept to put back when it moves
+#define POINTER_MAX 128
+static struct {
+    pthread_mutex_t lock;
+    pthread_t thread;
+    int thread_on;
+    volatile int running;
+    uint16_t image[POINTER_MAX * POINTER_MAX];
+    uint16_t under[POINTER_MAX * POINTER_MAX];
+    int on, w, h, hot_x, hot_y, changed;
+    uint16_t key;
+    int x, y;                  // MH_MovePointer()
+    float vx, vy;
+    int32_t mouse[2];
+    struct timespec since;
+    int moved;                 // MH_MovePointer() was called
+    int fb;                    // the framebuffer it is drawn on, -1 none
+    int at_x, at_y, at_w, at_h; // where on it (at_w 0: not drawn)
+} pointer = { .lock = PTHREAD_MUTEX_INITIALIZER, .fb = -1 };
+
+static void pointer_erase(void) {
+    volatile uint16_t* dst;
+    const uint16_t* src = pointer.under;
+    int row = MH_Width();
+    int y, x;
+
+    if (pointer.fb < 0 || pointer.at_w == 0) {
+        return;
+    }
+    dst = (volatile uint16_t*)framebuffer(pointer.fb) + pointer.at_y * row + pointer.at_x;
+    for (y = 0; y < pointer.at_h; y++) {
+        for (x = 0; x < pointer.at_w; x++) {
+            dst[x] = *src++;
+        }
+        dst += row;
+    }
+    pointer.at_w = 0;
+}
+
+// Where it is now, with what came in since the game looked
+static void pointer_position(int* px, int* py) {
+    struct timespec now;
+    float dt;
+    int x = pointer.x, y = pointer.y;
+
+    if (!MH_OSDOpen()) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        dt = (float)(now.tv_sec - pointer.since.tv_sec) + (float)(now.tv_nsec - pointer.since.tv_nsec) * 1e-9f;
+        x += (int)(pointer.vx * dt) + ((int32_t)((uint32_t)((int32_t)status[10] - mouse_off[0] - pointer.mouse[0]) << 1) >> 1);
+        y += (int)(pointer.vy * dt) - ((int32_t)((uint32_t)((int32_t)status[11] - mouse_off[1] - pointer.mouse[1]) << 1) >> 1);
+    }
+    *px = x < 0 ? 0 : x >= MH_Width() ? MH_Width() - 1 : x;
+    *py = y < 0 ? 0 : y >= MH_Height() ? MH_Height() - 1 : y;
+}
+
+static void pointer_draw(int px, int py) {
+    volatile uint16_t* dst;
+    const uint16_t* src;
+    uint16_t* under = pointer.under;
+    int row = MH_Width();
+    int left = px - pointer.hot_x, top = py - pointer.hot_y;
+    int x0 = left < 0 ? -left : 0, y0 = top < 0 ? -top : 0;
+    int x1 = left + pointer.w > row ? row - left : pointer.w;
+    int y1 = top + pointer.h > MH_Height() ? MH_Height() - top : pointer.h;
+    int y, x;
+
+    pointer.at_w = 0;
+    if (x1 <= x0 || y1 <= y0) {
+        return;
+    }
+    dst = (volatile uint16_t*)framebuffer(pointer.fb) + (top + y0) * row + left + x0;
+    src = pointer.image + y0 * pointer.w + x0;
+    for (y = y0; y < y1; y++) {
+        for (x = 0; x < x1 - x0; x++) {
+            *under++ = dst[x];
+            if (src[x] != pointer.key) {
+                dst[x] = src[x];
+            }
+        }
+        dst += row;
+        src += pointer.w;
+    }
+    pointer.at_x = left + x0;
+    pointer.at_y = top + y0;
+    pointer.at_w = x1 - x0;
+    pointer.at_h = y1 - y0;
+}
+
+static int pointer_shown(void) {
+    return pointer.on && pointer.moved && fb_format == MH_FORMAT_RGB565 && screen_ours && !overlay_mode && !logo.on;
+}
+
+// A new frame, in framebuffer `fb`, is about to be shown
+static void pointer_on_frame(int fb) {
+    int x, y;
+
+    pthread_mutex_lock(&pointer.lock);
+    pointer.fb = fb;
+    pointer.at_w = 0;
+    pointer.changed = 0;
+    if (pointer_shown()) {
+        pointer_position(&x, &y);
+        pointer_draw(x, y);
+    }
+    pthread_mutex_unlock(&pointer.lock);
+}
+
+static void* pointer_main(void* arg) {
+    uint32_t seen;
+    int i, x, y;
+
+    (void)arg;
+    MH_PinThreadToCPU1();
+    seen = status[1];
+    while (pointer.running) {
+        // most of a field asleep, the end of it looking every millisecond
+        sleep_ms(13);
+        for (i = 0; i < 30 && pointer.running && status[1] == seen; i++) {
+            sleep_ms(1);
+        }
+        seen = status[1];
+        if (!pointer.running || !MH_IsOpen()) {
+            continue;
+        }
+        pthread_mutex_lock(&pointer.lock);
+        if (pointer.fb >= 0) {
+            if (!pointer_shown()) {
+                pointer_erase();
+            } else {
+                pointer_position(&x, &y);
+                if (pointer.changed || pointer.at_w == 0
+                    || x - pointer.hot_x != pointer.at_x || y - pointer.hot_y != pointer.at_y) {
+                    pointer_erase();
+                    pointer_draw(x, y);
+                    pointer.changed = 0;
+                }
+            }
+        }
+        pthread_mutex_unlock(&pointer.lock);
+    }
+    return NULL;
+}
+
+static void pointer_stop(void) {
+    if (pointer.thread_on) {
+        pointer.running = 0;
+        pthread_join(pointer.thread, NULL);
+        pointer.thread_on = 0;
+    }
+    pointer.fb = -1;
+    pointer.on = 0;
+    pointer.moved = 0;
+}
+
+void MH_SetPointer(const uint16_t* pixels, int w, int h, int hot_x, int hot_y, uint16_t key) {
+    if (!MH_IsOpen()) {
+        return;
+    }
+    pthread_mutex_lock(&pointer.lock);
+    pointer.on = pixels != NULL && w > 0 && h > 0 && w <= POINTER_MAX && h <= POINTER_MAX;
+    if (pointer.on) {
+        memcpy(pointer.image, pixels, w * h * sizeof(*pixels));
+        pointer.w = w;
+        pointer.h = h;
+        pointer.hot_x = hot_x;
+        pointer.hot_y = hot_y;
+        pointer.key = key;
+        pointer.changed = 1;
+    }
+    pthread_mutex_unlock(&pointer.lock);
+    // without a second CPU it moves with the frames
+    if (pointer.on && !pointer.thread_on && cpu1_allowed) {
+        pointer.running = 1;
+        pointer.thread_on = pthread_create(&pointer.thread, NULL, pointer_main, NULL) == 0;
+    }
+}
+
+void MH_MovePointer(int x, int y, float vx, float vy, int32_t mouse_x, int32_t mouse_y) {
+    pthread_mutex_lock(&pointer.lock);
+    pointer.x = x;
+    pointer.y = y;
+    pointer.vx = vx;
+    pointer.vy = vy;
+    pointer.mouse[0] = mouse_x;
+    pointer.mouse[1] = mouse_y;
+    clock_gettime(CLOCK_MONOTONIC, &pointer.since);
+    pointer.moved = 1;
+    pthread_mutex_unlock(&pointer.lock);
+}
+
 // Copy a frame into the next framebuffer and flip to it
 static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
     volatile uint8_t* dst;
@@ -867,6 +1061,7 @@ static void present_to_fpga(const uint8_t* pixels, int pitch, uint32_t at) {
         }
     }
     midi_stamp(dst, row, height, fps_stamp(dst, row, height));
+    pointer_on_frame(next);
     // MH_PresentAtField(): the core takes the newest frame at every vblank, so
     // this one is handed over in the field before its own, not earlier (the
     // frame before it would never be shown). Interlaced, frames are taken at
@@ -1917,7 +2112,7 @@ void MH_ReadInput(mh_input* input) {
     // movement while it was open, taken off its accumulators for good
     static uint32_t held_joy[2], held_keys[16];
     static int held_mouse, held_axis[2][4];
-    static int32_t mouse_off[2], last_mouse[2];
+    static int32_t last_mouse[2];
     static int16_t wheel_off, last_wheel;
     int8_t* axes[4];
     int open;

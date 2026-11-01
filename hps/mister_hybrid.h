@@ -212,6 +212,20 @@ int MH_Interlaced(void);
 void MH_SetFieldRate(int on);
 // 1 while the mode is interlaced and the core takes a frame at every field
 int MH_FieldRate(void);
+// A pointer that moves at every field, however slowly the game draws: the
+// library puts it on the frame on the way to the core, and a thread of its own
+// on the second CPU moves it on the frame being shown (no core change; RGB565
+// only). For a game with a mouse pointer that draws well below the field rate
+// (GemRB, 2026-11-01). The game does not draw the pointer itself.
+// MH_SetPointer(): its picture, w x h pixels, `key` the colour that is not
+// drawn, (hot_x, hot_y) the pixel at the pointer's position; copied. NULL hides
+// it. Call it only when it changes.
+void MH_SetPointer(const uint16_t* pixels, int w, int h, int hot_x, int hot_y, uint16_t key);
+// Once a frame, after reading the input: where the game has the pointer now.
+// From here the library adds the mouse's movement since mouse_x and mouse_y,
+// those of the mh_input the position came from, and vx, vy (pixels a second, a
+// stick that moves the pointer) until the next call.
+void MH_MovePointer(int x, int y, float vx, float vy, int32_t mouse_x, int32_t mouse_y);
 // The flicker filter (host version 18): a core that has it (FLICKER 1 in its
 // core/<Name>.sv: one with a 640x400 or 640x480 mode) has the line Flicker
 // Filter on its OSD's CRT Options page, Light (the default), Strong or Off, greyed out while
