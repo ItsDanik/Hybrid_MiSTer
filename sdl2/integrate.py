@@ -59,6 +59,10 @@ patch("src/audio/SDL_sysaudio.h",
       "extern AudioBootStrap DUMMYAUDIO_bootstrap;\n",
       "extern AudioBootStrap MISTERAUDIO_bootstrap;\nextern AudioBootStrap DUMMYAUDIO_bootstrap;\n")
 
+# SDL's blitters in assembly (build.sh turns them on for the ARM) are .S files,
+# which CMake ignores without the language
+patch("CMakeLists.txt", "project(SDL2 C)\n", "project(SDL2 C ASM)\n")
+
 patch("CMakeLists.txt",
       "if(SDL_AUDIO)\n  # CheckDummyAudio/CheckDiskAudio - valid for all platforms\n",
       """set_option(SDL_MISTER "MiSTer hybrid core video, audio and input drivers" OFF)

@@ -36,10 +36,14 @@ if [ "$TARGET" = mister ]; then
 fi
 JOBS=$(nproc)
 mkdir -p "$WORK/$TARGET"
+# On the ARM, SDL's blitters and fills in assembly (off by default). Alpha
+# blending a whole screen in C took GemRB 30% of a frame.
+SDL_ASM=
+[ "$TARGET" = mister ] && SDL_ASM="-DSDL_ARMSIMD=ON -DSDL_ARMNEON=ON -DARMSIMD_FOUND=1 -DARMNEON_FOUND=1"
 
 # Only what a hybrid core can use: the MiSTer drivers, the dummy and disk
 # drivers for running headless, the software renderer
-cmake -S "$WORK/src/$SDL" -B "$WORK/$TARGET/$SDL" $COMMON \
+cmake -S "$WORK/src/$SDL" -B "$WORK/$TARGET/$SDL" $COMMON $SDL_ASM \
     -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST=OFF -DSDL_MISTER=ON \
     -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_RPI=OFF -DSDL_VIVANTE=OFF -DSDL_DIRECTFB=OFF \
     -DSDL_OFFSCREEN=OFF -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF \
