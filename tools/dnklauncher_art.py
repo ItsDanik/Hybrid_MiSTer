@@ -142,7 +142,7 @@ def main():
         repos = sorted(glob.glob(os.path.expanduser("~/MiSTer-*")))
     pw = mock.PREV_X[1] - mock.PREV_X[0]
     logo_box = (pw - 24, mock.LOGO_H)
-    dlogo_box = mock.details_logo_box()[2:]
+    dlogo_box = mock.DLOGO
     plogo_box = mock.ports_logo_box()
     clogo_box = CLOGO_BOX
     index, total, missing = [], 0, []

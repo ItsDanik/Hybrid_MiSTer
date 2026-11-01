@@ -1127,7 +1127,7 @@ def details_facts(game, port):
 
 
 def layer_details_info(F, game, port, logo=True):
-    """The top right panel's content: logo, title, the facts"""
+    """The top right panel's content: the logo, the star if a favourite, the facts"""
     c = Canvas(ground=False)
     x0, y0, x1, y1 = D_INFO_PANEL
     pw = x1 - x0
@@ -1135,31 +1135,36 @@ def layer_details_info(F, game, port, logo=True):
         c.over(layer_details_logo(game))
     bx, by, bw, bh = details_logo_box()
     ty = by + bh + 8
-    title = clip(game["title"], F.title, pw - 28 - (18 if game["id"] in FAVOURITES else 0))
-    c.text((x0 + 14, ty), title, F.title, INK)
     if game["id"] in FAVOURITES:
-        c.star(x0 + 24 + F.title.getlength(title), ty + 12, 7, GOLD)
+        c.star(x1 - 16, y0 + 16, 7, GOLD)
     layer = c.layer()
-    ImageDraw.Draw(layer).line((x0 + 14, ty + 31, x1 - 14, ty + 31), fill=EDGE + (90,))
+    ImageDraw.Draw(layer).line((x0 + 14, ty, x1 - 14, ty), fill=EDGE + (90,))
     c.over(layer)
     lw = max(F.small.getlength(k) for k, v, ink in details_facts(game, port)) + 12
     for n, (k, v, ink) in enumerate(details_facts(game, port)):
-        y = ty + 39 + n * 16
+        y = ty + 8 + n * 16
         c.text((x0 + 14, y + 1), k, F.small, DIM)
         c.text((x0 + 14 + lw, y), clip(v, F.chip, pw - 28 - lw), F.chip, ink)
     return c.im
 
 
+DLOGO = (252, 77)   # a logo's size at most (.dlogo): as wide as the box at the largest Screen margin, to fit at every one
+
+
 def details_logo_box():
     x0, y0, x1, y1 = D_INFO_PANEL
-    return x0 + 12, y0 + 10, x1 - x0 - 24, 46
+    return x0 + 12, y0 + 10, x1 - x0 - 24, DLOGO[1]
+
+
+def details_logo_xy(logo):
+    bx, by, bw, bh = details_logo_box()
+    return bx + (bw - logo.width) // 2, by + (bh - logo.height) // 2
 
 
 def layer_details_logo(game):
-    bx, by, bw, bh = details_logo_box()
-    logo = logo_picture(game["logo"], bw, bh)
+    logo = logo_picture(game["logo"], *DLOGO)
     out = blank()
-    out.alpha_composite(logo, (bx + (bw - logo.width) // 2, by + bh - logo.height))
+    out.alpha_composite(logo, details_logo_xy(logo))
     return out
 
 
@@ -1772,9 +1777,8 @@ def anim_details(F, badge_font, ports, back=False):
     big = logo_picture(g["logo"], pw - 24, LOGO_H)
     sy = preview_shot_xy()[1]
     l0 = (PREV_X[0] + (pw - big.width) // 2, sy - 12 - big.height, big.width, big.height)
-    bx, by, bw, bh = details_logo_box()
-    small = logo_picture(g["logo"], bw, bh)
-    l1 = (bx + (bw - small.width) // 2, by + bh - small.height, small.width, small.height)
+    small = logo_picture(g["logo"], *DLOGO)
+    l1 = details_logo_xy(small) + (small.width, small.height)
     src_logo = Image.open(g["logo"]).convert("RGBA")
     src_logo = src_logo.crop(src_logo.getbbox())
     frames = []
