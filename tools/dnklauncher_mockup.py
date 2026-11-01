@@ -101,7 +101,10 @@ def apply_theme(name):
     PINK, PEACH = rgb(t["bar"][0]), rgb(t["bar"][1])
     GOLD, CYAN, CORAL = rgb(t["gold"]), rgb(t["accent"]), rgb(t["alert"])
 
-M = 30                          # from the sides; a 15kHz screen hides some of them
+# Screen margin in Options (Danik, 2026-11-01): what is on the screen moves that
+# many pixels in from all its edges. 0 to 10 in twos; DNK_MOCK_MARGIN for a mock-up.
+MARGIN = int(os.environ.get("DNK_MOCK_MARGIN", 0))
+M = 30 + MARGIN                 # from the sides; a 15kHz screen hides some of them
 
 # The player's choice in Options (Danik, 2026-10-25: Chakra Petch the default;
 # their places in tools/dnklauncher_fonts.py's ranking by flicker after them)
@@ -215,9 +218,9 @@ class Canvas:
         d.line((x0 + radius, y0 + 1, x1 - radius, y0 + 1), fill=(255, 255, 255, 50))   # light from above
         self.over(body)
 
-    def text(self, xy, s, font, colour, anchor="la"):
+    def text(self, xy, s, font, colour, anchor="la", alpha=255):
         layer = self.layer()
-        ImageDraw.Draw(layer).text(xy, s, font=font, fill=colour + (255,), anchor=anchor)
+        ImageDraw.Draw(layer).text(xy, s, font=font, fill=colour + (alpha,), anchor=anchor)
         self.over(layer)
 
     def bar(self, box, radius=0, panel=None):
@@ -378,12 +381,13 @@ def load_ports(repos):
 # The layout. No strip of text under the list: the main screen is the list
 # and the artwork, and A opens the game's Details page with everything else.
 
-HEAD = (19, 75)           # the MiSTer logo and the sort modes
-MAIN = (83, 393)          # the pages' panels (Details, Options, the ports page)
-FOOT = (405, 441)         # the buttons and the badge
+HEAD = (19 + MARGIN, 75 + MARGIN)     # the MiSTer logo and the sort modes
+# the pages' panels (Details, Options, the ports page): the gaps above and below go first
+MAIN = (83 + MARGIN - min(MARGIN, 4), 393 - MARGIN + min(MARGIN, 4))
+FOOT = (405 - MARGIN, 441 - MARGIN)   # the buttons and the badge
 HINT_ROW = 19             # the legend's second row under its first
-LIST_X = (M, 330)
-PREV_X = (342, W - M)
+LIST_X = (M, 330 - MARGIN)
+PREV_X = (342 - MARGIN, W - M)
 ROW = 24
 SB_W = 4                  # the scroll bar's place at a list panel's right, within its rim: the bar ends before it
 SHOT = (256, 192)         # the screenshot, in the preview and in Details
@@ -682,7 +686,8 @@ def layer_chips(F, family, on, chips=None):
     sel = FAMILIES[family][1]["select"][0]
     sw = 18 if sel in "+-" else round(F.small.getlength(sel)) + 8
     left = min(x for x, w in rects.values())
-    button(c, F, family, places(family)["sort"], left - 6 - sw, HEAD[0] + 33)
+    if chips is not BAN_CHIPS:   # Select's symbol before them; Systems' filters without it (Danik, 2026-11-01)
+        button(c, F, family, places(family)["sort"], left - 6 - sw, HEAD[0] + 33)
     y0, y1 = HEAD[0] + 32, HEAD[0] + 52
     layer = c.layer()
     d = ImageDraw.Draw(layer)
@@ -885,9 +890,10 @@ def layer_hints(F, hints, badge_font, family, boxes=None, second=None):
 # does what it says (Exit's question: its two), on a sort mode picks it; the
 # right button is Back everywhere, the middle one Favourite (the list and
 # Details); the wheel moves the cursor (in Details to the game before or
-# after), and the scroll bar can be held and dragged. Options: a click on a row
-# puts the cursor on it, on the cursor's row takes the next value, on its
-# arrows the one before or after; the ports page: on a row puts the cursor on
+# after), and the scroll bar can be held and dragged. Options: a click on a page
+# of the rail opens it, on a row puts the cursor on it, on the cursor's row takes
+# the next value (About: opens), on its arrows the one before or after, on a
+# switch flips it; the ports page: on a row puts the cursor on
 # it, on the cursor's row or on a tickbox ticks it. POINTERS: its shapes, both
 # in the text's colour with a rim against it, the player's choice in Options
 # (Pointer: Danik, 2026-10-27, arrow or dart; drafts in the bar's colours not
@@ -1265,37 +1271,143 @@ def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
 
 OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settings.txt
     ("Font", "font", "The font of every screen here. Chakra Petch unless you pick another."),
-    ("Colours", "colours", "The colours of every screen here. MiSTer Purple unless you pick another."),
+    ("Palette", "colours", "The colours of every screen here. MiSTer Purple unless you pick another."),
     ("Pattern", "pattern", "A pattern over the colours, moving if you like. Checker unless you pick another; "
                            "Off leaves the colours alone."),
     ("Pattern intensity", "intensity", "How much darker the pattern's squares, lines or dots are than the "
                                        "colours under them. 25% unless you pick another."),
     ("Pattern strength", "strength", "Where the pattern shows: as much everywhere, or strongest at the top, the "
                                      "bottom or the edges of the screen, fading away from there."),
-    ("Pattern direction", "direction", "Where the pattern moves. Down and right unless you pick another."),
+    ("Pattern direction", "direction", "Which way the pattern moves."),
     ("Pattern speed", "speed", "How fast the pattern moves: Normal is 30 pixels a second. Still stops it."),
-    ("Flicker filter", "filter", "On a 15kHz screen 640x480 is interlaced: the filter softens what would "
-                                 "blink. HDMI and 31kHz screens never need it."),
+    ("Flicker filter", "filter", "On a 15kHz screen 640x480 is interlaced: the filter softens what would blink, "
+                                 "Light a little, Strong fully. The OSD's Flicker Filter is the same."),
+    ("Screen margin", "margin", "Moves everything in from the screen's edges, for a CRT that hides them, without "
+                                "changing the picture's shape as CRT Options in the OSD do."),
     ("Button symbols", "buttons", "Auto shows the buttons of the controller you use, when it is a Switch, "
                                   "Xbox or PlayStation one. Pick one for any other."),
     ("Pointer", "pointer", "The mouse's pointer, shown while the mouse moves: an arrow or a dart. The arrow "
                            "unless you pick the other."),
+    ("Layout", "layout", "How the games are shown: a list beside the selected game's picture, or a carousel of "
+                         "their pictures. L2 and R2 change it at any time."),
     ("Game art", "art", "What a game shows in the list and the carousel: its logo and screenshot, or its cover. "
                         "A game with no cover keeps its logo and screenshot."),
-    ("Show hidden", "hidden", "On shows what you hid, dimmed and marked, so that you can unhide it: hold Select "
-                              "and press Favourite. It stays hidden when this is off."),
+    ("Sort games", "sort", "How the list is sorted when the frontend starts. Select changes it at any time."),
     ("Start in", "start", "Where the launcher opens: the System you were in last, on the game you were on, "
                           "or the Systems screen. The last System unless you pick the other."),
-    ("Cores not installed", "missing", "Off shows only what is on this MiSTer. On adds the other cores of the MiSTer "
+    ("Show hidden", "hidden", "On shows what you hid, dimmed and marked, so that you can unhide it: hold Select "
+                              "and press Favourite. It stays hidden when this is off."),
+    ("Show missing cores", "missing", "Off shows only what is on this MiSTer. On adds the other cores of the MiSTer "
      "database at the bottom of Systems, greyed out, to see what there is."),
     ("System logos", "logos", "One colour draws the logos on Systems in the screens' text colour. In colour shows "
      "each logo's own colours, where it has them. One colour unless you pick the other."),
-    ("Sort games", "sort", "How the list is sorted when the frontend starts. Select changes it at any time."),
+    ("About", "about", "The launcher's version, its credits and the Patreon."),
 ]
+# Danik's design of 2026-11-01 (the workbench's Side rail): the pages down the
+# left, their rows on the right, both in sight. The page follows the rail's
+# cursor; Right or OK goes into the rows, Back one level up; L1 / R1 the page
+# wherever the cursor is.
+OPTION_PAGES = (
+    ("Theme", "palette", ("font", "colours")),
+    ("Background", "wave", ("pattern", "intensity", "strength", "direction", "speed")),
+    ("Screen", "screen", ("filter", "margin")),
+    ("Controls", "pad", ("buttons", "pointer")),
+    ("Library", "list", ("layout", "art", "sort", "start", "hidden", "missing", "logos", "about")),
+)
+OPTION_BY_KEY = {o[1]: o for o in OPTIONS}
+OPT_GREYED = ("intensity", "strength", "direction", "speed")   # with Pattern Off: greyed out, the cursor passes them
+OPT_SWITCHES = ("hidden", "missing")   # Off and On: a switch
+OPT_GREY_ALPHA = 110
 OPT_ROW = 34
 OPT_HELP = (MAIN[1] - 42, MAIN[1])      # the help box under the list: 2 lines of the small font
 OPT_LIST = (MAIN[0], OPT_HELP[0] - 10)
 OPT_ROWS = (OPT_LIST[1] - OPT_LIST[0] - 20) // OPT_ROW
+OPT_RAIL_W = 150                        # the rail's panel, from M; the rows' panel 10 to its right
+OPT_RAIL_ROW = 30
+OPT_RAIL_BAR = 26
+OPT_X0 = M + OPT_RAIL_W + 10
+OPT_FADE = 11                           # a page's rows and help coming in (180 ms)
+ICON_SIZE = 18                          # option_icon_mask(): its centre at 9, 9
+ICON_SS = 8
+
+
+def _arc(cx, cy, r, a0, a1, n=48):
+    return [(cx + r * math.cos(a0 + (a1 - a0) * i / n), cy + r * math.sin(a0 + (a1 - a0) * i / n)) for i in range(n + 1)]
+
+
+def _quad(p0, p1, p2, n=24):
+    return [tuple((1 - t) ** 2 * a + 2 * t * (1 - t) * b + t * t * c for a, b, c in zip(p0, p1, p2))
+            for t in (i / n for i in range(n + 1))]
+
+
+def _cubic(p0, p1, p2, p3, n=24):
+    return [tuple((1 - t) ** 3 * a + 3 * t * (1 - t) ** 2 * b + 3 * t * t * (1 - t) * c + t ** 3 * d
+                  for a, b, c, d in zip(p0, p1, p2, p3)) for t in (i / n for i in range(n + 1))]
+
+
+def _rrect(x0, y0, x1, y1, r):
+    return (_arc(x1 - r, y0 + r, r, -math.pi / 2, 0, 8) + _arc(x1 - r, y1 - r, r, 0, math.pi / 2, 8) +
+            _arc(x0 + r, y1 - r, r, math.pi / 2, math.pi, 8) + _arc(x0 + r, y0 + r, r, math.pi, 1.5 * math.pi, 8))
+
+
+def option_icon_mask(name):
+    """A page's icon on the rail, drawn in a square of 24 units from -12 to 12
+    and shown 16 pixels across: the coverage, coloured as the rail's text (the
+    workbench's icon(); tools/make_assets.py writes them)"""
+    s = ICON_SS * ICON_SIZE / 24 * 24 / 27
+    k = 16 / 24 * ICON_SS   # a unit in the supersampled picture
+    size = ICON_SIZE * ICON_SS
+    im = Image.new("L", (size, size), 0)
+    d = ImageDraw.Draw(im)
+    width = 2.2 * k
+
+    def line(*pts, closed=False):
+        p = [(size / 2 + x * k, size / 2 + y * k) for x, y in pts]
+        if closed:
+            p.append(p[0])
+        d.line(p, fill=255, width=round(width), joint="curve")
+        for x, y in (p[0], p[-1]):
+            d.ellipse((x - width / 2, y - width / 2, x + width / 2, y + width / 2), fill=255)
+
+    def dot(x, y, r=1.6):
+        cx, cy, q = size / 2 + x * k, size / 2 + y * k, r * k
+        d.ellipse((cx - q, cy - q, cx + q, cy + q), fill=255)
+
+    if name == "palette":
+        arc = _arc(0, 0, 10, 0.4, 5.9)
+        line(*(arc + _quad(arc[-1], (3, -2), (3, 3)) + _quad((3, 3), (3, 7), (9, 4))))
+        for x, y in ((-5, -3), (0, -6), (-5, 3), (4, -5)):
+            dot(x, y)
+    elif name == "wave":
+        for dy in (-6, 0, 6):
+            line(*(_cubic((-10, dy), (-5, dy - 6), (-3, dy + 6), (0, dy)) + _cubic((0, dy), (3, dy - 6), (5, dy + 6), (10, dy))))
+    elif name == "screen":
+        line(*_rrect(-10, -8, 10, 6, 2), closed=True)
+        line((-4, 10), (4, 10))
+        line((0, 6), (0, 10))
+    elif name == "pad":
+        line(*_rrect(-11, -6, 11, 7, 6), closed=True)
+        line((-7, 0.5), (-3, 0.5))
+        line((-5, -1.5), (-5, 2.5))
+        dot(4, -1)
+        dot(7, 2)
+    elif name == "list":
+        for dy in (-7, 0, 7):
+            dot(-9, dy)
+            line((-5, dy), (10, dy))
+    return im.reduce(ICON_SS)
+
+
+OPT_ICONS = tuple(p[1] for p in OPTION_PAGES)
+
+
+def page_options(page, hide=()):
+    """The rows of a page, without those this MiSTer has no use for"""
+    return [OPTION_BY_KEY[k] for k in OPTION_PAGES[page][2] if k not in hide]
+
+
+def option_grey(option, values):
+    return option[1] in OPT_GREYED and values.get("pattern") == "Off"
 
 
 def options_first(cursor, n):
@@ -1306,35 +1418,117 @@ def options_first(cursor, n):
 
 
 def option_row(c, F, fonts, values, option, x0, x1, y, sel):
-    """An option's row from y: its label, its value and the arrows"""
+    """An option's row from y: its label and its value with the arrows, or its
+    switch; greyed out where Pattern is Off; About its label alone"""
     label, key, help_text = option
     mid = y + 15
-    c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
+    grey = option_grey(option, values)
+    if grey:
+        c.text((x0 + 14, mid), label, F.row, DIM, anchor="lm", alpha=OPT_GREY_ALPHA)
+    else:
+        c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
+    if key == "about":
+        return
     value = values.get(key, "Off")
+    if key in OPT_SWITCHES:
+        on = value == "On"
+        a, b = x1 - 58, x1 - 24
+        ss = 4
+        layer = Image.new("RGBA", ((b - a + 1) * ss, 17 * ss), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        track = (SEL_INK if sel else CYAN) + (255,) if on else (SEL_INK if sel else DIM) + (90,)
+        d.rounded_rectangle((0, 0, (b - a) * ss, 16 * ss), 8 * ss, fill=track)
+        kx = (b - a - 8 if on else 8) * ss
+        knob = PINK if sel else PANEL if on else INK
+        d.ellipse((kx - 6 * ss, 2 * ss, kx + 6 * ss, 14 * ss), fill=knob + (255,))
+        over = c.layer()
+        over.paste(layer.reduce(ss), (a, mid - 8))
+        c.over(over)
+        return
     vf = fonts[value][1] if key == "font" else F
     vtext = fonts[value][0] if key == "font" else THEMES[value]["label"] if key == "colours" else value
     vx = x1 - 34 - round(vf.row.getlength(vtext))
-    c.text((vx, mid), vtext, vf.row, SEL_INK if sel else CYAN, anchor="lm")
+    if grey:
+        c.text((vx, mid), vtext, vf.row, DIM, anchor="lm", alpha=OPT_GREY_ALPHA)
+    else:
+        c.text((vx, mid), vtext, vf.row, SEL_INK if sel else CYAN, anchor="lm")
     layer = c.layer()     # the arrows: left and right change it
     d = ImageDraw.Draw(layer)
-    a = (SEL_INK if sel else DIM) + (255,)
+    a = DIM + (OPT_GREY_ALPHA,) if grey else (SEL_INK if sel else DIM) + (255,)
     d.polygon((vx - 14, mid, vx - 8, mid - 5, vx - 8, mid + 5), fill=a)
     d.polygon((x1 - 20, mid, x1 - 26, mid - 5, x1 - 26, mid + 5), fill=a)
     c.over(layer)
 
 
-def layer_options_list(F, fonts, cursor, values, options=None):
-    """The options a row each, over the whole width; a scroll bar once there
-    are more than fit"""
-    options = options or OPTIONS
+def rail_row(c, F, n, x0, y, sel):
+    """A page on the rail: its icon and its name"""
+    name, icon, _ = OPTION_PAGES[n]
+    ink = SEL_INK if sel else INK
+    mask = option_icon_mask(icon)
+    pic = Image.new("RGBA", mask.size, ink + (0,))
+    pic.putalpha(mask)
+    layer = c.layer()
+    layer.paste(pic, (x0 + 20 - ICON_SIZE // 2, y + 13 - ICON_SIZE // 2))
+    c.over(layer)
+    c.text((x0 + 34, y + 13), name, F.chip, ink, anchor="lm")
+
+
+def layer_options_rail(F, page, focus):
+    """The pages: the bar's colours on the page while the cursor is on the rail,
+    the rim's colour, faint, while it is in the rows"""
     c = Canvas(ground=False)
-    x0, x1 = M, W - M
+    x0, x1 = M, M + OPT_RAIL_W
+    y0, y1 = OPT_LIST
+    box = (x0, y0, x1, y1)
+    c.panel(box)
+    for n in range(len(OPTION_PAGES)):
+        y = y0 + 10 + n * OPT_RAIL_ROW
+        sel = focus == "rail" and n == page
+        if sel:
+            c.bar((x0 + 1, y, x1 - 1, y + OPT_RAIL_BAR), panel=box)
+        elif n == page:
+            layer = c.layer()
+            ImageDraw.Draw(layer).rectangle((x0 + 1, y, x1 - 2, y + OPT_RAIL_BAR - 1), fill=EDGE + (60,))
+            c.over(clip_to_panel(layer, box))
+        rail_row(c, F, n, x0, y, sel)
+    return c.im
+
+
+def layer_options_rail_glide(F, bar):
+    """The rail with the cursor's bar on row bar (a fraction while it glides)"""
+    c = Canvas(ground=False)
+    x0, x1 = M, M + OPT_RAIL_W
     y0, y1 = OPT_LIST
     c.panel((x0, y0, x1, y1))
+    under = Canvas(ground=False)
+    top = y0 + 10
+    under.bar((x0 + 1, top, x1 - 1, top + len(OPTION_PAGES) * OPT_RAIL_ROW))
+    for n in range(len(OPTION_PAGES)):
+        rail_row(c, F, n, x0, top + n * OPT_RAIL_ROW, False)
+        rail_row(under, F, n, x0, top + n * OPT_RAIL_ROW, True)
+    by = top + round(bar * OPT_RAIL_ROW)
+    mask = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(mask).rectangle((x0 + 1, by, x1 - 2, by + OPT_RAIL_BAR - 1), fill=255)
+    c.im.paste(under.im.convert("RGBA"), (0, 0), mask)
+    return c.im
+
+
+def layer_options_rows_panel():
+    c = Canvas(ground=False)
+    c.panel((OPT_X0, OPT_LIST[0], W - M, OPT_LIST[1]))
+    return c.im
+
+
+def layer_options_list(F, fonts, cursor, values, options, focus="list"):
+    """The page's rows, no bar while the cursor is on the rail; a scroll bar
+    once there are more than fit"""
+    c = Canvas(ground=False)
+    x0, x1 = OPT_X0, W - M
+    y0, y1 = OPT_LIST
     first = options_first(cursor, len(options))
     for n in range(first, min(len(options), first + OPT_ROWS)):
         y = y0 + 10 + (n - first) * OPT_ROW
-        sel = n == cursor
+        sel = focus == "list" and n == cursor
         if sel:
             c.bar((x0 + 1, y, x1 - SB_W, y + 30), panel=(x0, y0, x1, y1))
         option_row(c, F, fonts, values, options[n], x0, x1, y, sel)
@@ -1342,12 +1536,11 @@ def layer_options_list(F, fonts, cursor, values, options=None):
     return c.im
 
 
-def option_strips(F, fonts, values, options=None):
+def option_strips(F, fonts, values, options):
     """The options one under the other, as they are and as they are under the
     cursor's bar (its colours without a break: layer_option_rows() cuts the
     bar out where it is), as the game list's strips"""
-    options = options or OPTIONS
-    w = W - 2 * M
+    w = W - M - OPT_X0
     out = []
     for sel in (False, True):
         c = Canvas(ground=False, size=(w, len(options) * OPT_ROW))
@@ -1364,7 +1557,7 @@ def layer_option_rows(strips, n_total, scroll, bar):
     fractions while they move), as layer_rows() the game list's: Options'
     list is its panel and these over it"""
     normal, selected = strips
-    x0, x1 = M, W - M
+    x0, x1 = OPT_X0, W - M
     y0, y1 = OPT_LIST
     w, h = x1 - x0, OPT_ROWS * OPT_ROW
     top = round(scroll * OPT_ROW)
@@ -1381,31 +1574,103 @@ def layer_option_rows(strips, n_total, scroll, bar):
     return out
 
 
-def layer_options_help(F, cursor, options=None):
-    """What the option under the cursor does: one or two lines of the small font, nothing else"""
-    label, key, help_text = (options or OPTIONS)[cursor]
+def options_help_text(page, cursor, options, focus):
+    if focus == "rail":   # on the rail: what the page has
+        return ", ".join(o[0] for o in options if o[1] != "about") + "."
+    return options[cursor][2]
+
+
+def layer_options_help_panel():
+    c = Canvas(ground=False)
+    c.panel((M, OPT_HELP[0], W - M, OPT_HELP[1]))
+    return c.im
+
+
+def layer_options_help_text(F, help_text):
+    """What the option under the cursor does, or what the page has: one or two lines of the small font"""
     c = Canvas(ground=False)
     x0, x1 = M, W - M
     y0, y1 = OPT_HELP
-    c.panel((x0, y0, x1, y1))
     lines = wrap(help_text, F.small, x1 - x0 - 28)
-    assert len(lines) <= 2, (F.label, label, lines)
+    assert len(lines) <= 2, (F.label, help_text, lines)
     top = y0 + (y1 - y0 - len(lines) * 15) // 2
     for n, line in enumerate(lines):
         c.text((x0 + 14, top + n * 15), line, F.small, DIM)
     return c.im
 
 
+# About (the workbench's choice; its words mine, Danik may change them): over
+# the rows and the help, the rail staying
+ABOUT = (OPT_X0, MAIN[0], W - M, MAIN[1])
+ABOUT_LINES = (
+    ("head", "dnkLauncher", INK, 28),
+    ("row", "The frontend of the hybrid ports", INK, 22),
+    ("row", "Hybrid Core Framework v%d" % VERSION, CYAN, 22),
+    ("row", "By Danik: patreon.com/itsdanik", CYAN, 32),
+    ("small", "Inspired by MiSTer Frontier by MiSTer Organize. Thank you!", DIM, 15),
+    ("gap", "", DIM, 8),
+    ("small", "Fonts: Chakra Petch, Nunito, Atkinson Hyperlegible, Rubik and Lexend, under the SIL Open Font "
+              "License.", DIM, 15),
+    ("gap", "", DIM, 8),
+    ("small", "System logos: es-theme-carbon by Rookervik, based on simple by Nils Bonenberger, CC BY-NC-SA 2.0; "
+              "tty2oled+; Wikimedia Commons. The logos are trademarks of their owners.", DIM, 15),
+)
+
+
+def layer_options_about(F):
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = ABOUT
+    c.panel(ABOUT)
+    y = y0 + 14
+    for kind, text, colour, step in ABOUT_LINES:
+        if kind == "gap":
+            y += step
+            continue
+        font = {"head": F.head, "row": F.row, "small": F.small}[kind]
+        for line in wrap(text, font, x1 - x0 - 28):
+            c.text((x0 + 14, y), line, font, colour)
+            y += step
+    assert y <= y1 - 6, (F.label, y, y1)
+    return c.im
+
+
+OPTION_HINTS_RAIL = [("ok", "Open"), ("back", "Back")]
 OPTION_HINTS = [("ok", "Change"), ("back", "Back")]
+OPTION_SECOND = [("page", "Previous / Next page")]
 
 
-def options_screen(F, badge_font, fonts, cursor, values, family="ps", options=None):
+def option_hints(options, cursor, focus):
+    if focus == "about":
+        return [("back", "Back")]
+    if focus == "rail" or options[cursor][1] == "about":
+        return OPTION_HINTS_RAIL
+    return OPTION_HINTS
+
+
+def options_layers(F, badge_font, fonts, page, cursor, values, family="ps", focus="list", hide=()):
+    options = page_options(page, hide)
+    layers = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, "Options"),
+              "rail": layer_options_rail(F, page, "list" if focus == "about" else focus),
+              "hints": layer_hints(F, option_hints(options, cursor, focus), badge_font, family,
+                                   second=None if focus == "about" else OPTION_SECOND),
+              "badge": layer_badge(badge_font)}
+    if focus == "about":
+        layers["about"] = layer_options_about(F)
+    else:
+        layers["panel"] = layer_options_rows_panel()
+        layers["rows"] = layer_options_list(F, fonts, cursor, values, options, focus)
+        layers["help_panel"] = layer_options_help_panel()
+        layers["help"] = layer_options_help_text(F, options_help_text(page, cursor, options, focus))
+    return layers
+
+
+OPTIONS_ORDER = ["logo", "title", "rail", "panel", "rows", "about", "help_panel", "help", "hints", "badge"]
+
+
+def options_screen(F, badge_font, fonts, page, cursor, values, family="ps", focus="list", hide=()):
     """fonts: the Fonts of every choice, the font row's value shown in itself"""
-    layers = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, "Options"),
-              "left": layer_options_list(F, fonts, cursor, values, options),
-              "right": layer_options_help(F, cursor, options),
-              "hints": layer_hints(F, OPTION_HINTS, badge_font, family), "badge": layer_badge(badge_font)}
-    return compose(layers, ["logo", "title", "count", "left", "right", "hints", "badge"]).convert("RGB")
+    L = options_layers(F, badge_font, fonts, page, cursor, values, family, focus, hide)
+    return compose(L, [k for k in OPTIONS_ORDER if k in L]).convert("RGB")
 
 
 # The animations, a frame per field (59.64 a second). Whatever the player
@@ -1545,22 +1810,24 @@ def anim_details(F, badge_font, ports, back=False):
 
 
 def anim_options(F, badge_font, ports, fonts, values):
-    """Start: the main screen's panels sink and go, Options' rise"""
+    """Start: the main screen's panels sink and go, Options' rise, the cursor
+    on the rail's first page; the header's System goes, "Options" comes"""
     m = Main(F, badge_font, ports, "A-Z", "doom2")
     L = m.frame_layers()
-    base = compose({k: L[k] for k in ("ground", "logo", "title", "badge")}, ["logo", "title", "badge"])
-    left, right = layer_options_list(F, fonts, 0, values), layer_options_help(F, 0)
-    opt_count = layer_count(F, "Options")
-    opt_hints = layer_hints(F, OPTION_HINTS, badge_font, m.family)
+    O = options_layers(F, badge_font, fonts, 0, 0, values, m.family, "rail")
+    base = compose({k: L[k] for k in ("ground", "logo", "badge")}, ["logo", "badge"])
+    left = compose({"ground": blank(), "rail": O["rail"], "panel": O["panel"], "rows": O["rows"]}, ["rail", "panel", "rows"])
+    right = compose({"ground": blank(), "help_panel": O["help_panel"], "help": O["help"]}, ["help_panel", "help"])
     leaving = [(["list_panel", "rows"], 0, 7), (["prev_panel", "prev_logo", "prev_shot"], 1, 8)]
     frames = []
     for f in range(20):
         fr = base.copy()
+        fr.alpha_composite(place(L["title"], alpha=1 - span(f, 0, 6)))
         fr.alpha_composite(place(L["chips"], alpha=1 - span(f, 0, 6)))
         fr.alpha_composite(place(L["count"], alpha=1 - span(f, 0, 6)))
-        fr.alpha_composite(place(opt_count, alpha=span(f, 5, 12)))
+        fr.alpha_composite(place(O["title"], alpha=span(f, 5, 12)))
         fr.alpha_composite(place(L["hints"], alpha=1 - span(f, 0, 6)))
-        fr.alpha_composite(place(opt_hints, alpha=span(f, 6, 13)))
+        fr.alpha_composite(place(O["hints"], alpha=span(f, 6, 13)))
         for names, a, b in leaving:
             p = ease_in_out(span(f, a, b))
             if p < 1:
@@ -1575,29 +1842,45 @@ def anim_options(F, badge_font, ports, fonts, values):
 
 
 def anim_options_cursor(F, badge_font, ports, fonts, values):
-    """Down Options from its sixth row to its last: the bar glides, the list
-    scrolls when the bar comes within two rows of its edge, as the game
+    """Down the Library page from its sixth row to its last: the bar glides, the
+    list scrolls when the bar comes within two rows of its edge, as the game
     list's (anim_cursor()); what the option does changes at once"""
-    m = Main(F, badge_font, ports, "A-Z", "doom2")
-    L = m.frame_layers()
-    panel = Canvas(ground=False)
-    panel.panel((M, OPT_LIST[0], W - M, OPT_LIST[1]))
-    layers = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, "Options"),
-              "left": panel.im}
-    fixed = compose(layers, ["logo", "title", "count", "left"])
-    hints = layer_hints(F, OPTION_HINTS, badge_font, m.family)
-    strips = option_strips(F, fonts, values)
-    n = len(OPTIONS)
+    page = len(OPTION_PAGES) - 1
+    options = page_options(page)
+    O = options_layers(F, badge_font, fonts, page, 0, values, focus="list")
+    fixed = compose({k: O[k] for k in ("ground", "logo", "title", "rail", "panel", "help_panel")},
+                    ["logo", "title", "rail", "panel", "help_panel"])
+    strips = option_strips(F, fonts, values, options)
+    n = len(options)
     stops = [(c, options_first(c, n)) for c in range(5, n)]
     frames = []
     for (c0, f0), (c1, f1) in zip(stops, stops[1:]):
+        hints = layer_hints(F, option_hints(options, c1, "list"), badge_font, "ps", second=OPTION_SECOND)
         for f in range(14):
             e = ease_out(span(f, 0, 7))
             fr = fixed.copy()
             fr.alpha_composite(layer_option_rows(strips, n, lerp(f0, f1, e), lerp(c0, c1, e)))
-            for layer in (layer_options_help(F, c1), hints, L["badge"]):
+            for layer in (layer_options_help_text(F, options[c1][2]), hints, O["badge"]):
                 fr.alpha_composite(layer)
             frames.append(fr.convert("RGB"))
+    return frames
+
+
+def anim_options_page(F, badge_font, fonts, values):
+    """Down the rail, from a page to the next: the bar glides; the new page's
+    rows and its help come in over OPT_FADE fields, the panels staying"""
+    O = options_layers(F, badge_font, fonts, 0, 0, values, focus="rail")
+    N = options_layers(F, badge_font, fonts, 1, 0, values, focus="rail")
+    fixed = compose({k: O[k] for k in ("ground", "logo", "title", "panel", "help_panel", "hints", "badge")},
+                    ["logo", "title", "panel", "help_panel", "hints", "badge"])
+    frames = []
+    for f in range(OPT_FADE + 2):
+        fr = fixed.copy()
+        fr.alpha_composite(layer_options_rail_glide(F, ease_out(span(f, 0, 7))))
+        p = ease_out(span(f, 0, OPT_FADE))
+        fr.alpha_composite(place(N["rows"], alpha=p))
+        fr.alpha_composite(place(N["help"], alpha=p))
+        frames.append(fr.convert("RGB"))
     return frames
 
 
@@ -1853,6 +2136,7 @@ class ScummMain(Main):
 
     def __init__(self, F, badge_font, games, launcher, mode, cursor_id, family="ps"):
         self.F, self.badge_font, self.family, self.mode = F, badge_font, family, mode
+        self.art, self.shift = "shot", False   # its artwork alone, whatever Game art says
         self.games = games
         self.rows = [("game", "ScummVM launcher", launcher, "")] + sv_rows(games, mode)
         self.count = "%d games" % len(games)
@@ -1863,16 +2147,14 @@ class ScummMain(Main):
     def preview_logo(self, g, dx=0.0):
         if g.get("launcher"):
             return layer_preview_logo(g, dx)
-        pw = PREV_X[1] - PREV_X[0]
-        im = title_picture(self.F, g["title"], pw - 24, LOGO_H, 26)
-        out = blank()
-        out.alpha_composite(im, (PREV_X[0] + (pw - im.width) // 2 + round(dx), preview_shot_xy()[1] - 12 - im.height))
-        return out
+        # the artwork alone (Danik, 2026-11-01): the title is on the list beside it
+        return blank()
 
     def preview_shot(self, g, xy=None):
         if g.get("launcher"):
             return layer_shot(self.F, g, xy or preview_shot_xy())
-        return layer_card(g, xy or preview_shot_xy())
+        # centred in the pane, whatever Game art says: it has only the one picture
+        return layer_card(g, xy or ((PREV_X[0] + PREV_X[1] - SHOT[0]) // 2, (LIST_Y[0] + LIST_Y[1] - SHOT[1]) // 2))
 
 
 # Details of a ScummVM game: facts only (Danik, 2026-10-29), the page laid out
@@ -1933,7 +2215,7 @@ def system_card(key):
 # in grey under a heading; the cursor goes on over them in a grey ring. The ring
 # stays with its row, it does not float.
 
-BAN_H, BAN_GAP = 70, 8
+BAN_H, BAN_GAP = 70, 8 - min(MARGIN // 2, 4)
 BAN_X, BAN_W = M, W - 2 * M - 10        # the scroll bar's place at the right
 BAN_TOP = MAIN[0] + 3
 BAN_SHOWN = 4
@@ -1945,7 +2227,7 @@ BAN_RING = (2, 3)        # its gap to the banner, its width
 RING_BREATHE = 1.5       # how far the ring grows and shrinks, in pixels either way
 RING_BREATHE_HZ = 0.9    # (Danik, 2026-10-31: twice as fast as first)
 RING_SWAP_HZ = 0.25      # the bar's two colours changing places along the ring
-BAN_CHIPS = ["All", "Consoles", "Computers", CHIP_STAR]
+BAN_CHIPS = ["All", "Consoles", "Computers", "Hybrid", CHIP_STAR]
 PICK_DX = 14             # L2 held: how far the picked banner slides out to the left
 PICK_FIELDS = 10         # in how many fields
 BAN_MARGIN = 1           # rows kept in sight beyond the cursor, as the game list
@@ -1981,7 +2263,7 @@ def mock_rows(chip="All", missing=False):
     """The rows of Systems. With a type chosen, its cores alone"""
     all_ = read_systems()
     rows = []
-    if chip == "All":
+    if chip in ("All", "Hybrid"):   # Hybrid: the hybrid ports (the MIDI Player among them) and ScummVM
         rows = [dict(key=k, title=t, special=True, installed=True, fav=False, count=MOCK_COUNTS[k]) for k, t in SYSTEMS]
     of = [s for s in all_ if chip == "All" or s["kind"] + "s" == chip or (chip == CHIP_STAR and s["fav"])]
     title = lambda s: s["title"].lower()
@@ -2657,6 +2939,7 @@ def systems_mockups(F, badge_font, ports, fonts, values):
     screens["systems_shift_unhide"] = systems_screen(F, badge_font, shown, idx["nes"], shift=True)
     screens["systems_consoles"] = systems_screen(F, badge_font, mock_rows("Consoles"), 2, chip="Consoles")
     screens["systems_computers"] = systems_screen(F, badge_font, mock_rows("Computers"), 2, chip="Computers")
+    screens["systems_hybrid"] = systems_screen(F, badge_font, mock_rows("Hybrid"), 0, chip="Hybrid")
     last = len(rows) - 1
     screens["systems_end"] = systems_screen(F, badge_font, rows_out, last)
     screens["systems_not_installed"] = systems_screen(F, badge_font, rows_out, last + 3)
@@ -2674,10 +2957,10 @@ def systems_mockups(F, badge_font, ports, fonts, values):
         screens["core_%s" % key] = core_details_screen(F, badge_font, by[key])
     screens["core_gameboy_version"] = core_details_screen(F, badge_font, by["gameboy"], 1)
     screens["core_mac_version"] = core_details_screen(F, badge_font, by["mac"], 3)
-    missing = next(n for n, o in enumerate(OPTIONS) if o[1] == "missing")
-    screens["options_missing"] = options_screen(F, badge_font, fonts, missing, values)
-    logos = next(n for n, o in enumerate(OPTIONS) if o[1] == "logos")
-    screens["options_logos"] = options_screen(F, badge_font, fonts, logos, dict(values, logos="In colour"))
+    missing = OPTION_PAGES[4][2].index("missing")
+    screens["options_missing"] = options_screen(F, badge_font, fonts, 4, missing, values)
+    logos = OPTION_PAGES[4][2].index("logos")
+    screens["options_logos"] = options_screen(F, badge_font, fonts, 4, logos, dict(values, logos="In colour"))
     LOGO_COLOUR[0] = True
     screens["systems_colour"] = systems_screen(F, badge_font, rows, idx["nes"])
     screens["systems_colour_c64"] = systems_screen(F, badge_font, rows, idx["c64"])
@@ -2708,13 +2991,13 @@ def systems_mockups(F, badge_font, ports, fonts, values):
         screens["scummvm_details_%s" % gid] = compose(
             sv_details_layers(F, badge_font, sv[[g["id"] for g in sv].index(gid)]), D_ORDER).convert("RGB")
     screens["hybrid_list"] = main_screen(F, badge_font, hports, "A-Z", "doom2")
-    start = next(n for n, o in enumerate(OPTIONS) if o[1] == "start")
-    screens["options_start"] = options_screen(F, badge_font, fonts, start, values)
+    library = len(OPTION_PAGES) - 1
+    start = OPTION_PAGES[library][2].index("start")
+    screens["options_start"] = options_screen(F, badge_font, fonts, library, start, values)
     alone = Main(F, badge_font, hports, "A-Z", "doom2")
     alone.hints = ALONE_HINTS
     screens["alone_list"] = compose(alone.frame_layers()).convert("RGB")
-    screens["alone_options"] = options_screen(F, badge_font, fonts, start, values,
-                                              options=[o for o in OPTIONS if o[1] != "start"])
+    screens["alone_options"] = options_screen(F, badge_font, fonts, library, start, values, hide=("start",))
     hm = Main(F, badge_font, hports, "A-Z", "doom2")
     sm = ScummMain(F, badge_font, sv, launcher, "A-Z", "monkey-cd")
     anims["open_hybrid"] = anim_system_open(F, badge_font, rows, hm, 0)
@@ -2744,8 +3027,8 @@ def export_layers(fonts_dir, out, repos):
                    .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
     F = fonts["chakra"][1]
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
-              "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
+              "direction": "Down and right", "speed": "Normal", "filter": "Light", "margin": f"{MARGIN} pixels", "buttons": "Auto: PlayStation",
+              "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     colours = {}
     for theme in THEMES:
         apply_theme(theme)
@@ -2757,12 +3040,10 @@ def export_layers(fonts_dir, out, repos):
         g = m.game()
         D = details_layers(F, badge, g, m.port(g), m.family)
         D.pop("ground")
-        o = {"logo": layer_logo(), "title": layer_title(F), "count": layer_count(F, "Options"),
-             "left": layer_options_list(F, fonts, 1, dict(values, colours=theme)),
-             "right": layer_options_help(F, 1), "hints": layer_hints(F, OPTION_HINTS, badge, m.family),
-             "badge": layer_badge(badge)}
+        o = options_layers(F, badge, fonts, 0, 1, dict(values, colours=theme), m.family)
+        o.pop("ground")
         for name, im in (("main", compose(L)), ("details", compose(D, D_ORDER)),
-                         ("options", compose(o, ["logo", "title", "count", "left", "right", "hints", "badge"]))):
+                         ("options", compose(o, OPTIONS_ORDER[:4] + OPTIONS_ORDER[4:]))):
             path = os.path.join(out, "%s_%s.png" % (theme, name))
             im.save(path, optimize=True)
             print(path)
@@ -2790,8 +3071,8 @@ def main():
     fonts = {key: (FONTS[key][0].replace(" SemiBold", "").replace(" ExtraBold", "").replace(" Bold", "")
                    .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
-              "direction": "Down and right", "speed": "Normal", "filter": "Light", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
+              "direction": "Down and right", "speed": "Normal", "filter": "Light", "margin": f"{MARGIN} pixels", "buttons": "Auto: PlayStation",
+              "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     if only_systems:
         return save_all(out, *systems_mockups(fonts["chakra"][1], badge, ports, fonts, values))
     screens = {}
@@ -2816,18 +3097,22 @@ def main():
     screens["confirm_exit"] = confirm_screen(F, badge, ports)
     screens["confirm_exit_switch"] = confirm_screen(F, badge, ports, "switch")
     screens["wait_ports"] = wait_screen(F, badge, ports)
-    screens["options_font"] = options_screen(F, badge, fonts, 0, values)
-    screens["options_colours"] = options_screen(F, badge, fonts, 1, values)
-    screens["options_pattern"] = options_screen(F, badge, fonts, 2, values)
-    screens["options_buttons"] = options_screen(F, badge, fonts, 8, values)
-    screens["options_art"] = options_screen(F, badge, fonts, 10, dict(values, art="Cover"))
-    screens["options_hidden"] = options_screen(F, badge, fonts, 11, values)
-    screens["options_scroll"] = options_screen(F, badge, fonts, len(OPTIONS) - 1, values)   # the list scrolled to its end
+    screens["options_rail"] = options_screen(F, badge, fonts, 0, 0, values, focus="rail")
+    screens["options_rail_library"] = options_screen(F, badge, fonts, 4, 0, values, focus="rail")
+    screens["options_font"] = options_screen(F, badge, fonts, 0, 0, values)
+    screens["options_colours"] = options_screen(F, badge, fonts, 0, 1, values)
+    screens["options_pattern"] = options_screen(F, badge, fonts, 1, 0, values)
+    screens["options_pattern_off"] = options_screen(F, badge, fonts, 1, 0, dict(values, pattern="Off"))
+    screens["options_buttons"] = options_screen(F, badge, fonts, 3, 0, values)
+    screens["options_art"] = options_screen(F, badge, fonts, 4, 1, dict(values, art="Cover"))
+    screens["options_hidden"] = options_screen(F, badge, fonts, 4, 4, dict(values, hidden="On"))
+    screens["options_scroll"] = options_screen(F, badge, fonts, 4, 7, values)   # the list scrolled to its end
+    screens["options_about"] = options_screen(F, badge, fonts, 4, 7, values, focus="about")
     for theme in THEMES:     # the colour schemes
         apply_theme(theme)
         screens["theme_%s_main" % theme] = main_screen(F, badge, ports, "A-Z", "doom2")
         screens["theme_%s_details" % theme] = details_screen(F, badge, ports, "doom2")
-        screens["theme_%s_options" % theme] = options_screen(F, badge, fonts, 1, dict(values, colours=theme))
+        screens["theme_%s_options" % theme] = options_screen(F, badge, fonts, 0, 1, dict(values, colours=theme))
     apply_theme("purple")
     default = GROUND["pattern"]
     for pattern in PATTERNS + (None,):   # the option Pattern (GROUND)
@@ -2841,7 +3126,8 @@ def main():
                   "sort": anim_sort(F, badge, ports), "details": anim_details(F, badge, ports),
                   "back": anim_details(F, badge, ports, back=True),
                   "options": anim_options(F, badge, ports, fonts, values),
-                  "options_cursor": anim_options_cursor(F, badge, ports, fonts, values), "play": anim_play(F, badge, ports),
+                  "options_cursor": anim_options_cursor(F, badge, ports, fonts, values),
+                  "options_page": anim_options_page(F, badge, fonts, values), "play": anim_play(F, badge, ports),
                   "confirm": anim_confirm(F, badge, ports), "wait": anim_wait(F, badge, ports)}
     animations.update(sys_anims)
     save_all(out, screens, animations)
