@@ -170,8 +170,9 @@ Danik, 2026-11-01: "an option to hide/unhide the selected item (Maybe it's time 
 ScummVM's games have one picture, the official artwork, and no screenshots (Danik, 2026-11-01).
 
 - In the List the right pane shows that artwork alone, centred, at the card's size: no title, which is on the list beside it. *Game art* makes no difference there. ScummVM's own launcher row is a port's game and keeps its logo and screenshot, or its cover.
-- In the Carousel a tile takes the artwork's own size and shape, trimmed of what is clear around it when the card is read (alpha above 16; `art_box()`), so nothing is cropped and there are no bars. Tiles are not scaled: the art is at most 192x192, drawn as ScummVM wrote it. They stand on the same floor as every other card. *Logo + Screenshot* shows them flat, *Cover* with the case's side the hybrid ports have.
-- The title and the year and maker stay above a tile in both modes, as an icon has no title on it, and come down with a tile lower than 192.
+- In the Carousel every tile is the same square, 192x192 (Danik, 2026-11-01; `CAR_SQUARE`): the size of the shipped icons at the 192 ScummVM draws them, all 752 of the pack fitting in it, 73% reaching it at least one way, 58% within 8 pixels of it both ways. Smaller artwork lies in the middle of the square, as ScummVM centres it on its card, the panel's colour round it, which fades with the other cards as *Details* opens. Tiles are not scaled. *Logo + Screenshot* shows them flat, *Cover* with the case's side the hybrid ports have. They stand on the same floor as every other card.
+- ScummVM's launcher row has the same square whatever *Game art* says: its tall cover, made as wide as the square and cropped from the bottom, which leaves its wordmark about in the middle (178x267 goes to 192x288, drawn by the program: the port's file does not change). A port with no cover has its logo over its screenshot, in the square. *Details* crosses over from it as from a cover.
+- The title and the year and maker stay above every tile in both modes, the launcher's too.
 
 ScummVM needs no change: its cards stay 256x192 on the SD card.
 
