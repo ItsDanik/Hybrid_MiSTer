@@ -1202,10 +1202,10 @@ def details_screen(F, badge_font, ports, game_id, family="ps"):
     return compose(details_layers(F, badge_font, m.game(), m.port(m.game()), family), D_ORDER).convert("RGB")
 
 
-def header(c, F, mode, count, family):
+def header(c, F, mode, count, family, title="Hybrid Ports"):
     c.over(layer_logo())
-    c.over(layer_title(F))
-    c.over(layer_count(F, count))
+    c.over(layer_title(F, title))
+    c.over(layer_count(F, count, title))
     if mode:
         c.over(layer_chips(F, family, chip_rects(F)[mode]))
 
@@ -1225,7 +1225,7 @@ def ports_logo_box():
 
 def ports_screen(F, badge_font, ports, cursor_engine, family="ps"):
     c = Canvas()
-    header(c, F, None, "12 ports", family)
+    header(c, F, None, "12 ports", family, "Repo")   # its own title, as Options (Danik, 2026-11-02)
     rows = [("set", "Launcher", "On"), ("set", "Menu entries", "Other, as dnk-<Title>")]
     for p in sorted(ports, key=lambda p: p["engine"].lower()):
         rows.append(("port", p["engine"], p["engine"] in INSTALLED, p))
