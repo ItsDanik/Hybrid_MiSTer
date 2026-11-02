@@ -2244,6 +2244,7 @@ BAN_FOLD_H = 34          # a folded banner: half, less a pixel so that seven fit
 BAN_FOLD_GAP = max(2, BAN_GAP // 2)   # between folded ones; the open one keeps BAN_GAP (the ring)
 BAN_FOLD_LOGO = (150, 22)  # a folded banner's logo, its largest size
 BAN_SLOT = 2             # the open banner's place: the third in sight
+START_SYSTEMS_FIELDS = 52   # the start into Systems: eight banners rising, 2 fields apart
 
 # what the mock-ups show of a player's MiSTer
 MOCK_NOT_INSTALLED = ("crayxmp", "edsac", "pdp1", "sgiindy", "sun", "uknc", "vt52", "x68000")
@@ -2370,8 +2371,22 @@ def inked(mask, ink, alpha=1.0):
     return im
 
 
-def special_art(key):
+def fit(im, w, h):
+    """im made smaller to fit in w x h, never larger"""
+    r = min(w / im.width, h / im.height, 1.0)
+    if r < 1:
+        im = im.resize((max(1, round(im.width * r)), max(1, round(im.height * r))), Image.LANCZOS)
+    return im
+
+
+def special_art(key, folded=False):
     """The picture on Hybrid Ports' or ScummVM's banner, scaled, and its place"""
+    if folded:   # the open one's made smaller (make_assets.py bakes it)
+        art, at = special_art(key)
+        h = BAN_FOLD_H
+        r = (h - (8 if key == "hybrid" else 12)) / art.height
+        art = art.resize((max(1, round(art.width * r)), max(1, round(art.height * r))), Image.LANCZOS)
+        return art, (at[0], (h - art.height) // 2)
     h = BAN_H
     if key == "hybrid":
         cat = system_card(key).crop((10, 6, 246, 142))
@@ -2388,11 +2403,7 @@ def special_banner(F, s, folded=False, bare=False):
     """Hybrid Ports' or ScummVM's: the approved card's colours and what it shows.
     bare: what it shows alone, without its ground"""
     w, h = BAN_W, BAN_FOLD_H if folded else BAN_H
-    art, at = special_art(s["key"])
-    if folded:
-        r = (h - (8 if s["key"] == "hybrid" else 12)) / art.height
-        art = art.resize((max(1, round(art.width * r)), max(1, round(art.height * r))), Image.LANCZOS)
-        at = (at[0], (h - art.height) // 2)
+    art, at = special_art(s["key"], folded)
     if s["key"] == "hybrid":
         ink = (0x1E, 0x1A, 0x2C)
         im = Image.new("RGBA", (w, h), (0, 0, 0, 0) if bare else system_card(s["key"]).getpixel((3, 3))[:3] + (255,))
@@ -2498,20 +2509,15 @@ def banner_face(F, s, folded=False, bare=False):
             im.alpha_composite(strip)
     lw, lh = BAN_FOLD_LOGO if folded else BAN_LOGO[1:]
     pic, part = system_logo_colour(s) if LOGO_COLOUR[0] and not grey else (None, None)
-    if pic and folded:
-        r = min(lw / pic.width, lh / pic.height, 1.0)
-        size = (max(1, round(pic.width * r)), max(1, round(pic.height * r)))
-        pic = pic.resize(size, Image.LANCZOS)
-        part = part.resize(size, Image.LANCZOS) if part else None
+    if pic and folded:   # (make_assets.py bakes these)
+        pic = fit(pic, lw, lh)
+        part = part.resize(pic.size, Image.LANCZOS) if part else None
     if pic:
         if part:
             im.alpha_composite(inked(part, ink), (x, (h - pic.height) // 2))
         im.alpha_composite(pic, (x, (h - pic.height) // 2))
     else:
-        mask = system_logo(F, s)
-        r = min(lw / mask.width, lh / mask.height, 1.0)
-        if r < 1:
-            mask = mask.resize((max(1, round(mask.width * r)), max(1, round(mask.height * r))), Image.LANCZOS)
+        mask = fit(system_logo(F, s), lw, lh)
         im.alpha_composite(inked(mask, ink, 0.8 if grey else 1.0), (x, (h - mask.height) // 2))
     c = Canvas(ground=False)
     c.im = im
@@ -2838,10 +2844,11 @@ def anim_start_systems(F, badge_font, rows):
     S = systems_layers(F, badge_font, rows, 0, 0)
     flat = Image.new("RGBA", (W, H), WALL_BG + (255,))
     groups = [(["title", "count"], 18, 32, 16, 0), (["chips"], 20, 34, 0, -8)]
-    groups += [(["ban%d" % n], 20 + 2 * n, 36 + 2 * n, 0, 18) for n in range(len(rows)) if "ban%d" % n in S]
+    shown = [n for n in range(len(rows)) if "ban%d" % n in S]   # those in sight, one after the other
+    groups += [(["ban%d" % n], 20 + 2 * k, 36 + 2 * k, 0, 18) for k, n in enumerate(shown)]
     groups += [(["cursor"], 30, 42, 0, 0), (["bar"], 30, 42, 0, 0), (["hints"], 28, 44, 0, 10)]
     frames = []
-    for f in range(max(46, max(g[2] for g in groups) + 2)):
+    for f in range(START_SYSTEMS_FIELDS):
         fr = flat.copy()
         fr.alpha_composite(place(S["ground"], alpha=ease_in_out(span(f, 4, 28))))
         t = ease_in_out(span(f, 4, 30))
