@@ -1322,6 +1322,7 @@ OPTION_PAGES = (
 OPTION_BY_KEY = {o[1]: o for o in OPTIONS}
 OPT_GREYED = ("intensity", "strength", "direction", "speed")   # with Pattern Off: greyed out, the cursor passes them
 OPT_SWITCHES = ("hidden", "missing")   # Off and On: a switch
+OPT_ACTIONS = ()                       # rows that do something when chosen (console_options_screen())
 OPT_GREY_ALPHA = 110
 OPT_ROW = 34
 OPT_HELP = (MAIN[1] - 42, MAIN[1])      # the help box under the list: 2 lines of the small font
@@ -1396,6 +1397,11 @@ def option_icon_mask(name):
         line((-5, -1.5), (-5, 2.5))
         dot(4, -1)
         dot(7, 2)
+    elif name == "cart":   # a cartridge: its label and its contacts
+        line(*_rrect(-8, -11, 8, 9, 2), closed=True)
+        line(*_rrect(-4.5, -7, 4.5, 1, 1), closed=True)
+        for x in (-4, 0, 4):
+            line((x, 9), (x, 11))
     elif name == "list":
         for dy in (-7, 0, 7):
             dot(-9, dy)
@@ -1432,7 +1438,7 @@ def option_row(c, F, fonts, values, option, x0, x1, y, sel):
         c.text((x0 + 14, mid), label, F.row, DIM, anchor="lm", alpha=OPT_GREY_ALPHA)
     else:
         c.text((x0 + 14, mid), label, F.row, SEL_INK if sel else INK, anchor="lm")
-    if key == "about":
+    if key == "about" or key in OPT_ACTIONS:   # opens, or does something: its label alone
         return
     value = values.get(key, "Off")
     if key in OPT_SWITCHES:
@@ -2455,7 +2461,7 @@ def banner(F, s, h=BAN_H):
     """A banner h high: open (BAN_H), folded (BAN_FOLD_H), or in between, its
     ground at that height and the folded and open faces fading out and in"""
     h = max(BAN_FOLD_H, min(BAN_H, round(h)))
-    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0], s.get("hidden"), h)
+    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0], s.get("hidden"), s.get("line2"), h)
     if k in _cache:
         return _cache[k]
     if h in (BAN_H, BAN_FOLD_H):
@@ -2531,7 +2537,8 @@ def banner_face(F, s, folded=False, bare=False):
             Canvas.star(c, right - F.small.getlength(s["maker"]) - 12, h // 2, 5, GOLD)
     else:
         d.text((right, h // 2 - 9), s["maker"], font=F.chip, fill=ink + (255,), anchor="rm")
-        d.text((right, h // 2 + 9), "%s  %s" % (s["year"], s["kind"]), font=F.small, fill=dim + (255,), anchor="rm")
+        d.text((right, h // 2 + 9), s.get("line2") or "%s  %s" % (s["year"], s["kind"]), font=F.small, fill=dim + (255,),
+               anchor="rm")
         if s["fav"]:
             Canvas.star(c, right - F.chip.getlength(s["maker"]) - 12, h // 2 - 9, 6, GOLD)
     return im
@@ -3028,6 +3035,478 @@ def anim_core_start(F, badge_font, s):
 ALONE_HINTS = [("ok", "Details"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Exit")]
 
 
+# The consoles' game lists (Danik, 2026-11-02; docs/dnklauncher.md, "Game lists"):
+# A on a console's banner opens its list, the core itself its first row; a game's
+# name from its No-Intro file name, its pictures from libretro-thumbnails (fetched
+# here once into THUMBS, never shipped: the project gives no licence). Proposals
+# for the review page, not yet approved: console_mockups() draws them.
+THUMBS = os.environ.get("DNK_MOCK_THUMBS") or os.path.expanduser("~/MiSTer-dnkLauncher/build/thumbs")
+THUMB_URL = "https://raw.githubusercontent.com/libretro-thumbnails/%s/master/%s/%s.png"
+THUMB_KINDS = {"box": "Named_Boxarts", "logo": "Named_Logos", "snap": "Named_Snaps", "title": "Named_Titles"}
+CONSOLE_CHIPS = ["A-Z", "Recent", "Favourites"]
+REGION_ORDER = ("USA", "World", "Europe", "Japan")   # First region: USA (Danik's default), then the others
+LANGUAGES = {"En": "English", "Ja": "Japanese", "Fr": "French", "De": "German", "Es": "Spanish", "It": "Italian",
+             "Nl": "Dutch", "Sv": "Swedish", "Pt": "Portuguese"}
+HANDHELDS = ("gameboy", "gbc", "gba", "gamegear", "lynx", "ngpc", "wonderswan", "wsc")   # their screens' own shape
+
+# What the mock-ups show of a player's games: per console, the files (No-Intro
+# names, without the type), the recent ones and the favourites
+CONSOLE_SAMPLES = {
+    "snes": dict(art="Nintendo - Super Nintendo Entertainment System", ext="sfc", core="SNES", folder="SNES", files=[
+        "Super Metroid (Japan, USA) (En,Ja)", "Super Metroid (Europe) (En,Fr,De)", "Chrono Trigger (USA)",
+        "Super Mario World (USA)", "Donkey Kong Country (USA) (Rev 2)",
+        "Donkey Kong Country (Europe) (En,Fr,De) (Rev 1)", "Legend of Zelda, The - A Link to the Past (USA)",
+        "F-Zero (USA)", "Super Mario Kart (USA)", "Mega Man X (USA) (Rev 1)", "Super Castlevania IV (USA)",
+        "Street Fighter II Turbo (USA) (Rev 1)", "EarthBound (USA)", "Secret of Mana (USA)",
+        "Final Fantasy III (USA) (Rev 1)", "Super Punch-Out!! (USA)", "Kirby Super Star (USA)",
+        "Contra III - The Alien Wars (USA)", "Nightmare Busters (World) (Aftermarket) (Unl)",
+        "Super Mario World (USA) (Beta)"],
+        recent=[("Super Metroid", "today"), ("Chrono Trigger", "yesterday"), ("Super Mario Kart", "3 days ago"),
+                ("Donkey Kong Country", "last week")],
+        favourites=("Super Metroid", "Chrono Trigger", "EarthBound")),
+    "megadrive": dict(art="Sega - Mega Drive - Genesis", ext="md", core="MegaDrive", folder="MegaDrive", files=[
+        "Sonic The Hedgehog (USA, Europe)", "Sonic The Hedgehog 2 (World) (Rev A)", "Streets of Rage 2 (USA)",
+        "Gunstar Heroes (USA)", "Phantasy Star IV (USA)", "Shining Force (USA)", "Castlevania - Bloodlines (USA)",
+        "Comix Zone (USA)", "Earthworm Jim (USA)", "ToeJam _ Earl (USA, Europe, Korea) (En)",
+        "Golden Axe (World) (Rev A)", "Mortal Kombat II (World)", "Thunder Force IV (Europe)"],
+        recent=[("Sonic The Hedgehog 2", "today")], favourites=("Gunstar Heroes",)),
+    "gameboy": dict(art="Nintendo - Game Boy", ext="gb", core="Gameboy", folder="GAMEBOY", files=[
+        "Tetris (World) (Rev 1)", "Pokemon - Red Version (USA, Europe) (SGB Enhanced)",
+        "Legend of Zelda, The - Link's Awakening (USA, Europe) (Rev 2)", "Super Mario Land (World) (Rev 1)",
+        "Kirby's Dream Land (USA, Europe)", "Metroid II - Return of Samus (World)",
+        "Wario Land - Super Mario Land 3 (World)", "Dr. Mario (World) (Rev 1)", "Final Fantasy Adventure (USA)"],
+        recent=[("Tetris", "today")], favourites=("Metroid II - Return of Samus",)),
+}
+HIDDEN_TAGS = ("Beta", "Proto", "Demo", "Hack", "Sample", "Kiosk")   # hidden unless Options shows them
+
+
+def thumb(system, name, kind):
+    """A picture of libretro-thumbnails, fetched once into THUMBS; None where it has none"""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    repo = system.replace(" ", "_")
+    path = os.path.join(THUMBS, repo, THUMB_KINDS[kind], name + ".png")
+    if not os.path.exists(path) and not os.path.exists(path + ".none"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            rel = "%s/%s.png" % (THUMB_KINDS[kind], name)
+            for _ in range(4):   # many are git symlinks: GitHub's raw file is then the name they point to
+                data = urllib.request.urlopen(THUMB_URL.replace("%s/%s.png", "%s") % (repo, urllib.parse.quote(rel)),
+                                              timeout=30).read()
+                if data.startswith(b"\x89PNG"):
+                    break
+                rel = os.path.normpath(os.path.join(os.path.dirname(rel), data.decode("utf-8").strip()))
+            else:
+                raise urllib.error.HTTPError(rel, 404, "a link's chain too long", None, None)
+            with open(path, "wb") as f:
+                f.write(data)
+        except urllib.error.HTTPError:
+            open(path + ".none", "w").close()
+    return path if os.path.exists(path) else None
+
+
+def nointro(name):
+    """A No-Intro name's parts: the title (", The" put back in front), the region,
+    the languages, the revision and its other tags"""
+    m = re.match(r"(.*?)((?: \([^)]*\))*)$", name)
+    base, tags = m.group(1), re.findall(r"\(([^)]*)\)", m.group(2))
+    t = re.match(r"(.*?), (The|A|An)( - .*)?$", base)
+    title = "%s %s%s" % (t.group(2), t.group(1), t.group(3) or "") if t else base
+    region = tags[0] if tags else ""
+    langs = next((x for x in tags[1:] if re.fullmatch(r"[A-Z][a-z](,[A-Z][a-z])*", x)), "")
+    rev = next((x for x in tags if x.startswith("Rev ")), "")
+    return dict(title=title.replace(" _ ", " & "), region=region, langs=langs, rev=rev,
+                other=[x for x in tags[1:] if x not in (langs, rev)])
+
+
+def region_rank(region):
+    return min((REGION_ORDER.index(r) for r in REGION_ORDER if r in region), default=len(REGION_ORDER))
+
+
+def console_games(key):
+    """The console's games, one per title, the version First region picks first;
+    the hidden ones (betas and such) left out"""
+    sample = CONSOLE_SAMPLES[key]
+    by_title = {}
+    for name in sample["files"]:
+        p = nointro(name)
+        if any(t.startswith(HIDDEN_TAGS) for t in p["other"]):
+            continue
+        p.update(file="%s.%s" % (name, sample["ext"]), name=name)
+        by_title.setdefault(p["title"], []).append(p)
+    games = []
+    when = dict(sample["recent"])
+    for title, versions in by_title.items():
+        versions.sort(key=lambda v: v["rev"], reverse=True)   # the latest revision (Rev 2, Rev B) first
+        versions.sort(key=lambda v: region_rank(v["region"]))
+        v = versions[0]
+        games.append(dict(id=key + ":" + title, title=title, versions=versions, system=key, when=when.get(title, ""),
+                          art=sample["art"], fav=title in sample["favourites"]))
+    return games
+
+
+def game_name(g, style, v=None):
+    v = v or g["versions"][0]
+    if style == "region":
+        return "%s (%s)" % (g["title"], v["region"])
+    if style == "file":
+        return v["file"]
+    return g["title"]
+
+
+def game_pic(g, kind, v=None):
+    v = v or g["versions"][0]
+    path = thumb(g["art"], v["name"], kind)
+    if not path and kind != "box":   # another version's, where this one has none
+        path = next((p for p in (thumb(g["art"], w["name"], kind) for w in g["versions"]) if p), None)
+    return Image.open(path).convert("RGBA") if path else None
+
+
+def screen_shape(key, pic, w, h):
+    """A console's picture as its screen shows it: a television's 4:3 (the pixels as
+    wide as the television makes them), a handheld's its own shape, fitted in w x h"""
+    if key in HANDHELDS:
+        r = min(w / pic.width, h / pic.height)
+        return to_linear_resize(pic.convert("RGB"), (round(pic.width * r), round(pic.height * r)))
+    ww = min(w, round(h * 4 / 3))
+    return to_linear_resize(pic.convert("RGB"), (ww, round(ww * 3 / 4)))
+
+
+def title_card(F, s, title, size):
+    """A game without a picture: its name on the system's colours, its logo faint under it"""
+    w, h = size
+    im = gradient(w, h, s["c1"], s["c2"], vertical=True)
+    mask = fit(system_logo(F, s), w - 40, 28)
+    im.alpha_composite(inked(mask, (255, 255, 255), 0.35), ((w - mask.width) // 2, h - 18 - mask.height))
+    pic = title_picture(F, title, w - 28, h - 70, 26)
+    pic = inked(pic.getchannel("A"), (255, 255, 255))
+    im.alpha_composite(pic, ((w - pic.width) // 2, (h - 40 - pic.height) // 2))
+    im.putalpha(ImageChops.multiply(im.getchannel("A"), round_mask(w, h, 6)))
+    return im
+
+
+def framed(pic, xy):
+    """A picture in the dark frame the screenshots have"""
+    out = blank()
+    x, y = xy
+    ImageDraw.Draw(out).rectangle((x - 2, y - 2, x + pic.width + 1, y + pic.height + 1), fill=(15, 0, 22, 255))
+    out.alpha_composite(pic.convert("RGBA"), (x, y))
+    return out
+
+
+def box_max():
+    """A box in the preview's panel, at most: the panel less 12 round it"""
+    return PREV_X[1] - PREV_X[0] - 24, LIST_Y[1] - LIST_Y[0] - 24
+
+
+class ConsoleMain(Main):
+    """A console's list: first the core alone, then its games; the pane its art as
+    Game art says, the title card where a game has none"""
+    chips, hints = CONSOLE_CHIPS, MAIN_HINTS
+
+    def __init__(self, F, badge_font, s, mode, cursor_title, art="shot", names="title", family="ps",
+                 core_label="%(title)s core"):
+        self.F, self.badge_font, self.family, self.mode, self.art, self.shift = F, badge_font, family, mode, art, False
+        self.s, self.names = s, names
+        self.title = s["title"]
+        self.games = console_games(s["key"])
+        for g in self.games:   # before the rows are drawn: their stars
+            (FAVOURITES.add if g["fav"] else FAVOURITES.discard)(g["id"])
+        sample = CONSOLE_SAMPLES[s["key"]]
+        self.core_row = dict(id="core", title=core_label % dict(core=sample["core"], title=s["title"]), core=True)
+        if mode == "Recent":
+            order = [g for t, _ in sample["recent"] for g in self.games if g["title"] == t]
+            rows = [("game", game_name(g, names), g, g["when"]) for g in order]
+        else:
+            of = [g for g in self.games if mode != "Favourites" or g["fav"]]
+            rows = [("game", game_name(g, names), g, "")
+                    for g in sorted(of, key=lambda g: game_name(g, names).lower())]
+        self.rows = [("game", self.core_row["title"], self.core_row, "")] + rows
+        self.count = "%d games" % len(self.games)
+        self.strips = list_strips(F, self.rows)
+        self.cursor = next(n for n, r in enumerate(self.rows) if r[2]["title"] == cursor_title)
+        self.first = max(0, min(self.cursor - N_ROWS // 2, len(self.rows) - N_ROWS))
+
+    def frame_layers(self):
+        art, self.art = self.art, "shot"   # the pane is its own, below
+        L = Main.frame_layers(self)
+        self.art = art
+        g = self.game()
+        L["prev_logo"], L["prev_shot"] = self.pane(g)
+        return L
+
+    def preview_logo(self, g, dx=0.0):
+        return blank()
+
+    def preview_shot(self, g, xy=None):
+        return blank()
+
+    def pane(self, g):
+        F, s = self.F, self.s
+        pw = PREV_X[1] - PREV_X[0]
+        cx, cy = (PREV_X[0] + PREV_X[1]) // 2, (LIST_Y[0] + LIST_Y[1]) // 2
+        if g.get("core"):   # the core alone: its card, as on its Details
+            card = core_card(F, s)
+            return blank(), framed(card, (cx - card.width // 2, cy - card.height // 2))
+        if self.art == "cover":
+            box = game_pic(g, "box")
+            bw, bh = box_max()
+            if box:   # as large as the panel takes it, its own shape
+                r = min(bw / box.width, bh / box.height)
+                pic = to_linear_resize(box.convert("RGB"), (round(box.width * r), round(box.height * r)))
+            else:
+                pic = title_card(F, s, g["title"], COVER)
+            return blank(), framed(pic, (cx - pic.width // 2, cy - pic.height // 2))
+        snap, logo = game_pic(g, "snap"), game_pic(g, "logo")
+        sx, sy = preview_shot_xy()
+        if snap:
+            pic = screen_shape(s["key"], snap, *SHOT)
+        else:
+            pic = title_card(F, s, g["title"], SHOT)
+        shot = framed(pic, (cx - pic.width // 2, sy + (SHOT[1] - pic.height) // 2))
+        top = blank()
+        if logo:
+            lp = logo.crop(logo.getbbox())
+            r = min((pw - 24) / lp.width, LOGO_H / lp.height)
+            lp = lp.resize((max(1, round(lp.width * r)), max(1, round(lp.height * r))), Image.LANCZOS)
+        elif snap:   # no logo: the name where it would be
+            lp = title_picture(F, g["title"], pw - 24, LOGO_H, 26)
+        else:
+            lp = None
+        if lp:
+            top.alpha_composite(lp, (cx - lp.width // 2, sy - 12 - lp.height))
+        return top, shot
+
+
+def console_screen(F, badge_font, key, mode, cursor_title, **kw):
+    s = next(x for x in read_systems() if x["key"] == key)
+    return compose(ConsoleMain(F, badge_font, s, mode, cursor_title, **kw).frame_layers()).convert("RGB")
+
+
+def console_details_layers(F, badge_font, s, g, version=0, names="title", family="ps", art="shot"):
+    """Details of a console's game: its picture as Game art says (Danik, 2026-11-02:
+    the box under Cover, at the picture's height and its own width; else the
+    screenshot, or the title screen where it has none), its logo (its name where it
+    has none), the facts of the version chosen (Left and Right change it, where
+    there are several), the file's below"""
+    v = g["versions"][version]
+    L = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, s["title"]),
+         "count": layer_count(F, "Details", s["title"]), "badge": layer_badge(badge_font),
+         "hints": layer_hints(F, [("ok", "Play"), ("fav", "Favourite"), ("ports", "Repo"), ("back", "Back")],
+                              badge_font, family, second=DETAILS_SECOND),
+         "shot_panel": layer_panel(D_SHOT_PANEL), "info_panel": layer_panel(D_INFO_PANEL),
+         "desc_panel": layer_panel(D_DESC_PANEL)}
+    box = game_pic(g, "box", v) if art == "cover" else None
+    if box:
+        pic = fit_to(box, h=SHOT[1]) if box.width * SHOT[1] <= SHOT[0] * box.height else fit_to(box, w=SHOT[0])
+    elif art == "cover":   # the list's 2:3 title card
+        pic = title_card(F, s, g["title"], (SHOT[1] * 2 // 3, SHOT[1]))
+    else:
+        pic = game_pic(g, "snap", v) or game_pic(g, "title", v)
+        pic = screen_shape(s["key"], pic, *SHOT) if pic else title_card(F, s, g["title"], SHOT)
+    L["shot"] = framed(pic, (D_SHOT[0] + (SHOT[0] - pic.width) // 2, D_SHOT[1] + (SHOT[1] - pic.height) // 2))
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = D_INFO_PANEL
+    pw = x1 - x0
+    bx, by, bw, bh = details_logo_box()
+    logo = game_pic(g, "logo", v)
+    if logo:
+        lp = logo.crop(logo.getbbox())
+        r = min(DLOGO[0] / lp.width, DLOGO[1] / lp.height, bw / lp.width)
+        lp = lp.resize((max(1, round(lp.width * r)), max(1, round(lp.height * r))), Image.LANCZOS)
+    else:
+        lp = title_picture(F, g["title"], bw, bh, 26)
+    c.picture(lp, (bx + (bw - lp.width) // 2, by + (bh - lp.height) // 2))
+    if g["fav"]:
+        c.star(x1 - 16, y0 + 16, 7, GOLD)
+    ty = by + bh + 8
+    layer = c.layer()
+    ImageDraw.Draw(layer).line((x0 + 14, ty, x1 - 14, ty), fill=EDGE + (90,))
+    c.over(layer)
+    langs = ", ".join(LANGUAGES.get(x, x) for x in v["langs"].split(",")) if v["langs"] else \
+        {"USA": "English", "Japan": "Japanese"}.get(v["region"], "")
+    facts = [("Region", v["region"], None if len(g["versions"]) > 1 else INK), ("Languages", langs or "not named", INK),
+             ("Revision", v["rev"][4:] if v["rev"] else "first release", INK),
+             ("Last played", g["when"] or "never", INK)]
+    lw = max(F.small.getlength(k) for k, val, ink in facts) + 12
+    for n, (k, val, ink) in enumerate(facts):
+        y = ty + 8 + n * 16
+        c.text((x0 + 14, y + 1), k, F.small, DIM)
+        if ink is None:     # the version: its arrows and the value between them, as a core's Details
+            ax = x0 + 14 + lw
+            layer = c.layer()
+            ImageDraw.Draw(layer).polygon(((ax + 6, y + 3), (ax, y + 8), (ax + 6, y + 13)), fill=PINK + (255,))
+            c.over(layer)
+            val = clip(val, F.chip, pw - 28 - lw - 30)
+            c.text((ax + 12, y), val, F.chip, INK)
+            ex = ax + 12 + F.chip.getlength(val) + 6
+            layer = c.layer()
+            ImageDraw.Draw(layer).polygon(((ex, y + 3), (ex + 6, y + 8), (ex, y + 13)), fill=PINK + (255,))
+            c.over(layer)
+            c.text((ex + 12, y + 1), "%d of %d" % (version + 1, len(g["versions"])), F.small, DIM)
+        else:
+            c.text((x0 + 14 + lw, y), clip(val, F.chip, pw - 28 - lw), F.chip, ink)
+    L["info"] = c.im
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = D_DESC_PANEL
+    sample = CONSOLE_SAMPLES[s["key"]]
+    size = {"sfc": "3.0 MB", "md": "2.0 MB", "gb": "1.0 MB"}.get(sample["ext"], "1 MB")
+    copy = [("File", v["file"], INK), ("Folder", "games/%s/" % sample["folder"], INK), ("Size", size, INK),
+            ("Core", "%s_20260823" % sample["core"], CYAN)]
+    lw = max(F.small.getlength(k) for k, val, ink in copy) + 12
+    for n, (k, val, ink) in enumerate(copy):   # one under the other: a file's name is long
+        cy = y0 + (y1 - y0 - 4 * 18) // 2 + n * 18
+        c.text((x0 + 16, cy + 1), k, F.small, DIM)
+        c.text((x0 + 16 + lw, cy), clip(val, F.chip, x1 - x0 - 32 - lw), F.chip, ink)
+    L["desc"] = c.im
+    return L
+
+
+def console_details_screen(F, badge_font, key, title, version=0, art="shot"):
+    s = next(x for x in read_systems() if x["key"] == key)
+    g = next(g for g in console_games(key) if g["title"] == title)
+    return compose(console_details_layers(F, badge_font, s, g, version, art=art), D_ORDER).convert("RGB")
+
+
+# Options: a page of their own for the game lists (a proposal)
+GAME_LIST_OPTIONS = [
+    ("Game names", "names", "How a console's games are named in its list: the title alone (Super Metroid), the "
+                            "title and its region, or the file's whole name."),
+    ("First region", "region", "Where a game has several versions, the one its row and A start: the others are in "
+                               "its Details. USA unless you pick another."),
+    ("Show betas and hacks", "extras", "On adds what the lists leave out: betas, prototypes, demos and hacks, as "
+                                       "No-Intro names them. BIOS files never show."),
+    ("Look for games", "scan", "Goes through the consoles' folders on the SD card and USB drives, inside zips too, "
+                               "and makes their lists again. The launcher stays usable meanwhile."),
+    ("Download game art", "artdl", "Fetches the boxes, logos, screenshots and title screens of the games found, "
+                                   "from libretro-thumbnails, once; again only for what is new or missing."),
+]
+GAME_LIST_ACTIONS = ("scan", "artdl")
+
+
+def console_options_screen(F, badge_font, fonts, cursor, values, running=None):
+    """Options with the page Game lists (a proposal): the rail one longer, the two
+    actions showing when they last ran, or how far they are"""
+    global OPTION_PAGES, OPT_ICONS, OPTION_BY_KEY, OPT_ACTIONS, OPT_SWITCHES
+    saved = OPTION_PAGES, OPT_ICONS, OPTION_BY_KEY, OPT_ACTIONS, OPT_SWITCHES
+    OPT_ACTIONS, OPT_SWITCHES = GAME_LIST_ACTIONS, OPT_SWITCHES + ("extras",)
+    OPTION_PAGES = OPTION_PAGES[:4] + (("Game lists", "cart", tuple(o[1] for o in GAME_LIST_OPTIONS)),) + OPTION_PAGES[4:]
+    OPT_ICONS = tuple(p[1] for p in OPTION_PAGES)
+    OPTION_BY_KEY = dict(OPTION_BY_KEY, **{o[1]: o for o in GAME_LIST_OPTIONS})
+    try:
+        L = options_layers(F, badge_font, fonts, 4, cursor, values)
+        # the actions: what they did last, or how far they are, where a value goes
+        c = Canvas(ground=False)
+        x0, x1, top = OPT_X0, W - M, OPT_LIST[0] + 10
+        for n, o in enumerate(page_options(4)):
+            if o[1] not in GAME_LIST_ACTIONS:
+                continue
+            y = top + n * OPT_ROW
+            sel = n == cursor
+            text = values.get(o[1], "")
+            c.text((x1 - 20, y + 15), text, F.small, SEL_INK if sel else DIM, anchor="rm")
+            if running and o[1] == running[0]:
+                frac = running[1]
+                layer = c.layer()
+                d = ImageDraw.Draw(layer)
+                bx0, bx1, by = x0 + 14, x1 - 20, y + 25   # 2 high, within the row's bar (30)
+                d.rounded_rectangle((bx0, by, bx1, by + 1), 1, fill=(SEL_INK if sel else DIM) + (80,))
+                d.rounded_rectangle((bx0, by, bx0 + round((bx1 - bx0) * frac), by + 1), 1,
+                                    fill=(SEL_INK if sel else CYAN) + (255,))
+                c.over(layer)
+        L["rows"].alpha_composite(c.im)
+        return compose(L, OPTIONS_ORDER).convert("RGB")
+    finally:
+        OPTION_PAGES, OPT_ICONS, OPTION_BY_KEY, OPT_ACTIONS, OPT_SWITCHES = saved
+
+
+def card_shapes_sheet(F, badge_font):
+    """The Carousel's question, drawn flat on the launcher's ground: boxes of three
+    shapes (the SNES's landscape, the Mega Drive's portrait, the Game Boy's nearly
+    square) at one height, each in one card of 2:3, or at one width"""
+    picks = [("snes", "Super Metroid"), ("megadrive", "Gunstar Heroes"), ("gameboy", "Metroid II - Return of Samus"),
+             ("megadrive", "Comix Zone")]
+    pics = [game_pic(next(g for g in console_games(k) if g["title"] == t), "box") for k, t in picks]
+    sheet = layer_ground().copy()
+    d = ImageDraw.Draw(sheet)
+    labels = ("A: one height, each box its own width", "B: one card of 2:3, the box fitted in it",
+              "C: one width, each box its own height")
+    for row in range(3):
+        y0 = 34 + row * 150
+        d.text((24, y0 - 24), labels[row], font=F.chip, fill=INK + (255,))
+        ims = []
+        for pic in pics:
+            if row == 0:
+                ims.append(fit_to(pic, h=104))
+            elif row == 1:
+                card = Image.new("RGBA", (78, 117), (15, 0, 22, 255))
+                b = fit_to(pic, w=78) if pic.width / pic.height > 78 / 117 else fit_to(pic, h=117)
+                card.alpha_composite(b.convert("RGBA"), ((78 - b.width) // 2, (117 - b.height) // 2))
+                ims.append(card)
+            else:
+                ims.append(fit_to(pic, w=82))
+        x = (W - sum(im.width for im in ims) - 16 * (len(ims) - 1)) // 2
+        for im in ims:
+            sheet.alpha_composite(im.convert("RGBA"), (x, y0 + (120 - im.height) // 2))
+            x += im.width + 16
+    return sheet.convert("RGB")
+
+
+def fit_to(pic, w=None, h=None):
+    r = (h / pic.height) if h else (w / pic.width)
+    return to_linear_resize(pic.convert("RGB"), (max(1, round(pic.width * r)), max(1, round(pic.height * r))))
+
+
+def console_mockups(F, badge_font, fonts, values):
+    """The game lists' proposals for the review page"""
+    shots = {}
+    shots["list_shot"] = console_screen(F, badge_font, "snes", "A-Z", "Super Metroid")
+    shots["list_cover"] = console_screen(F, badge_font, "snes", "A-Z", "Super Metroid", art="cover")
+    shots["list_core"] = console_screen(F, badge_font, "snes", "A-Z", "Super Nintendo core")
+    shots["list_core_snes"] = console_screen(F, badge_font, "snes", "A-Z", "SNES core", core_label="%(core)s core")
+    shots["list_core_none"] = console_screen(F, badge_font, "snes", "A-Z", "No game: the core alone",
+                                             core_label="No game: the core alone")
+    shots["list_nopic"] = console_screen(F, badge_font, "snes", "A-Z", "Nightmare Busters")
+    shots["list_nopic_cover"] = console_screen(F, badge_font, "snes", "A-Z", "Nightmare Busters", art="cover")
+    shots["list_region"] = console_screen(F, badge_font, "snes", "A-Z", "Super Metroid", names="region")
+    shots["list_file"] = console_screen(F, badge_font, "snes", "A-Z", "Super Metroid", names="file")
+    shots["list_recent"] = console_screen(F, badge_font, "snes", "Recent", "Super Metroid")
+    shots["list_md_cover"] = console_screen(F, badge_font, "megadrive", "A-Z", "Gunstar Heroes", art="cover")
+    shots["list_md_shot"] = console_screen(F, badge_font, "megadrive", "A-Z", "Gunstar Heroes")
+    shots["list_gb_shot"] = console_screen(F, badge_font, "gameboy", "A-Z", "Metroid II - Return of Samus")
+    shots["list_gb_cover"] = console_screen(F, badge_font, "gameboy", "A-Z", "Metroid II - Return of Samus", art="cover")
+    shots["details"] = console_details_screen(F, badge_font, "snes", "Super Metroid")
+    shots["details_v2"] = console_details_screen(F, badge_font, "snes", "Super Metroid", 1)
+    shots["details_one"] = console_details_screen(F, badge_font, "snes", "Chrono Trigger")
+    shots["details_nopic"] = console_details_screen(F, badge_font, "snes", "Nightmare Busters")
+    shots["details_gb"] = console_details_screen(F, badge_font, "gameboy", "Metroid II - Return of Samus")
+    shots["details_cover"] = console_details_screen(F, badge_font, "snes", "Super Metroid", art="cover")
+    shots["details_cover_one"] = console_details_screen(F, badge_font, "snes", "Chrono Trigger", art="cover")
+    shots["details_cover_md"] = console_details_screen(F, badge_font, "megadrive", "Gunstar Heroes", art="cover")
+    shots["details_cover_gb"] = console_details_screen(F, badge_font, "gameboy", "Metroid II - Return of Samus",
+                                                       art="cover")
+    shots["details_cover_nopic"] = console_details_screen(F, badge_font, "snes", "Nightmare Busters", art="cover")
+    v = dict(values, names="Title alone", region="USA", extras="Off", scan="3 days ago: 1,204 games",
+             artdl="1,187 of 1,204 have art")
+    shots["options"] = console_options_screen(F, badge_font, fonts, 0, v)
+    shots["options_scan"] = console_options_screen(F, badge_font, fonts, 3, dict(v, scan="SNES: 412 games so far"),
+                                                   running=("scan", 0.35))
+    shots["options_artdl"] = console_options_screen(F, badge_font, fonts, 4, dict(v, artdl="212 of 1,204"),
+                                                    running=("artdl", 0.18))
+    shots["card_shapes"] = card_shapes_sheet(F, badge_font)
+    rows = mock_rows()   # Systems: the open banner of a console with a list, its count where its year and type are
+    n = next(i for i, r in enumerate(rows) if r["key"] == "snes")
+    shots["systems_today"] = systems_screen(F, badge_font, rows, n)
+    rows[n]["line2"] = "17 games"
+    shots["systems_count"] = systems_screen(F, badge_font, rows, n)
+    rows[n]["line2"] = "1990 Console  17 games"
+    shots["systems_count_both"] = systems_screen(F, badge_font, rows, n)
+    for g in [g for k in CONSOLE_SAMPLES for g in console_games(k)]:
+        FAVOURITES.discard(g["id"])
+    return shots
+
+
 def systems_mockups(F, badge_font, ports, fonts, values):
     """Every screen and animation of Systems: (screens, animations)"""
     sv = load_scummvm()
@@ -3169,10 +3648,11 @@ def main():
         os.makedirs(sys.argv[3], exist_ok=True)
         return export_layers(sys.argv[2], sys.argv[3], sys.argv[4:] or sorted(glob.glob(os.path.expanduser("~/MiSTer-*"))))
     only_systems = len(sys.argv) > 1 and sys.argv[1] == "--systems"
-    if only_systems:
+    only_consoles = len(sys.argv) > 1 and sys.argv[1] == "--consoles"
+    if only_systems or only_consoles:
         del sys.argv[1]
     if len(sys.argv) < 3:
-        sys.exit("usage: dnklauncher_mockup.py [--systems] <fonts dir> <out dir> [repositories...]")
+        sys.exit("usage: dnklauncher_mockup.py [--systems | --consoles] <fonts dir> <out dir> [repositories...]")
     fonts_dir, out = sys.argv[1], sys.argv[2]
     os.makedirs(out, exist_ok=True)
     repos = sys.argv[3:] or sorted(glob.glob(os.path.expanduser("~/MiSTer-*")))
@@ -3185,6 +3665,8 @@ def main():
               "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
     if only_systems:
         return save_all(out, *systems_mockups(fonts["chakra"][1], badge, ports, fonts, values))
+    if only_consoles:   # the game lists' proposals (not yet approved: not in the rest)
+        return save_all(out, console_mockups(fonts["chakra"][1], badge, fonts, values), {})
     screens = {}
     for key, (label, F) in fonts.items():
         screens[key + "_az"] = main_screen(F, badge, ports, "A-Z", "doom2")
