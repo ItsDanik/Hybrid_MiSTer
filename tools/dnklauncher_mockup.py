@@ -2218,11 +2218,17 @@ def system_card(key):
 # the scheme's text colour. Those not installed, with the option on, come last
 # in grey under a heading; the cursor goes on over them in a grey ring. The ring
 # stays with its row, it does not float.
+#
+# Folded (Danik, 2026-11-02, on https://claude.ai/artifact/PzZoXFJAp9o3RYJSEDY1nF):
+# only the banner under the cursor is BAN_H high, every other BAN_FOLD_H, its
+# logo smaller and the maker alone on the right; seven in sight. The open banner
+# stays the third in sight, the list moving under it, but at the list's ends.
+# Moving, the banner left folds as the next opens; the folded contents fade out
+# over the first half and the open ones in over the second.
 
 BAN_H, BAN_GAP = 70, 8 - min(MARGIN // 2, 4)
 BAN_X, BAN_W = M, W - 2 * M - 10        # the scroll bar's place at the right
 BAN_TOP = MAIN[0] + 3
-BAN_SHOWN = 4
 BAN_HEADING = 22         # the heading's height over the first row not installed
 BAN_STRIP = 12           # the system's colours
 BAN_RADIUS = 8
@@ -2234,7 +2240,10 @@ RING_SWAP_HZ = 0.25      # the bar's two colours changing places along the ring
 BAN_CHIPS = ["All", "Consoles", "Computers", "Hybrid", CHIP_STAR]
 PICK_DX = 14             # L2 held: how far the picked banner slides out to the left
 PICK_FIELDS = 10         # in how many fields
-BAN_MARGIN = 1           # rows kept in sight beyond the cursor, as the game list
+BAN_FOLD_H = 34          # a folded banner: half, less a pixel so that seven fit
+BAN_FOLD_GAP = max(2, BAN_GAP // 2)   # between folded ones; the open one keeps BAN_GAP (the ring)
+BAN_FOLD_LOGO = (150, 22)  # a folded banner's logo, its largest size
+BAN_SLOT = 2             # the open banner's place: the third in sight
 
 # what the mock-ups show of a player's MiSTer
 MOCK_NOT_INSTALLED = ("crayxmp", "edsac", "pdp1", "sgiindy", "sun", "uknc", "vt52", "x68000")
@@ -2278,29 +2287,39 @@ def mock_rows(chip="All", missing=False):
     return rows
 
 
-def row_y(rows, i):
-    """Row i's top in the list, from the list's top"""
-    y = i * (BAN_H + BAN_GAP)
+def openness(i, cur):
+    """How far row i is open with the cursor at cur (a fraction while it moves)"""
+    return max(0.0, 1.0 - abs(i - cur))
+
+
+def row_h(i, cur):
+    return BAN_FOLD_H + (BAN_H - BAN_FOLD_H) * openness(i, cur)
+
+
+def row_gap(i, cur):
+    """The gap under row i"""
+    return BAN_FOLD_GAP + (BAN_GAP - BAN_FOLD_GAP) * max(openness(i, cur), openness(i + 1, cur))
+
+
+def row_y(rows, i, cur):
+    """Row i's top in the list, from the list's top, with the cursor at cur"""
+    y = sum(row_h(j, cur) + row_gap(j, cur) for j in range(i))
     if not rows[i]["installed"]:
         y += BAN_HEADING
     return y
 
 
-def list_height(rows):
-    return row_y(rows, len(rows) - 1) + BAN_H if rows else 0
+def list_height(rows, cur):
+    return row_y(rows, len(rows) - 1, cur) + row_h(len(rows) - 1, cur) if rows else 0
 
 
-def list_scroll(rows, cursor, at):
-    """The list's offset that keeps the cursor and a row beyond it in sight,
-    moving as little as it can from `at`"""
+def list_scroll(rows, cursor, at=0):
+    """The list's offset with the cursor on row `cursor`: its banner the third
+    in sight, but at the list's two ends"""
     view = MAIN[1] - BAN_TOP
-    lo = row_y(rows, max(0, cursor - BAN_MARGIN))
-    hi = row_y(rows, min(len(rows) - 1, cursor + BAN_MARGIN)) + BAN_H
-    if lo < at:
-        at = lo
-    if hi - at > view:
-        at = hi - view
-    return max(0, min(at, max(0, list_height(rows) - view)))
+    above = min(cursor, BAN_SLOT)
+    at = row_y(rows, cursor, cursor) - (above * (BAN_FOLD_H + BAN_FOLD_GAP) + (BAN_GAP - BAN_FOLD_GAP if above else 0))
+    return max(0, min(at, max(0, list_height(rows, cursor) - view)))
 
 
 def round_mask(w, h, r):
@@ -2365,47 +2384,52 @@ def special_art(key):
     return logo, (14, (h - logo.height) // 2)
 
 
-def special_banner(F, s):
-    """Hybrid Ports' or ScummVM's: the approved card's colours and what it shows"""
-    w, h = BAN_W, BAN_H
+def special_banner(F, s, folded=False, bare=False):
+    """Hybrid Ports' or ScummVM's: the approved card's colours and what it shows.
+    bare: what it shows alone, without its ground"""
+    w, h = BAN_W, BAN_FOLD_H if folded else BAN_H
     art, at = special_art(s["key"])
+    if folded:
+        r = (h - (8 if s["key"] == "hybrid" else 12)) / art.height
+        art = art.resize((max(1, round(art.width * r)), max(1, round(art.height * r))), Image.LANCZOS)
+        at = (at[0], (h - art.height) // 2)
     if s["key"] == "hybrid":
         ink = (0x1E, 0x1A, 0x2C)
-        im = Image.new("RGBA", (w, h), system_card(s["key"]).getpixel((3, 3))[:3] + (255,))
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0) if bare else system_card(s["key"]).getpixel((3, 3))[:3] + (255,))
         im.alpha_composite(art, at)
         d = ImageDraw.Draw(im)
-        d.text((18 + art.width, h // 2), s["title"], font=F.sized(26), fill=ink + (255,), anchor="lm")
+        d.text((18 + art.width, h // 2), s["title"], font=F.sized(20 if folded else 26), fill=ink + (255,), anchor="lm")
     else:
         ink = INK
-        im = gradient(w, h, BG_TOP, BG_BOTTOM)
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0)) if bare else gradient(w, h, BG_TOP, BG_BOTTOM)
         im.alpha_composite(art, at)
-        ImageDraw.Draw(im).rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, outline=EDGE + (200,))
+        if not bare:
+            ImageDraw.Draw(im).rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, outline=EDGE + (200,))
         d = ImageDraw.Draw(im)
     d.text((w - 14, h // 2), s["count"], font=F.chip, fill=ink + (255,), anchor="rm")
-    im.putalpha(round_mask(w, h, BAN_RADIUS))
+    if not bare:
+        im.putalpha(round_mask(w, h, BAN_RADIUS))
     return im
 
 
-def banner(F, s):
-    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0], s.get("hidden"))
-    if k in _cache:
-        return _cache[k]
-    w, h = BAN_W, BAN_H
+def banner_panel(s, h):
+    """A banner's ground h high, without what it shows"""
+    w = BAN_W
     if s.get("special"):
-        _cache[k] = special_banner(F, s)
-        return _cache[k]
+        if s["key"] == "hybrid":
+            im = Image.new("RGBA", (w, h), system_card(s["key"]).getpixel((3, 3))[:3] + (255,))
+        else:
+            im = gradient(w, h, BG_TOP, BG_BOTTOM)
+            ImageDraw.Draw(im).rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, outline=EDGE + (200,))
+        im.putalpha(round_mask(w, h, BAN_RADIUS))
+        return im
     grey = not s["installed"]
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, fill=PANEL + (120 if grey else PANEL_ALPHA,),
                         outline=EDGE + (70 if grey else 150,))
     d.line((BAN_RADIUS, 1, w - BAN_RADIUS, 1), fill=(255, 255, 255, 16 if grey else 50))
-    ink, dim = INK, DIM
-    x = 14
-    if grey:
-        ink = dim = tuple(round(a * 0.62 + b * 0.38) for a, b in zip(DIM, PANEL))
-    else:
-        x = BAN_LOGO[0]
+    if not grey:
         strip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         strip.paste(gradient(BAN_STRIP, h, s["c1"], s["c2"], vertical=True), (1, 0))
         mask = Image.new("L", (w, h), 0)
@@ -2413,14 +2437,79 @@ def banner(F, s):
         ImageDraw.Draw(mask).rectangle((BAN_STRIP + 1, 0, w, h), fill=0)
         strip.putalpha(mask)
         im.alpha_composite(strip)
+    return im
+
+
+def banner(F, s, h=BAN_H):
+    """A banner h high: open (BAN_H), folded (BAN_FOLD_H), or in between, its
+    ground at that height and the folded and open faces fading out and in"""
+    h = max(BAN_FOLD_H, min(BAN_H, round(h)))
+    k = ("banner", s["key"], PANEL, INK, id(F), s["installed"], s["fav"], LOGO_COLOUR[0], s.get("hidden"), h)
+    if k in _cache:
+        return _cache[k]
+    if h in (BAN_H, BAN_FOLD_H):
+        im = banner_face(F, s, h == BAN_FOLD_H)
+    else:
+        im = banner_panel(s, h)
+        t = (h - BAN_FOLD_H) / (BAN_H - BAN_FOLD_H)
+        for folded, a in ((True, max(0.0, 1 - 2 * t)), (False, max(0.0, 2 * t - 1))):
+            if a <= 0:
+                continue
+            face = banner_face(F, s, folded, bare=True)
+            face = fade(face, a) if a < 1 else face
+            y = (h - face.height) // 2
+            im.alpha_composite(face.crop((0, max(0, -y), BAN_W, max(0, -y) + min(h, face.height))), (0, max(0, y)))
+        im.putalpha(ImageChops.multiply(im.getchannel("A"), round_mask(BAN_W, h, BAN_RADIUS)))
+    if s.get("hidden"):   # shown by Options' Show hidden: dimmed and marked
+        im = im.copy()
+        im.putalpha(im.getchannel("A").point(lambda v: round(v * 0.45)))
+        d = ImageDraw.Draw(im)
+        tw = F.small.getlength("hidden")
+        d.text((BAN_W // 2 - tw / 2, h // 2), "hidden", font=F.small, fill=DIM + (255,), anchor="lm")
+    _cache[k] = im
+    return im
+
+
+def banner_face(F, s, folded=False, bare=False):
+    """An open or folded banner (bare: what it shows alone, without its ground)"""
+    w, h = BAN_W, BAN_FOLD_H if folded else BAN_H
+    if s.get("special"):
+        return special_banner(F, s, folded, bare)
+    grey = not s["installed"]
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    if not bare:
+        d.rounded_rectangle((0, 0, w - 1, h - 1), BAN_RADIUS, fill=PANEL + (120 if grey else PANEL_ALPHA,),
+                            outline=EDGE + (70 if grey else 150,))
+        d.line((BAN_RADIUS, 1, w - BAN_RADIUS, 1), fill=(255, 255, 255, 16 if grey else 50))
+    ink, dim = INK, DIM
+    x = 14
+    if grey:
+        ink = dim = tuple(round(a * 0.62 + b * 0.38) for a, b in zip(DIM, PANEL))
+    else:
+        x = BAN_LOGO[0]
+        if not bare:
+            strip = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            strip.paste(gradient(BAN_STRIP, h, s["c1"], s["c2"], vertical=True), (1, 0))
+            mask = Image.new("L", (w, h), 0)
+            ImageDraw.Draw(mask).rounded_rectangle((1, 1, w - 2, h - 2), BAN_RADIUS - 1, fill=255)
+            ImageDraw.Draw(mask).rectangle((BAN_STRIP + 1, 0, w, h), fill=0)
+            strip.putalpha(mask)
+            im.alpha_composite(strip)
+    lw, lh = BAN_FOLD_LOGO if folded else BAN_LOGO[1:]
     pic, part = system_logo_colour(s) if LOGO_COLOUR[0] and not grey else (None, None)
+    if pic and folded:
+        r = min(lw / pic.width, lh / pic.height, 1.0)
+        size = (max(1, round(pic.width * r)), max(1, round(pic.height * r)))
+        pic = pic.resize(size, Image.LANCZOS)
+        part = part.resize(size, Image.LANCZOS) if part else None
     if pic:
         if part:
             im.alpha_composite(inked(part, ink), (x, (h - pic.height) // 2))
         im.alpha_composite(pic, (x, (h - pic.height) // 2))
     else:
         mask = system_logo(F, s)
-        r = min(BAN_LOGO[1] / mask.width, BAN_LOGO[2] / mask.height, 1.0)
+        r = min(lw / mask.width, lh / mask.height, 1.0)
         if r < 1:
             mask = mask.resize((max(1, round(mask.width * r)), max(1, round(mask.height * r))), Image.LANCZOS)
         im.alpha_composite(inked(mask, ink, 0.8 if grey else 1.0), (x, (h - mask.height) // 2))
@@ -2429,18 +2518,16 @@ def banner(F, s):
     d = ImageDraw.Draw(im)
     right = w - 14
     if grey:
-        d.text((right, h // 2), "Not installed", font=F.chip, fill=ink + (255,), anchor="rm")
+        d.text((right, h // 2), "Not installed", font=F.small if folded else F.chip, fill=ink + (255,), anchor="rm")
+    elif folded:
+        d.text((right, h // 2), s["maker"], font=F.small, fill=dim + (255,), anchor="rm")
+        if s["fav"]:
+            Canvas.star(c, right - F.small.getlength(s["maker"]) - 12, h // 2, 5, GOLD)
     else:
         d.text((right, h // 2 - 9), s["maker"], font=F.chip, fill=ink + (255,), anchor="rm")
         d.text((right, h // 2 + 9), "%s  %s" % (s["year"], s["kind"]), font=F.small, fill=dim + (255,), anchor="rm")
         if s["fav"]:
             Canvas.star(c, right - F.chip.getlength(s["maker"]) - 12, h // 2 - 9, 6, GOLD)
-    if s.get("hidden"):   # shown by Options' Show hidden: dimmed and marked
-        im.putalpha(im.getchannel("A").point(lambda v: round(v * 0.45)))
-        d = ImageDraw.Draw(im)
-        tw = F.small.getlength("hidden")
-        d.text((w // 2 - tw / 2, h // 2), "hidden", font=F.small, fill=DIM + (255,), anchor="lm")
-    _cache[k] = im
     return im
 
 
@@ -2462,12 +2549,12 @@ def band(layer):
     return layer
 
 
-def layer_banner(F, s, y):
+def layer_banner(F, s, y, h=BAN_H):
     out = blank()
     y = round(y)
     if s["installed"]:
-        out.alpha_composite(shadow_of(BAN_W, BAN_H), (BAN_X - 10, max(0, y - 10)))
-    out.alpha_composite(banner(F, s), (BAN_X, y))
+        out.alpha_composite(shadow_of(BAN_W, max(BAN_FOLD_H, min(BAN_H, round(h)))), (BAN_X - 10, max(0, y - 10)))
+    out.alpha_composite(banner(F, s, h), (BAN_X, y))
     return band(out)
 
 
@@ -2510,9 +2597,9 @@ def layer_ring_at(y, field=0, style="both", grey=False):
     return band(out)
 
 
-def layer_list_bar(rows, at):
+def layer_list_bar(rows, at, cur):
     view = MAIN[1] - BAN_TOP
-    total = list_height(rows)
+    total = list_height(rows, cur)
     out = blank()
     if total <= view:
         return out
@@ -2543,11 +2630,16 @@ def sys_hints(s):
 PICK_HINTS = [("l2", "Up / Down: Move, Release: Place")]
 
 
-def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", field=0, style="both", pick=None, shift=False):
+def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", field=0, style="both", pick=None, shift=False,
+                   open_at=None, ring_y=None):
     """Systems with the cursor on row `cursor` (a fraction while it moves), the
     list at offset `at`, at a field of the ring. pick: L2 held, the row under
     the cursor picked: (how far it is out to the left, {row: its offset down
-    from its place, while it makes way}, False once L2 is let go)"""
+    from its place, while it makes way}, False once L2 is let go). open_at:
+    the row that is open, if not the cursor's (the picked one while it moves);
+    ring_y: the cursor's top in the list, if not its row's"""
+    if open_at is None:
+        open_at = cursor
     c = round(cursor)
     L = {"ground": layer_ground(), "logo": layer_logo(), "title": layer_title(F, "Systems"),
          "count": layer_count(F, "%d systems" % sum(s["installed"] for s in rows), "Systems"),
@@ -2569,12 +2661,12 @@ def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", fie
     for n, s in enumerate(rows):
         if pick and n == c:
             continue
-        y = BAN_TOP + row_y(rows, n) - at
+        y = BAN_TOP + row_y(rows, n, open_at) - at
         if pick:
             y += pick[1].get(n, 0)
         if y + BAN_H < MAIN[0] - 8 or y > MAIN[1] + 8:
             continue
-        banner_layer = layer_banner(F, s, y)
+        banner_layer = layer_banner(F, s, y, row_h(n, open_at))
         L["ban%d" % n] = banner_layer
         others.alpha_composite(banner_layer)
         if not s["installed"] and (n == 0 or rows[n - 1]["installed"]):
@@ -2584,23 +2676,25 @@ def systems_layers(F, badge_font, rows, cursor, at, chip="All", family="ps", fie
             others.alpha_composite(band(head))
     L["banners"] = others
     a, b = int(math.floor(cursor)), min(int(math.floor(cursor)) + 1, len(rows) - 1)
-    y = lerp(row_y(rows, a), row_y(rows, b), cursor - a) + BAN_TOP - at
+    y = (lerp(row_y(rows, a, open_at), row_y(rows, b, open_at), cursor - a) if ring_y is None else ring_y) + BAN_TOP - at
     L["cursor"] = layer_ring_at(y, field, style, grey=not rows[c]["installed"])
     if pick:
         dx = -round(pick[0])
         others.alpha_composite(place(layer_banner(F, rows[c], y), dx))
         L["cursor"] = place(L["cursor"], dx)
-    L["bar"] = layer_list_bar(rows, at)
+    L["bar"] = layer_list_bar(rows, at, open_at)
     return L
 
 
 SYS_ORDER = ["ground", "logo", "title", "count", "chips", "banners", "cursor", "bar", "hints", "badge"]
 
 
-def systems_screen(F, badge_font, rows, cursor, at=None, chip="All", family="ps", field=0, style="both", pick=None, shift=False):
+def systems_screen(F, badge_font, rows, cursor, at=None, chip="All", family="ps", field=0, style="both", pick=None, shift=False,
+                   open_at=None, ring_y=None):
     if at is None:
         at = list_scroll(rows, cursor, 0) if rows else 0
-    return compose(systems_layers(F, badge_font, rows, cursor, at, chip, family, field, style, pick, shift), SYS_ORDER).convert("RGB")
+    return compose(systems_layers(F, badge_font, rows, cursor, at, chip, family, field, style, pick, shift, open_at, ring_y),
+                   SYS_ORDER).convert("RGB")
 
 
 def anim_ring(F, badge_font, rows, style):
@@ -2610,7 +2704,8 @@ def anim_ring(F, badge_font, rows, style):
 
 def anim_systems_cursor(F, badge_font, rows):
     """The cursor down, held: a row every 12 fields, gliding in 7 as the list's
-    bar does, the list scrolling with it; then up"""
+    bar does, the banner it leaves folding as the next opens, the list moving
+    under it; then up"""
     frames, field = [], 0
     cur, at = 0, 0.0
     for step in [1] * 9 + [-1] * 6:
@@ -2636,13 +2731,17 @@ def anim_system_pick(F, badge_font, rows, start):
         field += 1
     for step in (1, 1, 1, -1):
         nxt = cur + step
+        was = list(rows)
         rows[cur], rows[nxt] = rows[nxt], rows[cur]
         at2 = list_scroll(rows, nxt, at)
+        # the picked banner stays open, the row it passes folded: each glides
+        # from its place before to its place now
+        y0, y1 = row_y(was, cur, cur), row_y(rows, nxt, nxt)
         for f in range(14):
             e = ease_out(span(f, 0, 7))
-            make_way = (row_y(rows, nxt) - row_y(rows, cur)) * (1 - e)
-            frames.append(systems_screen(F, badge_font, rows, lerp(cur, nxt, e) if step > 0 else lerp(nxt, cur, 1 - e),
-                                         lerp(at, at2, e), field=field, pick=(PICK_DX, {cur: make_way})))
+            make_way = (row_y(was, nxt, cur) - row_y(rows, cur, nxt)) * (1 - e)
+            frames.append(systems_screen(F, badge_font, rows, nxt, lerp(at, at2, e), field=field,
+                                         pick=(PICK_DX, {cur: make_way}), open_at=nxt, ring_y=lerp(y0, y1, e)))
             field += 1
         cur, at = nxt, at2
     for f in range(PICK_FIELDS + 6):
@@ -2689,7 +2788,7 @@ def anim_system_open(F, badge_font, rows, m, n, back=False):
     g = m.game()
     base = compose({k: L[k] for k in ("ground", "logo", "badge")}, ["logo", "badge"])
     key = rows[n]["key"]
-    y = BAN_TOP + row_y(rows, n)
+    y = BAN_TOP + row_y(rows, n, n)
     others = blank()
     for i in range(len(rows)):
         if i != n and "ban%d" % i in S:
@@ -2739,10 +2838,10 @@ def anim_start_systems(F, badge_font, rows):
     S = systems_layers(F, badge_font, rows, 0, 0)
     flat = Image.new("RGBA", (W, H), WALL_BG + (255,))
     groups = [(["title", "count"], 18, 32, 16, 0), (["chips"], 20, 34, 0, -8)]
-    groups += [(["ban%d" % n], 20 + 3 * n, 36 + 3 * n, 0, 18) for n in range(BAN_SHOWN) if "ban%d" % n in S]
+    groups += [(["ban%d" % n], 20 + 2 * n, 36 + 2 * n, 0, 18) for n in range(len(rows)) if "ban%d" % n in S]
     groups += [(["cursor"], 30, 42, 0, 0), (["bar"], 30, 42, 0, 0), (["hints"], 28, 44, 0, 10)]
     frames = []
-    for f in range(46):
+    for f in range(max(46, max(g[2] for g in groups) + 2)):
         fr = flat.copy()
         fr.alpha_composite(place(S["ground"], alpha=ease_in_out(span(f, 4, 28))))
         t = ease_in_out(span(f, 4, 30))
@@ -2852,7 +2951,7 @@ def anim_core_details(F, badge_font, rows, n, back=False):
     S = systems_layers(F, badge_font, rows, n, at)
     D = core_details_layers(F, badge_font, s)
     base = compose({k: S[k] for k in ("ground", "logo", "badge")}, ["logo", "badge"])
-    y = BAN_TOP + row_y(rows, n) - at
+    y = BAN_TOP + row_y(rows, n, n) - at
     others = blank()
     for i in range(len(rows)):
         if i != n and "ban%d" % i in S:
