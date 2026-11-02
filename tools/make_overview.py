@@ -33,6 +33,10 @@ START, END = "<!-- ports: tools/make_overview.py -->", "<!-- end of ports -->"
 root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 out_dir = os.path.join(root, "docs", "overview")
 
+# The name players read where it is not the engine's (the name on the SD card):
+# NBloodD is named so only to get round MiSTer Frontier's core called NBlood.
+SHOWN = {"NBloodD": "NBlood"}
+
 
 def die(text):
     sys.exit("make_overview.py: " + text)
@@ -108,7 +112,7 @@ for engine, zname in ports:
         '<td width="%d" align="center"><img src="docs/overview/%s" alt="%s" width="%d"></td>\n'
         '<td width="%d" align="center"><img src="docs/overview/%s" alt="%s, the title screen" width="%d">'
         ' <img src="docs/overview/%s" alt="%s, playing" width="%d"></td>\n</tr>\n'
-        % (PORT_W, web_url(repo), engine, ", ".join(html.escape(t.strip()) for _, t in games), VERSION_W, version,
+        % (PORT_W, web_url(repo), SHOWN.get(engine, engine), ", ".join(html.escape(t.strip()) for _, t in games), VERSION_W, version,
            LOGO_W + 16, names["logo"], title, LOGO_W,
            2 * SHOT_W + 24, names["1"], title, SHOT_W, names["2"], title, SHOT_W))
     print("%s: %s, %d games, host version %d" % (engine, zname, len(games), version))
