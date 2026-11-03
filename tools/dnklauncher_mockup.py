@@ -1918,22 +1918,42 @@ CONFIRM_ALPHA = 245                   # its body, all but opaque: nothing of the
 CONFIRM_FIELDS = 10
 
 
-def layer_confirm(F, family="ps"):
-    """The question and its two buttons on a panel"""
+# While Download game art runs (Danik, 2026-11-03), Exit's question says it
+# stops it, and Play / Start in Details asks first, over Details: a line of the
+# small font under the question, the buttons lower. The download goes on at the
+# next start.
+DOWNLOAD_LINE = "Stops the art download until the next start"
+
+
+def layer_question(F, question, hints, family="ps", line=None):
+    """A question, a line under it if any, and its two buttons on a panel"""
     c = Canvas(ground=False)
     x0, y0, x1, y1 = CONFIRM
     c.panel(CONFIRM, alpha=CONFIRM_ALPHA)
-    c.text(((x0 + x1) / 2, y0 + 38), "Exit to the MiSTer menu?", F.head, INK, anchor="mm")
+    c.text(((x0 + x1) / 2, y0 + (30 if line else 38)), question, F.head, INK, anchor="mm")
+    if line:
+        c.text(((x0 + x1) / 2, y0 + 55), line, F.small, DIM, anchor="mm")
     where = places(family)
-    hints = (("ok", "Exit"), ("back", "Stay"))
     probe = Canvas(ground=False)
     width = sum(button(probe, F, family, where[a], 0, 0) + 4 + round(F.chip.getlength(w)) for a, w in hints) + 24
-    x, y = round((x0 + x1 - width) / 2), y0 + 70
+    x, y = round((x0 + x1 - width) / 2), y0 + (76 if line else 70)
     for action, what in hints:
         x += button(c, F, family, where[action], x, y) + 4
         c.text((x, y + 9), what, F.chip, INK, anchor="lm")
         x += round(F.chip.getlength(what)) + 24
     return c.im
+
+
+def layer_confirm(F, family="ps", downloading=False):
+    """Exit's question and its two buttons on a panel"""
+    return layer_question(F, "Exit to the MiSTer menu?", (("ok", "Exit"), ("back", "Stay")), family,
+                          DOWNLOAD_LINE if downloading else None)
+
+
+def layer_play_question(F, family="ps", start=False):
+    """Play (Start for a core) in Details while the download runs"""
+    word = "Start" if start else "Play"
+    return layer_question(F, word + " now?", (("ok", word), ("back", "Stay")), family, DOWNLOAD_LINE)
 
 
 def confirm_frame(main, panel, f):
@@ -1979,6 +1999,17 @@ def anim_wait(F, badge_font, ports):
 def confirm_screen(F, badge_font, ports, family="ps"):
     main = compose(Main(F, badge_font, ports, "A-Z", "doom2", family).frame_layers())
     return confirm_frame(main, layer_confirm(F, family), CONFIRM_FIELDS)
+
+
+def confirm_download_screen(F, badge_font, ports, family="ps"):
+    main = compose(Main(F, badge_font, ports, "A-Z", "doom2", family).frame_layers())
+    return confirm_frame(main, layer_confirm(F, family, downloading=True), CONFIRM_FIELDS)
+
+
+def play_question_screen(F, badge_font, ports, family="ps"):
+    """Play in Details while the download runs: the question over Details"""
+    details = details_screen(F, badge_font, ports, "doom2", family).convert("RGBA")
+    return confirm_frame(details, layer_play_question(F, family), CONFIRM_FIELDS)
 
 
 def anim_confirm(F, badge_font, ports):
@@ -3402,7 +3433,7 @@ def console_options_screen(F, badge_font, fonts, cursor, values, running=None):
         sel = n == cursor
         text = values.get(o[1], "")
         c.text((x1 - 20, y + 15), text, F.small, SEL_INK if sel else DIM, anchor="rm")
-        if running and o[1] == running[0]:
+        if running and o[1] == running[0] and o[1] != "artdl":   # Download game art's: the window over the badge
             frac = running[1]
             layer = c.layer()
             d = ImageDraw.Draw(layer)
@@ -3413,6 +3444,49 @@ def console_options_screen(F, badge_font, fonts, cursor, values, running=None):
             c.over(layer)
     L["rows"].alpha_composite(c.im)
     return compose(L, OPTIONS_ORDER).convert("RGB")
+
+
+# Download game art as it runs (Danik, 2026-11-03: "a small window should appear
+# on bottom right corner of the screen (resembling a notification on a desktop).
+# It should draw over the danik badge"): on every screen, as long as it runs,
+# "Downloading Artwork..." and two bars, every console's games and the console's
+# it is on; Options' row has no bar of its own any more. Over the whole badge,
+# opaque, its right edge the margin's; the end of the list's and Systems'
+# second legend row (440 to 470 wide by the font, more with a margin) goes
+# under it (Danik's pick of three, 2026-11-03). It rises 6 pixels as it fades
+# in (NOTE_FIELDS), and fades out once the download is over.
+NOTE = (W - M - 200, FOOT[0] - 7, W - M, FOOT[0] + 41)
+NOTE_FIELDS = 12
+
+
+def layer_download_note(F, total, system):
+    """The window: its title, the two bars (fractions of 1)"""
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = NOTE
+    c.panel(NOTE, radius=8, alpha=255)
+    c.text((x0 + 10, y0 + 12), "Downloading Artwork...", F.small, INK, anchor="lm")
+    layer = c.layer()
+    d = ImageDraw.Draw(layer)
+    bx0, bx1 = x0 + 62, x1 - 10
+    for k, (label, frac) in enumerate((("Total", total), ("System", system))):
+        mid = y0 + 27 + 12 * k
+        c.text((x0 + 10, mid), label, F.small, DIM, anchor="lm")
+        d.rounded_rectangle((bx0, mid - 2, bx1, mid + 1), 2, fill=DIM + (80,))
+        if frac > 0:
+            d.rounded_rectangle((bx0, mid - 2, bx0 + max(3, round((bx1 - bx0) * frac)), mid + 1), 2, fill=CYAN + (255,))
+    c.over(layer)
+    # nothing above its top edge (its shadow's faint top): it never reaches the panels
+    c.im.paste((0, 0, 0, 0), (0, 0, W, y0))
+    return c.im
+
+
+def with_note(screen, F, total=0.24, system=0.15, f=NOTE_FIELDS):
+    """A screen with the window over it, field f of its coming"""
+    fr = screen.convert("RGBA")
+    p = ease_out(span(f, 0, NOTE_FIELDS))
+    if p > 0:
+        fr.alpha_composite(place(layer_download_note(F, total, system), 0, 6 * (1 - p), p))
+    return fr.convert("RGB")
 
 
 # Download game art's window (Danik, 2026-11-03): chosen in Options, a window
@@ -3538,7 +3612,8 @@ def art_pick_mockups(F, badge_font, fonts, values):
     shots["artpick_4b_switch"] = confirm_frame(idle, layer_art_pick(F, "switch", 11, ticked, 4), CONFIRM_FIELDS)
     running = console_options_screen(F, badge_font, fonts, row, dict(v, artdl="Mega Drive: 212 of 1,437"),
                                      running=("artdl", 0.15)).convert("RGBA")
-    shots["artpick_5_running"] = running.convert("RGB")
+    shots["artpick_5_running"] = with_note(running, F)
+    running = with_note(running, F).convert("RGBA")
     shots["artpick_6_cancel"] = confirm_frame(running, layer_cancel(F), CONFIRM_FIELDS)
     anims["artpick_cancel"] = [confirm_frame(running, layer_cancel(F), f) for f in range(CONFIRM_FIELDS + 1)]
     return shots, anims
@@ -3817,6 +3892,11 @@ def main():
     HIDDEN.clear()
     screens["confirm_exit"] = confirm_screen(F, badge, ports)
     screens["confirm_exit_switch"] = confirm_screen(F, badge, ports, "switch")
+    screens["confirm_exit_download"] = confirm_download_screen(F, badge, ports)
+    screens["play_question"] = play_question_screen(F, badge, ports)
+    screens["download_note_list"] = with_note(main_screen(F, badge, ports, "A-Z", "doom2"), F)
+    screens["download_note_details"] = with_note(details_screen(F, badge, ports, "doom2"), F, 0.62, 0.9)
+    screens["download_note_coming"] = with_note(main_screen(F, badge, ports, "A-Z", "doom2"), F, 0, 0, 5)
     screens["wait_ports"] = wait_screen(F, badge, ports)
     screens["options_rail"] = options_screen(F, badge, fonts, 0, 0, values, focus="rail")
     screens["options_rail_library"] = options_screen(F, badge, fonts, len(OPTION_PAGES) - 1, 0, values, focus="rail")
