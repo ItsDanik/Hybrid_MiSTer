@@ -1318,8 +1318,8 @@ GAME_LIST_OPTIONS = [
                                        "No-Intro names them. BIOS files never show."),
     ("Look for games", "scan", "Goes through the consoles' folders on the SD card and USB drives, inside zips too, "
                                "and makes their lists again. The launcher stays usable meanwhile."),
-    ("Download game art", "artdl", "Fetches the boxes, logos, screenshots and title screens of the games found, "
-                                   "from libretro-thumbnails, once; again only for what is new or missing."),
+    ("Download game art", "artdl", "Opens the consoles found: tick those whose boxes, logos and screenshots to fetch "
+                                   "from libretro-thumbnails, only what is new or missing. Chosen while it runs: cancels it."),
 ]
 GAME_LIST_ACTIONS = ("scan", "artdl")
 OPTIONS += GAME_LIST_OPTIONS
@@ -3415,6 +3415,135 @@ def console_options_screen(F, badge_font, fonts, cursor, values, running=None):
     return compose(L, OPTIONS_ORDER).convert("RGB")
 
 
+# Download game art's window (Danik, 2026-11-03): chosen in Options, a window
+# over it lists the consoles that have a list (A to Z), each with a tick,
+# none ticked at each opening; OK ticks the one under the cursor, Select all or
+# none, Start downloads what is ticked and goes back to Options, whose row then
+# shows how far it is, Back closes it; chosen again while it runs, a question
+# as Exit's: Cancel download? (Danik's picks, 2026-11-03)
+PICK = (100, 82, W - 100, 444)           # the window, below the header
+PICK_LIST = (PICK[0] + 14, PICK[1] + 52, PICK[2] - 14, PICK[1] + 52 + 10 * ROW + 6)
+PICK_ROWS = 10
+PICK_MB = 0.4                           # MB a game, about (the test lists 0.49, Danik's Lynx 0.26)
+# Danik's consoles as Look for games found them on his MiSTer (2026-11-03):
+# title, games, how many have art
+PICK_CONSOLES = [("3DO", 161, 0), ("Atari 2600", 450, 0), ("Atari 5200", 70, 0), ("Atari 7800", 61, 0),
+                 ("Atari Lynx", 78, 73), ("Game Boy", 555, 0), ("Game Boy Advance", 1001, 0),
+                 ("Game Boy Color", 651, 0), ("Game Gear", 288, 0), ("Jaguar", 50, 0), ("Master System", 363, 0),
+                 ("Mega Drive", 718, 0), ("Mega-CD", 151, 0), ("NES", 797, 0), ("Neo Geo", 268, 0),
+                 ("Nintendo 64", 261, 0), ("PlayStation", 1294, 0), ("Saturn", 264, 0), ("Super Nintendo", 736, 0),
+                 ("32X", 31, 0), ("TurboGrafx-16", 389, 0), ("Virtual Boy", 23, 0), ("WonderSwan", 113, 0),
+                 ("WonderSwan Color", 73, 0)]
+CANCEL_HINTS = (("ok", "Cancel download"), ("back", "Go on"))
+
+
+def pick_tick(c, x, mid, on, sel):
+    """A tick box, 14 square: empty, or filled with its tick"""
+    ss = 4
+    layer = Image.new("RGBA", (15 * ss, 15 * ss), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    ink = SEL_INK if sel else CYAN if on else DIM
+    if on:
+        d.rounded_rectangle((0, 0, 14 * ss, 14 * ss), 3 * ss, fill=ink + (255,))
+        d.line(((3 * ss, 7.5 * ss), (6 * ss, 10.5 * ss), (11 * ss, 4 * ss)), fill=(PINK if sel else PANEL) + (255,),
+               width=2 * ss, joint="curve")
+    else:
+        d.rounded_rectangle((ss, ss, 13 * ss, 13 * ss), 3 * ss, outline=ink + (255,), width=round(1.5 * ss))
+    over = c.layer()
+    over.paste(layer.reduce(ss), (x, mid - 7))
+    c.over(over)
+
+
+def pick_summary(ticked):
+    games = sum(PICK_CONSOLES[i][1] - PICK_CONSOLES[i][2] for i in ticked)
+    if not ticked:
+        return "Nothing ticked"
+    n = len(ticked)
+    mb = games * PICK_MB
+    size = "%.1f GB" % (mb / 1000) if mb >= 1000 else "%d MB" % round(mb)
+    return "%d console%s, %s games without art: about %s" % (n, "" if n == 1 else "s", f"{games:,}", size)
+
+
+def layer_art_pick(F, family, cursor, ticked, first):
+    """The window: its title, the consoles' rows with their ticks (the cursor's
+    bar, the scroll bar), what the ticked ones come to, the buttons"""
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = PICK
+    c.panel(PICK, alpha=CONFIRM_ALPHA)
+    c.text(((x0 + x1) / 2, y0 + 27), "Download game art", F.head, INK, anchor="mm")
+    lb = PICK_LIST
+    c.panel(lb)
+    top = lb[1] + 3
+    for k in range(PICK_ROWS):
+        i = first + k
+        if i >= len(PICK_CONSOLES):
+            break
+        title, games, have = PICK_CONSOLES[i]
+        y = top + k * ROW
+        sel = i == cursor
+        if sel:
+            c.bar((lb[0] + 1, y, lb[2] - SB_W, y + ROW), panel=lb)
+        mid = y + ROW // 2
+        pick_tick(c, lb[0] + 12, mid, i in ticked, sel)
+        c.text((lb[0] + 36, mid), title, F.row, SEL_INK if sel else INK, anchor="lm")
+        what = f"{have:,} of {games:,} have art" if have else f"{games:,} games"
+        c.text((lb[2] - SB_W - 10, mid), what, F.small, SEL_INK if sel else DIM, anchor="rm")
+    c.over(scroll_bar(lb, PICK_ROWS, len(PICK_CONSOLES), first))
+    c.text(((x0 + x1) / 2, lb[3] + 18), pick_summary(ticked), F.small, INK if ticked else DIM, anchor="mm")
+    where = places(family)
+    hints = (("ok", "Tick"), ("sort", "All or none"), ("options", "Download"), ("back", "Close"))
+    probe = Canvas(ground=False)
+    width = sum(button(probe, F, family, where[a], 0, 0) + 4 + round(F.chip.getlength(w)) for a, w in hints) + 18 * 3
+    x, y = round((x0 + x1 - width) / 2), y1 - 32
+    for action, what in hints:
+        x += button(c, F, family, where[action], x, y) + 4
+        c.text((x, y + 9), what, F.chip, INK, anchor="lm")
+        x += round(F.chip.getlength(what)) + 18
+    return c.im
+
+
+def layer_cancel(F, family="ps"):
+    """The question while the download runs, as Exit's"""
+    c = Canvas(ground=False)
+    x0, y0, x1, y1 = CONFIRM
+    c.panel(CONFIRM, alpha=CONFIRM_ALPHA)
+    c.text(((x0 + x1) / 2, y0 + 38), "Cancel download?", F.head, INK, anchor="mm")
+    where = places(family)
+    probe = Canvas(ground=False)
+    width = sum(button(probe, F, family, where[a], 0, 0) + 4 + round(F.chip.getlength(w)) for a, w in CANCEL_HINTS) + 24
+    x, y = round((x0 + x1 - width) / 2), y0 + 70
+    for action, what in CANCEL_HINTS:
+        x += button(c, F, family, where[action], x, y) + 4
+        c.text((x, y + 9), what, F.chip, INK, anchor="lm")
+        x += round(F.chip.getlength(what)) + 24
+    return c.im
+
+
+def art_pick_mockups(F, badge_font, fonts, values):
+    """Download game art's window, Options before and after, the question"""
+    shots, anims = {}, {}
+    page = next(n for n, p in enumerate(OPTION_PAGES) if p[1] == "cart")
+    row = next(n for n, o in enumerate(page_options(page)) if o[1] == "artdl")
+    v = dict(values, scan="today: 8,889 games", artdl="73 of 8,889 have art")
+    idle = console_options_screen(F, badge_font, fonts, row, v).convert("RGBA")
+    shots["artpick_0_options"] = idle.convert("RGB")
+    p0 = layer_art_pick(F, "ps", 0, set(), 0)
+    shots["artpick_1_open"] = confirm_frame(idle, p0, CONFIRM_FIELDS)
+    anims["artpick_open"] = [confirm_frame(idle, p0, f) for f in range(CONFIRM_FIELDS + 1)]
+    ticked = {4, 11, 18}
+    shots["artpick_2_ticked"] = confirm_frame(idle, layer_art_pick(F, "ps", 11, ticked, 4), CONFIRM_FIELDS)
+    shots["artpick_3_scrolled"] = confirm_frame(idle, layer_art_pick(F, "ps", 18, ticked, 14), CONFIRM_FIELDS)
+    shots["artpick_4_all"] = confirm_frame(idle, layer_art_pick(F, "ps", 18, set(range(len(PICK_CONSOLES))), 14),
+                                           CONFIRM_FIELDS)
+    shots["artpick_4b_switch"] = confirm_frame(idle, layer_art_pick(F, "switch", 11, ticked, 4), CONFIRM_FIELDS)
+    running = console_options_screen(F, badge_font, fonts, row, dict(v, artdl="Mega Drive: 212 of 1,437"),
+                                     running=("artdl", 0.15)).convert("RGBA")
+    shots["artpick_5_running"] = running.convert("RGB")
+    shots["artpick_6_cancel"] = confirm_frame(running, layer_cancel(F), CONFIRM_FIELDS)
+    anims["artpick_cancel"] = [confirm_frame(running, layer_cancel(F), f) for f in range(CONFIRM_FIELDS + 1)]
+    return shots, anims
+
+
 def card_shapes_sheet(F, badge_font):
     """The Carousel's question, drawn flat on the launcher's ground: boxes of three
     shapes (the SNES's landscape, the Mega Drive's portrait, the Game Boy's nearly
@@ -3645,10 +3774,11 @@ def main():
         return export_layers(sys.argv[2], sys.argv[3], sys.argv[4:] or sorted(glob.glob(os.path.expanduser("~/MiSTer-*"))))
     only_systems = len(sys.argv) > 1 and sys.argv[1] == "--systems"
     only_consoles = len(sys.argv) > 1 and sys.argv[1] == "--consoles"
-    if only_systems or only_consoles:
+    only_artpick = len(sys.argv) > 1 and sys.argv[1] == "--artpick"
+    if only_systems or only_consoles or only_artpick:
         del sys.argv[1]
     if len(sys.argv) < 3:
-        sys.exit("usage: dnklauncher_mockup.py [--systems | --consoles] <fonts dir> <out dir> [repositories...]")
+        sys.exit("usage: dnklauncher_mockup.py [--systems | --consoles | --artpick] <fonts dir> <out dir> [repositories...]")
     fonts_dir, out = sys.argv[1], sys.argv[2]
     os.makedirs(out, exist_ok=True)
     repos = sys.argv[3:] or sorted(glob.glob(os.path.expanduser("~/MiSTer-*")))
@@ -3662,6 +3792,8 @@ def main():
               "names": "Title alone", "region": "USA", "extras": "Off", "scan": "never", "artdl": "not yet"}
     if only_systems:
         return save_all(out, *systems_mockups(fonts["chakra"][1], badge, ports, fonts, values))
+    if only_artpick:   # Download game art's window (not yet approved: not in the rest)
+        return save_all(out, *art_pick_mockups(fonts["chakra"][1], badge, fonts, values))
     if only_consoles:   # the game lists' proposals (not yet approved: not in the rest)
         return save_all(out, console_mockups(fonts["chakra"][1], badge, fonts, values), {})
     screens = {}
