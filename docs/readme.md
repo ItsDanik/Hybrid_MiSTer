@@ -110,7 +110,7 @@ Nothing else, and in this order. *Word for word* means the same text in every po
    A HUD line of an edge the game has no HUD at says it is always greyed out and why; a game without a HUD has neither line.
 10. **`## Controls`**: `- **Keyboard and mouse:**` and its table `| Key | Action |`, then `- **Gamepad** (default mapping):` and its table `| Button | Action |`, the buttons with their MiSTer, Xbox and PlayStation names (`B (Xbox A / PlayStation Cross)`). Under the tables only, word for word:
    ```markdown
-   Change the buttons in the OSD under *Define <Engine> buttons*. *Menu OK* and *Menu Back* there are only needed for a spare button without a game function. While the OSD is open, the game gets no input.
+   Change the buttons in the OSD under *Define <Engine> buttons*. The game's menus confirm and go back with your MiSTer menu's *Menu OK* / *Menu Back* buttons, also when they are game actions too. While the OSD is open, the game gets no input.
    ```
    then GitHub's warning box, word for word but for the name and the mapping files (`config/inputs/<Engine>_input_*_v3.map` in a core with one game, `config/inputs/<Engine>_*_input_*_v3.map` (each game has its own) in a core with several):
    ```markdown

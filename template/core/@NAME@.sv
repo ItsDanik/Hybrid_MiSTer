@@ -117,16 +117,17 @@ localparam CONF_STR = {
 	"-;",
 	"R0,Reset;",
 	"T[16],Save Diagnostic Report;",
-	// MiSTer's default map only knows the SNES-style pad. Main refuses to map a
-	// button twice, so Menu OK/Back here are for spare buttons without a game
-	// function and unmapped by default; menus also confirm and go back with
-	// the MiSTer menu's own OK / Back (MH_MenuButtons()). J1 has the game's
+	// MiSTer's default map only knows the SNES-style pad. J1 has the game's
 	// eight most important actions, the last one opens the game's menu; jn
-	// gives each of them a button of the default pad, Start for the menu. The
-	// game knows this list as buttons 0..9
+	// gives each of them a button of the default pad, Start for the menu.
+	// No Menu OK / Menu Back here: menus confirm and go back with the MiSTer
+	// menu's own OK / Back (MH_MenuButtons()), whatever the button does in the
+	// game. Main refuses to map a button twice, so such entries could only
+	// take a spare button, and players took them for required (2026-11-03).
+	// The game knows this list as buttons 0..7
 	// of the SDL joystick, the launcher repeats "jn" as MISTER_HYBRID_JN
 	// (package/games/@NAME@/danik_hybrid_launch.sh).
-	"J1,Action 1,Action 2,Action 3,Action 4,Action 5,Action 6,Action 7,Menu,Menu OK,Menu Back;",
+	"J1,Action 1,Action 2,Action 3,Action 4,Action 5,Action 6,Action 7,Menu;",
 	"jn,A,B,X,Y,L,R,Select,Start;",
 	// Main_MiSTer's info box shows text n when hybrid_host asks for it
 	// (`info`): 1..13 the MT32-pi's synth, 14..16 the SoundFont's errors

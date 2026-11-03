@@ -14,8 +14,8 @@ extern "C" {
 #endif
 
 // Joystick buttons as SDL sees them: the buttons of the core's "J1," list
-// (core/<Name>.sv) in order, then the two the SDL driver adds. Rename the
-// first eight after the game's actions.
+// (core/<Name>.sv) in order, then the MiSTer menu's OK / Back, which the SDL
+// driver adds as 28 / 29. Rename the eight after the game's actions.
 enum {
     MISTER_JOY_ACTION1,
     MISTER_JOY_ACTION2,
@@ -25,15 +25,13 @@ enum {
     MISTER_JOY_ACTION6,
     MISTER_JOY_ACTION7,
     MISTER_JOY_MENU,
-    MISTER_JOY_CORE_OK,
-    MISTER_JOY_CORE_BACK,
 
     MISTER_JOY_MENU_OK = 28,
     MISTER_JOY_MENU_BACK = 29
 };
 // In the game's menus: confirm and go back
-#define MISTER_JOY_OK_MASK ((1 << MISTER_JOY_CORE_OK) | (1 << MISTER_JOY_MENU_OK))
-#define MISTER_JOY_BACK_MASK ((1 << MISTER_JOY_CORE_BACK) | (1 << MISTER_JOY_MENU_BACK))
+#define MISTER_JOY_OK_MASK (1u << MISTER_JOY_MENU_OK)
+#define MISTER_JOY_BACK_MASK (1u << MISTER_JOY_MENU_BACK)
 
 // Frame pacing: call once per frame in place of the game's own wait. Sleeps
 // until the core's next field and returns how many fields (1/59.64s) have

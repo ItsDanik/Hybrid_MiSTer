@@ -95,7 +95,7 @@ Run it from the `Scripts` menu again whenever you want to change something. Its 
 | Select | TODO |
 | Start | Menu |
 
-Change the buttons in the OSD under *Define @NAME@ buttons*. *Menu OK* and *Menu Back* there are only needed for a spare button without a game function. While the OSD is open, the game gets no input.
+Change the buttons in the OSD under *Define @NAME@ buttons*. The game's menus confirm and go back with your MiSTer menu's *Menu OK* / *Menu Back* buttons, also when they are game actions too. While the OSD is open, the game gets no input.
 
 > [!WARNING]
 > A button left without a name in *Define @NAME@ buttons* does not reach the game at all, except L2/R2, L3/R3 and *Menu OK* / *Menu Back*. Name every button there, or leave the definition as it is. To go back to the default buttons, delete `config/inputs/@NAME@_input_*_v3.map` on the SD card.

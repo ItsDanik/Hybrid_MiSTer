@@ -314,7 +314,7 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 "O[..],Resolution,320x200,640x200;",          first of the game options, if the game can render more than one
 <game options, status bits 24..63>
 "-;",
-"J1,<8 game actions>,Menu OK,Menu Back;",
+"J1,<8 game actions>;",
 "jn,<the 8 buttons A,B,X,Y,L,R,Select,Start in the order of the actions>;",
 "V,v",`BUILD_DATE
 ```
@@ -330,7 +330,7 @@ Two names: **`dnk`** for what is on the SD card (the `dnk-` of menu entries and 
 
 - Keyboard and mouse work as in the original game.
 - The `J1` list has the game's eight most important actions and maps all eight buttons of MiSTer's default pad (`jn`), so every button does something and the layout shows up in "Define buttons". The last action is the one that opens the game's menu, on Start.
-- In menus the d-pad and left stick move, and confirm/back are *Menu OK* / *Menu Back*: the buttons of the MiSTer menu, whatever they do in the game. For each controller they are its *Menu OK* / *Menu Back* of Main_MiSTer's *Define joystick buttons*, else the A / B of its mapping there, as in the MiSTer menu; a controller without a mapping confirms and goes back as on its console (vendor `057e`, Nintendo and 8BitDo pads in Switch mode: the right button and the bottom one; every other: the bottom one and the right one). `MH_MenuButtons()` resolves them (the SDL driver delivers them as buttons 28 and 29). Up to host version 13 the OSD had *Menu OK* / *Menu Back* options to pick other buttons (status bits 16..23, unused since: a saved setting may still have them set).
+- In menus the d-pad and left stick move, and confirm/back are *Menu OK* / *Menu Back*: the buttons of the MiSTer menu, whatever they do in the game. For each controller they are its *Menu OK* / *Menu Back* of Main_MiSTer's *Define joystick buttons*, else the A / B of its mapping there, as in the MiSTer menu; a controller without a mapping confirms and goes back as on its console (vendor `057e`, Nintendo and 8BitDo pads in Switch mode: the right button and the bottom one; every other: the bottom one and the right one). `MH_MenuButtons()` resolves them (the SDL driver delivers them as buttons 28 and 29). The `J1` list has no *Menu OK* / *Menu Back* of its own (since 2026-11-03): Main_MiSTer maps a button to one entry of *Define <Engine> buttons* only, so such entries could take only a spare button, and players took them for required and could not put them on Jump or Use. Cores built before keep the two entries (buttons 8 and 9) until they take the template's line. Up to host version 13 the OSD had *Menu OK* / *Menu Back* options to pick other buttons (status bits 16..23, unused since: a saved setting may still have them set).
 - In a first-person game the left stick moves and strafes and nothing else: Main_MiSTer also presses the d-pad when a stick is pushed far, so in play the game drops a d-pad direction the left stick points in (`MH_StickDpad()`; the menus keep it). Fully tilted left, the player strafes left and does not turn.
 - Nothing requires a keyboard: lists, confirmations and name entry work with the pad.
 
