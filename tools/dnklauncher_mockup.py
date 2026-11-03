@@ -1308,6 +1308,21 @@ OPTIONS = [  # the frontend's own settings, kept in games/dnk/dnkLauncher/settin
      "each logo's own colours, where it has them. One colour unless you pick the other."),
     ("About", "about", "The launcher's version, its credits and the Patreon."),
 ]
+# Options' page Game lists (approved by Danik, 2026-11-02): the consoles' lists
+GAME_LIST_OPTIONS = [
+    ("Game names", "names", "How a console's games are named in its list: the title alone (Super Metroid), the "
+                            "title and its region, or the file's whole name."),
+    ("First region", "region", "Where a game has several versions, the one its row and A start: the others are in "
+                               "its Details. USA unless you pick another."),
+    ("Show betas and hacks", "extras", "On adds what the lists leave out: betas, prototypes, demos and hacks, as "
+                                       "No-Intro names them. BIOS files never show."),
+    ("Look for games", "scan", "Goes through the consoles' folders on the SD card and USB drives, inside zips too, "
+                               "and makes their lists again. The launcher stays usable meanwhile."),
+    ("Download game art", "artdl", "Fetches the boxes, logos, screenshots and title screens of the games found, "
+                                   "from libretro-thumbnails, once; again only for what is new or missing."),
+]
+GAME_LIST_ACTIONS = ("scan", "artdl")
+OPTIONS += GAME_LIST_OPTIONS
 # Danik's design of 2026-11-01 (the workbench's Side rail): the pages down the
 # left, their rows on the right, both in sight. The page follows the rail's
 # cursor; Right or OK goes into the rows, Back one level up; L1 / R1 the page
@@ -1317,12 +1332,13 @@ OPTION_PAGES = (
     ("Background", "wave", ("pattern", "intensity", "strength", "direction", "speed")),
     ("Screen", "screen", ("filter", "margin")),
     ("Controls", "pad", ("buttons", "pointer")),
+    ("Game lists", "cart", tuple(o[1] for o in GAME_LIST_OPTIONS)),
     ("Library", "list", ("layout", "art", "sort", "start", "hidden", "missing", "logos", "about")),
 )
 OPTION_BY_KEY = {o[1]: o for o in OPTIONS}
 OPT_GREYED = ("intensity", "strength", "direction", "speed")   # with Pattern Off: greyed out, the cursor passes them
-OPT_SWITCHES = ("hidden", "missing")   # Off and On: a switch
-OPT_ACTIONS = ()                       # rows that do something when chosen (console_options_screen())
+OPT_SWITCHES = ("hidden", "missing", "extras")   # Off and On: a switch
+OPT_ACTIONS = GAME_LIST_ACTIONS                  # rows that do something when chosen: what they did last where a value goes
 OPT_GREY_ALPHA = 110
 OPT_ROW = 34
 OPT_HELP = (MAIN[1] - 42, MAIN[1])      # the help box under the list: 2 lines of the small font
@@ -3369,56 +3385,34 @@ def console_details_screen(F, badge_font, key, title, version=0, art="shot"):
     return compose(console_details_layers(F, badge_font, s, g, version, art=art), D_ORDER).convert("RGB")
 
 
-# Options: a page of their own for the game lists (a proposal)
-GAME_LIST_OPTIONS = [
-    ("Game names", "names", "How a console's games are named in its list: the title alone (Super Metroid), the "
-                            "title and its region, or the file's whole name."),
-    ("First region", "region", "Where a game has several versions, the one its row and A start: the others are in "
-                               "its Details. USA unless you pick another."),
-    ("Show betas and hacks", "extras", "On adds what the lists leave out: betas, prototypes, demos and hacks, as "
-                                       "No-Intro names them. BIOS files never show."),
-    ("Look for games", "scan", "Goes through the consoles' folders on the SD card and USB drives, inside zips too, "
-                               "and makes their lists again. The launcher stays usable meanwhile."),
-    ("Download game art", "artdl", "Fetches the boxes, logos, screenshots and title screens of the games found, "
-                                   "from libretro-thumbnails, once; again only for what is new or missing."),
-]
-GAME_LIST_ACTIONS = ("scan", "artdl")
 
 
 def console_options_screen(F, badge_font, fonts, cursor, values, running=None):
-    """Options with the page Game lists (a proposal): the rail one longer, the two
-    actions showing when they last ran, or how far they are"""
-    global OPTION_PAGES, OPT_ICONS, OPTION_BY_KEY, OPT_ACTIONS, OPT_SWITCHES
-    saved = OPTION_PAGES, OPT_ICONS, OPTION_BY_KEY, OPT_ACTIONS, OPT_SWITCHES
-    OPT_ACTIONS, OPT_SWITCHES = GAME_LIST_ACTIONS, OPT_SWITCHES + ("extras",)
-    OPTION_PAGES = OPTION_PAGES[:4] + (("Game lists", "cart", tuple(o[1] for o in GAME_LIST_OPTIONS)),) + OPTION_PAGES[4:]
-    OPT_ICONS = tuple(p[1] for p in OPTION_PAGES)
-    OPTION_BY_KEY = dict(OPTION_BY_KEY, **{o[1]: o for o in GAME_LIST_OPTIONS})
-    try:
-        L = options_layers(F, badge_font, fonts, 4, cursor, values)
-        # the actions: what they did last, or how far they are, where a value goes
-        c = Canvas(ground=False)
-        x0, x1, top = OPT_X0, W - M, OPT_LIST[0] + 10
-        for n, o in enumerate(page_options(4)):
-            if o[1] not in GAME_LIST_ACTIONS:
-                continue
-            y = top + n * OPT_ROW
-            sel = n == cursor
-            text = values.get(o[1], "")
-            c.text((x1 - 20, y + 15), text, F.small, SEL_INK if sel else DIM, anchor="rm")
-            if running and o[1] == running[0]:
-                frac = running[1]
-                layer = c.layer()
-                d = ImageDraw.Draw(layer)
-                bx0, bx1, by = x0 + 14, x1 - 20, y + 25   # 2 high, within the row's bar (30)
-                d.rounded_rectangle((bx0, by, bx1, by + 1), 1, fill=(SEL_INK if sel else DIM) + (80,))
-                d.rounded_rectangle((bx0, by, bx0 + round((bx1 - bx0) * frac), by + 1), 1,
-                                    fill=(SEL_INK if sel else CYAN) + (255,))
-                c.over(layer)
-        L["rows"].alpha_composite(c.im)
-        return compose(L, OPTIONS_ORDER).convert("RGB")
-    finally:
-        OPTION_PAGES, OPT_ICONS, OPTION_BY_KEY, OPT_ACTIONS, OPT_SWITCHES = saved
+    """Options on its page Game lists: the two actions showing when they last ran,
+    or how far they are"""
+    page = next(n for n, p in enumerate(OPTION_PAGES) if p[1] == "cart")
+    L = options_layers(F, badge_font, fonts, page, cursor, values)
+    # the actions: what they did last, or how far they are, where a value goes
+    c = Canvas(ground=False)
+    x0, x1, top = OPT_X0, W - M, OPT_LIST[0] + 10
+    for n, o in enumerate(page_options(page)):
+        if o[1] not in GAME_LIST_ACTIONS:
+            continue
+        y = top + n * OPT_ROW
+        sel = n == cursor
+        text = values.get(o[1], "")
+        c.text((x1 - 20, y + 15), text, F.small, SEL_INK if sel else DIM, anchor="rm")
+        if running and o[1] == running[0]:
+            frac = running[1]
+            layer = c.layer()
+            d = ImageDraw.Draw(layer)
+            bx0, bx1, by = x0 + 14, x1 - 20, y + 25   # 2 high, within the row's bar (30)
+            d.rounded_rectangle((bx0, by, bx1, by + 1), 1, fill=(SEL_INK if sel else DIM) + (80,))
+            d.rounded_rectangle((bx0, by, bx0 + round((bx1 - bx0) * frac), by + 1), 1,
+                                fill=(SEL_INK if sel else CYAN) + (255,))
+            c.over(layer)
+    L["rows"].alpha_composite(c.im)
+    return compose(L, OPTIONS_ORDER).convert("RGB")
 
 
 def card_shapes_sheet(F, badge_font):
@@ -3546,10 +3540,11 @@ def systems_mockups(F, badge_font, ports, fonts, values):
         screens["core_%s" % key] = core_details_screen(F, badge_font, by[key])
     screens["core_gameboy_version"] = core_details_screen(F, badge_font, by["gameboy"], 1)
     screens["core_mac_version"] = core_details_screen(F, badge_font, by["mac"], 3)
-    missing = OPTION_PAGES[4][2].index("missing")
-    screens["options_missing"] = options_screen(F, badge_font, fonts, 4, missing, values)
-    logos = OPTION_PAGES[4][2].index("logos")
-    screens["options_logos"] = options_screen(F, badge_font, fonts, 4, logos, dict(values, logos="In colour"))
+    library = len(OPTION_PAGES) - 1
+    missing = OPTION_PAGES[library][2].index("missing")
+    screens["options_missing"] = options_screen(F, badge_font, fonts, library, missing, values)
+    logos = OPTION_PAGES[library][2].index("logos")
+    screens["options_logos"] = options_screen(F, badge_font, fonts, library, logos, dict(values, logos="In colour"))
     LOGO_COLOUR[0] = True
     screens["systems_colour"] = systems_screen(F, badge_font, rows, idx["nes"])
     screens["systems_colour_c64"] = systems_screen(F, badge_font, rows, idx["c64"])
@@ -3617,7 +3612,8 @@ def export_layers(fonts_dir, out, repos):
     F = fonts["chakra"][1]
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Light", "margin": f"{MARGIN} pixels", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
+              "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z",
+              "names": "Title alone", "region": "USA", "extras": "Off", "scan": "never", "artdl": "not yet"}
     colours = {}
     for theme in THEMES:
         apply_theme(theme)
@@ -3662,7 +3658,8 @@ def main():
                    .replace(" Medium", ""), Fonts(fonts_dir, key)) for key in FONTS}
     values = {"font": "chakra", "colours": "purple", "pattern": "Checker", "intensity": "25%", "strength": "Even",
               "direction": "Down and right", "speed": "Normal", "filter": "Light", "margin": f"{MARGIN} pixels", "buttons": "Auto: PlayStation",
-              "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z"}
+              "pointer": "Arrow", "layout": "List", "art": "Logo + Screenshot", "hidden": "Off", "start": "Last System", "missing": "Off", "logos": "One colour", "sort": "A-Z",
+              "names": "Title alone", "region": "USA", "extras": "Off", "scan": "never", "artdl": "not yet"}
     if only_systems:
         return save_all(out, *systems_mockups(fonts["chakra"][1], badge, ports, fonts, values))
     if only_consoles:   # the game lists' proposals (not yet approved: not in the rest)
@@ -3690,16 +3687,16 @@ def main():
     screens["confirm_exit_switch"] = confirm_screen(F, badge, ports, "switch")
     screens["wait_ports"] = wait_screen(F, badge, ports)
     screens["options_rail"] = options_screen(F, badge, fonts, 0, 0, values, focus="rail")
-    screens["options_rail_library"] = options_screen(F, badge, fonts, 4, 0, values, focus="rail")
+    screens["options_rail_library"] = options_screen(F, badge, fonts, len(OPTION_PAGES) - 1, 0, values, focus="rail")
     screens["options_font"] = options_screen(F, badge, fonts, 0, 0, values)
     screens["options_colours"] = options_screen(F, badge, fonts, 0, 1, values)
     screens["options_pattern"] = options_screen(F, badge, fonts, 1, 0, values)
     screens["options_pattern_off"] = options_screen(F, badge, fonts, 1, 0, dict(values, pattern="Off"))
     screens["options_buttons"] = options_screen(F, badge, fonts, 3, 0, values)
-    screens["options_art"] = options_screen(F, badge, fonts, 4, 1, dict(values, art="Cover"))
-    screens["options_hidden"] = options_screen(F, badge, fonts, 4, 4, dict(values, hidden="On"))
-    screens["options_scroll"] = options_screen(F, badge, fonts, 4, 7, values)   # the list scrolled to its end
-    screens["options_about"] = options_screen(F, badge, fonts, 4, 7, values, focus="about")
+    screens["options_art"] = options_screen(F, badge, fonts, len(OPTION_PAGES) - 1, 1, dict(values, art="Cover"))
+    screens["options_hidden"] = options_screen(F, badge, fonts, len(OPTION_PAGES) - 1, 4, dict(values, hidden="On"))
+    screens["options_scroll"] = options_screen(F, badge, fonts, len(OPTION_PAGES) - 1, 7, values)   # the list scrolled to its end
+    screens["options_about"] = options_screen(F, badge, fonts, len(OPTION_PAGES) - 1, 7, values, focus="about")
     for theme in THEMES:     # the colour schemes
         apply_theme(theme)
         screens["theme_%s_main" % theme] = main_screen(F, badge, ports, "A-Z", "doom2")
