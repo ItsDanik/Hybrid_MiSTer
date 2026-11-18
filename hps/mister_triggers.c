@@ -82,6 +82,8 @@ typedef struct {
     struct input_absinfo left_info, right_info;
     int wheel;   // a wheel Main_MiSTer hands the pedals of (is_wheel)
     int rumbles; // it can, and was opened for writing
+    int hid;     // an 8BitDo pad in D-input mode (no force feedback from the
+                 // kernel): its hidraw device, rumbled with its output report 5
     int effect;  // the stored effect, -1 = none yet
     int forces;  // FF_CONSTANT, and opened for writing (MH_Force*)
     int force_id[MH_FORCE_SLOTS]; // the slots' stored effects, -1 = none yet
@@ -200,6 +202,54 @@ static int is_gamepad(int fd) {
     return 0;
 }
 
+// The hidraw device of the pad behind /dev/input/<event>, for writing: the
+// HID device's folder in sysfs lists it (/sys/class/input/<event>/device/
+// device/hidraw/hidrawN). -1 when there is none or it cannot be opened.
+static int open_hidraw(const char* event) {
+    char path[320];
+    DIR* dir;
+    struct dirent* e;
+    int fd = -1;
+
+    snprintf(path, sizeof path, "/sys/class/input/%s/device/device/hidraw", event);
+    dir = opendir(path);
+    while (dir != NULL && fd < 0 && (e = readdir(dir)) != NULL) {
+        if (strncmp(e->d_name, "hidraw", 6) != 0) {
+            continue;
+        }
+        snprintf(path, sizeof path, "/dev/%s", e->d_name);
+        fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    }
+    if (dir != NULL) {
+        closedir(dir);
+    }
+    return fd;
+}
+
+// 8BitDo's rumble report in D-input mode: id 5, then left and right motor and
+// left and right trigger, 0..100 each
+static void hid_rumble(pad* p, int strong, int weak) {
+    unsigned char report[5] = { 5, 0, 0, 0, 0 };
+
+    report[1] = (unsigned char)(strong * 100 / 255);
+    report[2] = (unsigned char)(weak * 100 / 255);
+    if (write(p->hid, report, sizeof report) < 0 && errno == ENODEV) {
+        close(p->hid);
+        p->hid = -1;
+        p->rumbles = 0;
+    }
+}
+
+static void hid_close(pad* p) {
+    if (p->hid >= 0) {
+        hid_rumble(p, 0, 0);
+        if (p->hid >= 0) {
+            close(p->hid);
+        }
+        p->hid = -1;
+    }
+}
+
 static void scan(void) {
     DIR* dir = opendir(INPUT_DIR);
     struct dirent* e;
@@ -281,6 +331,12 @@ static void scan(void) {
 
             pads[free_slot].vendor = ioctl(fd, EVIOCGID, &id) < 0 ? 0 : id.vendor;
         }
+        // an 8BitDo pad in D-input mode: rumble through its HID report instead
+        pads[free_slot].hid = -1;
+        if (!pads[free_slot].rumbles && pads[free_slot].vendor == 0x2dc8) {
+            pads[free_slot].hid = open_hidraw(e->d_name);
+            pads[free_slot].rumbles = pads[free_slot].hid >= 0;
+        }
     }
     if (dir != NULL) {
         closedir(dir);
@@ -289,6 +345,7 @@ static void scan(void) {
         if (pads[i].fd >= 0 && !pads[i].seen) {
             close(pads[i].fd);
             pads[i].fd = -1;
+            hid_close(&pads[i]);
         }
     }
     for (i = 0; i < MAX_OTHERS; i++) {
@@ -358,6 +415,7 @@ static void refresh(void) {
     if (!pads_ready) {
         for (i = 0; i < MAX_PADS; i++) {
             pads[i].fd = -1;
+            pads[i].hid = -1;
         }
         pads_ready = 1;
         scanned = 0;
@@ -406,6 +464,10 @@ int MH_Rumble(int strong, int weak) {
             continue;
         }
         any = 1;
+        if (p->hid >= 0) {
+            hid_rumble(p, strong, weak);
+            continue;
+        }
         memset(&ev, 0, sizeof ev);
         ev.type = EV_FF;
         if (strong == 0 && weak == 0) {
